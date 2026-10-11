@@ -12,21 +12,40 @@
 import math
 from typing import Any, Dict, Optional, Tuple
 
-from 矩形暗涵设计 import (
-    DIM_INCREMENT,
-    MAX_FREEBOARD_PCT_RECT,
-    MIN_FREEBOARD_PCT_RECT,
-    MIN_HEIGHT_RECT,
-    MIN_WIDTH_RECT,
-    SOLVER_TOLERANCE,
-    get_flow_increase_percent_rect,
-)
-from 隧洞设计 import (
-    _horseshoe_area_cannot_improve,
-    calculate_horseshoe_arch_geometry,
-    calculate_horseshoe_outputs,
-    solve_water_depth_horseshoe,
-)
+# 正式包使用相对导入，历史裸模块入口继续保留。
+if __package__:
+    from .矩形暗涵设计 import (
+        DIM_INCREMENT,
+        MAX_FREEBOARD_PCT_RECT,
+        MIN_FREEBOARD_PCT_RECT,
+        MIN_HEIGHT_RECT,
+        MIN_WIDTH_RECT,
+        SOLVER_TOLERANCE,
+        get_flow_increase_percent_rect,
+    )
+    from .隧洞设计 import (
+        _horseshoe_area_cannot_improve,
+        calculate_horseshoe_arch_geometry,
+        calculate_horseshoe_outputs,
+        solve_water_depth_horseshoe,
+    )
+else:
+    from 矩形暗涵设计 import (
+        DIM_INCREMENT,
+        MAX_FREEBOARD_PCT_RECT,
+        MIN_FREEBOARD_PCT_RECT,
+        MIN_HEIGHT_RECT,
+        MIN_WIDTH_RECT,
+        SOLVER_TOLERANCE,
+        get_flow_increase_percent_rect,
+    )
+    from 隧洞设计 import (
+        _horseshoe_area_cannot_improve,
+        calculate_horseshoe_arch_geometry,
+        calculate_horseshoe_outputs,
+        solve_water_depth_horseshoe,
+    )
+
 
 
 MIN_THETA_DEG = 90.0

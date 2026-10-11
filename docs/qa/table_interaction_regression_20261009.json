@@ -1,0 +1,317 @@
+{
+  "run_at": "2026-10-09 13:49:03",
+  "runtime": "Python 3.13.3 / PySide6 6.11.0 / offscreen / QTextBrowser; one process per test file",
+  "user_autosave_sha256_before": "6a1cbb0bb03d2b55dc7e975f0db82753881902bb57b3db298bb73b85b97388ed",
+  "results": [
+    {
+      "file": "test_table_interaction_performance_unit.py",
+      "exit_code": 0,
+      "summary": "12 passed in 4.34s"
+    },
+    {
+      "file": "test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "summary": "18 passed in 4.17s"
+    },
+    {
+      "file": "test_project_atomic_save_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 0.23s"
+    },
+    {
+      "file": "test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "summary": "1 passed in 0.46s"
+    },
+    {
+      "file": "test_water_profile_gate_loss_edit_unit.py",
+      "exit_code": 0,
+      "summary": "9 passed in 2.78s"
+    },
+    {
+      "file": "test_water_profile_transition_qxproj_roundtrip_unit.py",
+      "exit_code": 0,
+      "summary": "6 passed in 5.30s"
+    },
+    {
+      "file": "test_water_profile_transition_length_details_regression_unit.py",
+      "exit_code": 0,
+      "summary": "20 passed in 9.29s"
+    },
+    {
+      "file": "test_water_profile_transition_loss_details_regression_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 3.68s"
+    },
+    {
+      "file": "test_water_profile_transition_ready_unit.py",
+      "exit_code": 0,
+      "summary": "40 passed in 1.15s"
+    },
+    {
+      "file": "test_water_profile_flow_selector_unit.py",
+      "exit_code": 0,
+      "summary": "7 passed in 4.98s"
+    },
+    {
+      "file": "test_water_profile_batch_sync_unit.py",
+      "exit_code": 0,
+      "summary": "11 passed in 1.30s"
+    },
+    {
+      "file": "test_water_profile_init_shared_batch_results_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 2.69s"
+    },
+    {
+      "file": "test_water_profile_loss_dialog_alignment_unit.py",
+      "exit_code": 0,
+      "summary": "21 passed in 3.39s"
+    },
+    {
+      "file": "test_pressure_pipe_window_override_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 0.92s"
+    },
+    {
+      "file": "test_pressure_pipe_project_save_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 0.76s"
+    },
+    {
+      "file": "test_pressure_pipe_first_entry_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 3.60s"
+    },
+    {
+      "file": "test_multi_case_panel_smoke_unit.py",
+      "exit_code": 0,
+      "summary": "63 passed in 11.75s"
+    },
+    {
+      "file": "test_multi_case_q_recalc_regression_unit.py",
+      "exit_code": 0,
+      "summary": "5 passed in 42.18s"
+    },
+    {
+      "file": "test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "summary": "43 passed in 12.96s"
+    },
+    {
+      "file": "test_batch_manual_qmax_excel_unit.py",
+      "exit_code": 0,
+      "summary": "9 passed in 4.17s"
+    },
+    {
+      "file": "test_siphon_set_params_gui_unit.py",
+      "exit_code": 0,
+      "summary": "7 passed in 1.72s"
+    },
+    {
+      "file": "test_siphon_auto_increase_execution_unit.py",
+      "exit_code": 0,
+      "summary": "2 passed in 1.00s"
+    },
+    {
+      "file": "test_siphon_arc_geometry_fidelity_unit.py",
+      "exit_code": 0,
+      "summary": "11 passed, 19 warnings in 2.22s"
+    },
+    {
+      "file": "test_siphon_increased_velocity_chain_unit.py",
+      "exit_code": 0,
+      "summary": "6 passed in 0.82s"
+    }
+  ],
+  "passed": 312,
+  "failed_files": [],
+  "user_autosave_sha256_after": "6a1cbb0bb03d2b55dc7e975f0db82753881902bb57b3db298bb73b85b97388ed",
+  "initial_results": [
+    {
+      "file": "test_table_interaction_performance_unit.py",
+      "exit_code": 0,
+      "summary": "12 passed in 3.79s"
+    },
+    {
+      "file": "test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "summary": "17 passed in 3.64s"
+    },
+    {
+      "file": "test_project_atomic_save_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 0.17s"
+    },
+    {
+      "file": "test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "summary": "1 passed in 0.42s"
+    },
+    {
+      "file": "test_water_profile_gate_loss_edit_unit.py",
+      "exit_code": 0,
+      "summary": "9 passed in 2.78s"
+    },
+    {
+      "file": "test_water_profile_transition_qxproj_roundtrip_unit.py",
+      "exit_code": 0,
+      "summary": "6 passed in 5.30s"
+    },
+    {
+      "file": "test_water_profile_transition_length_details_regression_unit.py",
+      "exit_code": 0,
+      "summary": "20 passed in 9.29s"
+    },
+    {
+      "file": "test_water_profile_transition_loss_details_regression_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 3.68s"
+    },
+    {
+      "file": "test_water_profile_transition_ready_unit.py",
+      "exit_code": 1,
+      "summary": "40 failed in 20.81s",
+      "failure_output": "_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_resolve_loaded_section_gate_state_recovers_successful_loaded_project_even_if_sync_ready_false _\ntests\\test_water_profile_transition_ready_unit.py:1545: in test_resolve_loaded_section_gate_state_recovers_successful_loaded_project_even_if_sync_ready_false\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_resolve_loaded_section_gate_state_keeps_explicit_false_for_stale_loaded_project _\ntests\\test_water_profile_transition_ready_unit.py:1560: in test_resolve_loaded_section_gate_state_keeps_explicit_false_for_stale_loaded_project\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_writeback _\ntests\\test_water_profile_transition_ready_unit.py:1575: in test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_writeback\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_recalc_override_reload _\ntests\\test_water_profile_transition_ready_unit.py:1651: in test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_recalc_override_reload\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_accepts_real_split_parent_when_only_row_members_have_results _\ntests\\test_water_profile_transition_ready_unit.py:1777: in test_collect_pending_pressure_pipe_execute_members_accepts_real_split_parent_when_only_row_members_have_results\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_accepts_real_same_name_long_tail_after_apply _\ntests\\test_water_profile_transition_ready_unit.py:1875: in test_collect_pending_pressure_pipe_execute_members_accepts_real_same_name_long_tail_after_apply\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_writeback _\ntests\\test_water_profile_transition_ready_unit.py:2009: in test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_writeback\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_accepts_named_group_hidden_result _\ntests\\test_water_profile_transition_ready_unit.py:2063: in test_collect_pending_pressure_pipe_execute_members_accepts_named_group_hidden_result\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_skips_split_named_group_parent _\ntests\\test_water_profile_transition_ready_unit.py:2123: in test_collect_pending_pressure_pipe_execute_members_skips_split_named_group_parent\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tunnel_row_override _\ntests\\test_water_profile_transition_ready_unit.py:2211: in test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tunnel_row_override\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_pressure_pipe_calculator_skips_named_group_total_when_split_to_row_members _\ntests\\test_water_profile_transition_ready_unit.py:2295: in test_pressure_pipe_calculator_skips_named_group_total_when_split_to_row_members\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tail_row_members _\ntests\\test_water_profile_transition_ready_unit.py:2496: in test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tail_row_members\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_ test_collect_pending_pressure_pipe_execute_members_ignores_tunnel_only_chain_without_pressure_pipe_groups _\ntests\\test_water_profile_transition_ready_unit.py:2618: in test_collect_pending_pressure_pipe_execute_members_ignores_tunnel_only_chain_without_pressure_pipe_groups\n    module = _load_panel_module()\n             ^^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_transition_ready_unit.py:176: in _load_panel_module\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n=========================== short test summary info ===========================\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_missing_structure_height_names_skips_pressure_pipe_like_rows_in_mixed_route\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_missing_structure_height_names_keeps_real_tunnel_missing_height_warning\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_missing_structure_height_names_skips_auto_inserted_helper_rows\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_xxpipe_route_context_map_uses_resolved_first_non_tunnel_anchor\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_requires_transition_rows_before_topology_ready\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_allows_prepared_topology_without_transition_rows\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_repairs_stale_sync_flags_when_table3_topology_still_valid\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_opens_dialog_for_continuous_xxqu_anonymous_rows\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_opens_dialog_for_xxpipe_anonymous_row_segments\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_opens_route_only_dialog_for_supported_xxpipe_routes\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_keeps_tunnel_mixed_xxpipe_routes_available\nFAILED tests/test_water_profile_transition_ready_unit.py::test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_xxqu\nFAILED tests/test_water_profile_transition_ready_unit.py::test_prepare_pressure_pipe_dialog_context_shares_route_import_across_internal_tunnel\nFAILED tests/test_water_profile_transition_ready_unit.py::test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_mode\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_keeps_route_profile_segments_when_pure_xxpipe_route_recomputed\nFAILED tests/test_water_profile_transition_ready_unit.py::test_build_pressure_pipe_route_profile_segments_uses_group_identity_without_typeerror\nFAILED tests/test_water_profile_transition_ready_unit.py::test_mark_section_results_stale_clears_transition_topology_prepared_flag\nFAILED tests/test_water_profile_transition_ready_unit.py::test_mark_section_results_stale_disables_all_downstream_buttons\nFAILED tests/test_water_profile_transition_ready_unit.py::test_refresh_pressure_pipe_controls_keeps_button_disabled_when_sync_not_ready\nFAILED tests/test_water_profile_transition_ready_unit.py::test_set_downstream_actions_enabled_reenables_buttons_without_custom_style\nFAILED tests/test_water_profile_transition_ready_unit.py::test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready_without_changing_enabled_state\nFAILED tests/test_water_profile_transition_ready_unit.py::test_refresh_pressure_pipe_water_hammer_controls_requires_section_ready\nFAILED tests/test_water_profile_transition_ready_unit.py::test_refresh_pressure_pipe_water_hammer_controls_requires_pressure_pipe_result\nFAILED tests/test_water_profile_transition_ready_unit.py::test_refresh_pressure_pipe_water_hammer_controls_requires_table3_water_level\nFAILED tests/test_water_profile_transition_ready_unit.py::test_refresh_pressure_pipe_water_hammer_controls_enables_after_water_level_ready\nFAILED tests/test_water_profile_transition_ready_unit.py::test_open_pressure_pipe_water_hammer_checker_uses_dedicated_dialog\nFAILED tests/test_water_profile_transition_ready_unit.py::test_resolve_loaded_section_gate_state_treats_missing_sync_ready_as_legacy_ready\nFAILED tests/test_water_profile_transition_ready_unit.py::test_resolve_loaded_section_gate_state_recovers_successful_loaded_project_even_if_sync_ready_false\nFAILED tests/test_water_profile_transition_ready_unit.py::test_resolve_loaded_section_gate_state_keeps_explicit_false_for_stale_loaded_project\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_writeback\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_recalc_override_reload\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_accepts_real_split_parent_when_only_row_members_have_results\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_accepts_real_same_name_long_tail_after_apply\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_writeback\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_accepts_named_group_hidden_result\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_skips_split_named_group_parent\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tunnel_row_override\nFAILED tests/test_water_profile_transition_ready_unit.py::test_pressure_pipe_calculator_skips_named_group_total_when_split_to_row_members\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tail_row_members\nFAILED tests/test_water_profile_transition_ready_unit.py::test_collect_pending_pressure_pipe_execute_members_ignores_tunnel_only_chain_without_pressure_pipe_groups\n40 failed in 20.81s\n"
+    },
+    {
+      "file": "test_water_profile_flow_selector_unit.py",
+      "exit_code": 0,
+      "summary": "7 passed in 4.98s"
+    },
+    {
+      "file": "test_water_profile_batch_sync_unit.py",
+      "exit_code": 1,
+      "summary": "11 failed in 5.91s",
+      "failure_output": "FFFFFFFFFFF                                                              [100%]\n================================== FAILURES ===================================\n___________ test_sync_batch_settings_updates_global_and_flow_fields ___________\ntests\\test_water_profile_batch_sync_unit.py:197: in test_sync_batch_settings_updates_global_and_flow_fields\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n_______ test_sync_batch_settings_uses_manual_qmax_values_when_available _______\ntests\\test_water_profile_batch_sync_unit.py:241: in test_sync_batch_settings_uses_manual_qmax_values_when_available\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n______ test_sync_batch_settings_only_overrides_segments_with_manual_qmax ______\ntests\\test_water_profile_batch_sync_unit.py:281: in test_sync_batch_settings_only_overrides_segments_with_manual_qmax\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n____________ test_load_section_sample_triggers_sync_after_loading _____________\ntests\\test_water_profile_batch_sync_unit.py:315: in test_load_section_sample_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_4_triggers_sync_after_loading ____________\ntests\\test_water_profile_batch_sync_unit.py:345: in test_load_section_sample_4_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_5_triggers_sync_after_loading ____________\ntests\\test_water_profile_batch_sync_unit.py:375: in test_load_section_sample_5_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_6_triggers_sync_after_loading ____________\ntests\\test_water_profile_batch_sync_unit.py:405: in test_load_section_sample_6_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_7_triggers_sync_after_loading ____________\ntests\\test_water_profile_batch_sync_unit.py:435: in test_load_section_sample_7_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_8_triggers_sync_after_loading ____________\ntests\\test_water_profile_batch_sync_unit.py:465: in test_load_section_sample_8_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_9_triggers_sync_after_loading ____________\ntests\\test_water_profile_batch_sync_unit.py:495: in test_load_section_sample_9_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n___________ test_load_section_sample_10_triggers_sync_after_loading ___________\ntests\\test_water_profile_batch_sync_unit.py:525: in test_load_section_sample_10_triggers_sync_after_loading\n    WaterProfilePanel = _load_panel_class()\n                        ^^^^^^^^^^^^^^^^^^^\ntests\\test_water_profile_batch_sync_unit.py:157: in _load_panel_class\n    spec.loader.exec_module(module)\n<frozen importlib._bootstrap_external>:1026: in exec_module\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\napp_渠系计算前端\\water_profile\\panel.py:111: in <module>\n    from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, schedule_table_resize, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE\nE   ImportError: cannot import name 'schedule_table_resize' from 'app_渠系计算前端.styles' (unknown location)\n=========================== short test summary info ===========================\nFAILED tests/test_water_profile_batch_sync_unit.py::test_sync_batch_settings_updates_global_and_flow_fields\nFAILED tests/test_water_profile_batch_sync_unit.py::test_sync_batch_settings_uses_manual_qmax_values_when_available\nFAILED tests/test_water_profile_batch_sync_unit.py::test_sync_batch_settings_only_overrides_segments_with_manual_qmax\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_4_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_5_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_6_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_7_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_8_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_9_triggers_sync_after_loading\nFAILED tests/test_water_profile_batch_sync_unit.py::test_load_section_sample_10_triggers_sync_after_loading\n11 failed in 5.91s\n"
+    },
+    {
+      "file": "test_water_profile_init_shared_batch_results_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 2.69s"
+    },
+    {
+      "file": "test_water_profile_loss_dialog_alignment_unit.py",
+      "exit_code": 0,
+      "summary": "21 passed in 3.39s"
+    },
+    {
+      "file": "test_pressure_pipe_window_override_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 0.92s"
+    },
+    {
+      "file": "test_pressure_pipe_project_save_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 0.76s"
+    },
+    {
+      "file": "test_pressure_pipe_first_entry_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 3.60s"
+    },
+    {
+      "file": "test_multi_case_panel_smoke_unit.py",
+      "exit_code": 0,
+      "summary": "63 passed in 11.75s"
+    },
+    {
+      "file": "test_multi_case_q_recalc_regression_unit.py",
+      "exit_code": 0,
+      "summary": "5 passed in 42.18s"
+    },
+    {
+      "file": "test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "summary": "43 passed in 12.96s"
+    },
+    {
+      "file": "test_batch_manual_qmax_excel_unit.py",
+      "exit_code": 0,
+      "summary": "9 passed in 4.17s"
+    },
+    {
+      "file": "test_siphon_set_params_gui_unit.py",
+      "exit_code": 0,
+      "summary": "7 passed in 1.72s"
+    },
+    {
+      "file": "test_siphon_auto_increase_execution_unit.py",
+      "exit_code": 0,
+      "summary": "2 passed in 1.00s"
+    },
+    {
+      "file": "test_siphon_arc_geometry_fidelity_unit.py",
+      "exit_code": 0,
+      "summary": "11 passed, 19 warnings in 2.22s"
+    },
+    {
+      "file": "test_siphon_increased_velocity_chain_unit.py",
+      "exit_code": 0,
+      "summary": "6 passed in 0.82s"
+    }
+  ],
+  "initial_passed": 260,
+  "initial_failed_files": [
+    "test_water_profile_transition_ready_unit.py",
+    "test_water_profile_batch_sync_unit.py"
+  ],
+  "repairs": [
+    {
+      "file": "test_table_interaction_performance_unit.py",
+      "exit_code": 0,
+      "summary": "12 passed in 4.34s"
+    },
+    {
+      "file": "test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "summary": "17 passed in 4.03s"
+    },
+    {
+      "file": "test_water_profile_transition_ready_unit.py",
+      "exit_code": 0,
+      "summary": "40 passed in 1.15s"
+    },
+    {
+      "file": "test_water_profile_batch_sync_unit.py",
+      "exit_code": 0,
+      "summary": "11 passed in 1.30s"
+    },
+    {
+      "file": "test_project_atomic_save_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 0.23s"
+    },
+    {
+      "file": "test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "summary": "1 passed in 0.46s"
+    },
+    {
+      "file": "test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "summary": "18 passed in 4.17s"
+    }
+  ],
+  "repair_notes": "两项旧测试使用假的样式模块，模块导入时缺少新增调度函数；将窗口缩放辅助函数放到 resizeEvent 实际使用处导入后复测。同步验证新建工程保持空基础信息与原糙率默认值。",
+  "test_file_count": 24,
+  "source_sha256": {
+    "app_渠系计算前端/styles.py": "be9f3bd37e1f1212d4e35d1f4c266973e05dc6b3d7e8d4f76b9de3e8222e5e3e",
+    "app_渠系计算前端/frozen_table.py": "18ed50ea830ed0f2ebeb5e1df6b9bc001e349cca48ccec01181bf471138ccea2",
+    "app_渠系计算前端/water_profile/panel.py": "e32049c5ea04e1be1dda9040a1255f74c89b0f1ece1f171ae2bb1b72aca42687",
+    "app_渠系计算前端/project_manager.py": "baffd420ff673563cbb6eba32887b53cc67f561b5402cf4ea3f93ab6b393c11c",
+    "app_渠系计算前端/app.py": "d3570c807b29eba9ff1e48ac39cc84c8a3403616c6c89c5a2f49ff9898e0341e",
+    "app_渠系计算前端/batch/panel.py": "05f545a53a74111a07491807d0f27344faa17c807b280ea2eb3406d743c905d0",
+    "app_渠系计算前端/siphon/panel.py": "40ba788decb5947cdea4987a1c844ad4a4123bc132bc44273c15b2c7f6a85922"
+  },
+  "development_checks": [
+    "初次混合删除/撤销验证暴露节点人工采用值未随表格快照恢复的问题，已修复并通过后续回归。",
+    "定时器测试改为等待实际 timeout 信号，避免固定短等待在系统繁忙时误报。",
+    "默认系统 pytest 临时目录拒绝访问，正式回归改用工程内独立 TemporaryDirectory，并在退出时清理。"
+  ],
+  "scope_note": "312项为24个关联测试文件的最终不同用例数；复测不重复计数，非全仓库测试结论。并发 Word 导出修改保留，不归入本轮性能修订。",
+  "ast_parse": "passed",
+  "git_diff_check": "passed",
+  "temporary_directories_cleaned": true,
+  "final_screenshot_review": "Qt offscreen screenshot inspected; visible Chinese, frozen columns, horizontal scrolling, and deletion selection area checked; not desktop/package acceptance"
+}

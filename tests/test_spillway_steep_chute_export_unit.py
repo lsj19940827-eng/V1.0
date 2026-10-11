@@ -10,7 +10,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from docx import Document
+from docx.oxml.ns import qn
 from openpyxl import load_workbook
+from version import APP_VERSION
 
 from app_渠系计算前端.spillway_steep_chute.report_export import (
     export_spillway_steep_chute_excel,
@@ -251,6 +253,17 @@ def test_export_word_writes_principles_before_summary_profile_checks_and_risks(t
         for cell in row.cells
     )
     combined = f"{text}\n{table_text}"
+
+    assert f"渠系建筑物水力计算系统 V{APP_VERSION}" in text
+    assert "渠系建筑物水力计算系统 V1.0" not in text
+    for table in document.tables:
+        assert table.style.name == "Table Grid"
+        assert table._tbl.xpath('./w:tblPr/w:tblBorders/w:insideV[@w:val="single"]')
+        for shading in table._tbl.xpath('.//w:shd'):
+            assert shading.get(qn('w:val')) == 'nil'
+            assert shading.get(qn('w:fill')) is None
+        for color in table._tbl.xpath('.//w:rPr/w:color'):
+            assert color.get(qn('w:val')) == '000000'
 
     assert "泄水渠与陡坡计算书" in combined
     assert "工程阶段产品运行卡" in combined

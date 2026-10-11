@@ -284,6 +284,9 @@ def test_batch_panel_calculate_single_passes_rect_culvert_hb_ratio():
 def test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height():
     """批量参数弹窗回填暗涵时应写回 H直 追加列。"""
     panel = BatchPanel.__new__(BatchPanel)
+    changed = []
+    panel._remember_current_input_cell = lambda: None
+    panel._notify_input_changed = lambda: changed.append(True)
     panel.input_table = _FakeTable()
     panel._get_row_data = lambda _row: [""] * len(INPUT_HEADERS)
     panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
@@ -307,6 +310,7 @@ def test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height():
     assert panel.input_table.item(0, COL_B).text() == "3.0"
     assert panel.input_table.item(0, batch_panel_mod.COL_THETA).text() == "150.0"
     assert panel.input_table.item(0, COL_ARCH_H_STRAIGHT).text() == "1.2"
+    assert changed == [True]
 
 
 def test_batch_panel_map_section_type_reads_culvert_arch_aliases():

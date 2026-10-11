@@ -7,6 +7,8 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QWidget
 
 import app_渠系计算前端.siphon.panel as siphon_panel_mod
@@ -32,6 +34,41 @@ def _flush_events(rounds: int = 6):
     app = _get_qapp()
     for _ in range(max(1, rounds)):
         app.processEvents()
+
+
+def _wait_for_canvas_redraw(panel):
+    """等待真实防抖更新完成，不让布局断言与未到期的重绘竞争。"""
+    timer = panel._canvas_timer
+    if timer.isActive():
+        finished = QSignalSpy(timer.timeout)
+        assert finished.wait(1000), "画布防抖定时器未完成"
+    _flush_events()
+    assert not timer.isActive()
+
+
+def _show_real_plan_hint(panel):
+    """通过真实细长平面数据触发提示，不能手写一个会被重绘清除的标签。"""
+    panel.set_params(
+        skip_confirm=True,
+        plan_feature_points=[
+            {"chainage": 0.0, "x": 0.0, "y": 0.0},
+            {"chainage": 1616.1, "x": 0.0, "y": 1616.1},
+        ],
+        plan_total_length=1616.1,
+    )
+    _wait_for_canvas_redraw(panel)
+    assert panel.canvas.get_view_mode() == "plan"
+    assert panel.canvas.content_bounds() == (0.0, 0.0, 0.0, 1616.1)
+    assert panel.canvas.should_suggest_detail_view()
+    assert panel.lbl_canvas_hint.isVisible()
+    assert panel.lbl_canvas_hint.text() == "平面图较细长，建议点“展开”查看大图"
+    assert panel.lbl_canvas_hint.toolTip() == "当前平面图轴线较细长，建议点“展开”或双击预览查看大图。"
+
+
+def _close_dialog(dialog):
+    dialog.close()
+    dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(dialog, QEvent.DeferredDelete)
 
 
 def _make_group():
@@ -73,6 +110,7 @@ def _make_dialog(monkeypatch):
     dialog.resize(1365, 768)
     dialog.show()
     _flush_events()
+    _wait_for_canvas_redraw(dialog._get_current_panel())
     return dialog
 
 
@@ -93,16 +131,13 @@ def test_key_input_rows_keep_full_height_in_multi_siphon_dialog(monkeypatch):
     assert rows["np_row"].height() >= panel.spin_num_pipes.sizeHint().height()
     assert rows["turn_row"].height() >= panel.edit_turn_n.sizeHint().height()
 
-    panel.lbl_canvas_hint.setText("当前平面图轴线较细长，建议点“展开”或双击预览查看大图。")
-    panel.lbl_canvas_hint.setVisible(True)
-    _flush_events()
+    _show_real_plan_hint(panel)
 
     assert rows["v_row"].height() >= panel.edit_v.sizeHint().height()
     assert rows["np_row"].height() >= panel.spin_num_pipes.sizeHint().height()
     assert rows["turn_row"].height() >= panel.edit_turn_n.sizeHint().height()
 
-    dialog.close()
-    dialog.deleteLater()
+    _close_dialog(dialog)
 
 
 def test_canvas_hint_does_not_shrink_params_area_and_stays_single_line(monkeypatch):
@@ -111,14 +146,10 @@ def test_canvas_hint_does_not_shrink_params_area_and_stays_single_line(monkeypat
 
     params_height_before = panel.params_notebook.height()
 
-    panel.lbl_canvas_hint.setText("当前平面图轴线较细长，建议点“展开”或双击预览查看大图。")
-    panel.lbl_canvas_hint.setToolTip("当前平面图轴线较细长，建议点“展开”或双击预览查看大图。")
-    panel.lbl_canvas_hint.setVisible(True)
-    _flush_events()
+    _show_real_plan_hint(panel)
 
     assert panel.params_notebook.height() == params_height_before
     assert panel.lbl_canvas_hint.wordWrap() is False
     assert panel.lbl_canvas_hint.toolTip()
 
-    dialog.close()
-    dialog.deleteLater()
+    _close_dialog(dialog)

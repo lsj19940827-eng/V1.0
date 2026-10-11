@@ -299,6 +299,9 @@ def test_batch_panel_open_parameter_dialog_writes_back_flat_bottom_dimensions(mo
 def test_batch_panel_update_table_row_writes_back_flat_bottom_dimensions():
     """批量表格回填时应把平底圆形的 B/D 写回正确列。"""
     panel = BatchPanel.__new__(BatchPanel)
+    changed = []
+    panel._remember_current_input_cell = lambda: None
+    panel._notify_input_changed = lambda: changed.append(True)
     panel.input_table = _FakeTable()
     panel._get_row_data = lambda _row: [""] * len(INPUT_HEADERS)
     panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
@@ -321,6 +324,7 @@ def test_batch_panel_update_table_row_writes_back_flat_bottom_dimensions():
     header_index = {header: idx for idx, header in enumerate(INPUT_HEADERS)}
     assert panel.input_table.item(0, header_index["底宽B(m)"]).text() == "2.0"
     assert panel.input_table.item(0, header_index["直径D(m)"]).text() == "4.0"
+    assert changed == [True]
 
 
 def test_batch_panel_tooltips_and_aliases_require_fixed_d_and_b_for_flat_bottom_circle():

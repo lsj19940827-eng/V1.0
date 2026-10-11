@@ -1,0 +1,1202 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="5" time="3.577" timestamp="2026-10-11T10:42:57.072821+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_batch_qiyi_fill_channel_regression" name="test_qiyi_excel_fixture_has_fill_channel_required_inputs" time="0.040" />
+    <testcase classname="tests.test_batch_qiyi_fill_channel_regression" name="test_qiyi_excel_imports_fill_channel_rows" time="0.351" />
+    <testcase classname="tests.test_batch_qiyi_fill_channel_regression" name="test_qiyi_batch_calculation_registers_spillway_chain_rows" time="0.271" />
+    <testcase classname="tests.test_batch_qiyi_fill_channel_regression" name="test_fill_channel_aliases_import_as_spillway_type" time="0.283" />
+    <testcase classname="tests.test_batch_qiyi_fill_channel_regression" name="test_qiyi_fill_channel_water_profile_and_combined_dxf" time="0.890">
+      <failure message="AssertionError: assert '七一充' in '大垭口隧洞\n暗涵-矩形\n蓬莱隧洞\n高新桥倒虹吸\n张家坡隧洞\n滴水岩倒虹吸\n茅草沟隧洞\n泄水渠与陡坡\n1/4000\n1/4000\n1/4000\n-\n1/4000\n-\n1/4000\n1/100\n1/10\n...充IP5\n655160.487385\n3401164.120618\n七充4+644.42\n七充4+644.42\n七充4+644.42\n0.000\n10.000\n0.000\n0.000\n388.045\n388.197'">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000027051D8C7C0&gt;
+tmp_path = WindowsPath('D:/V1.0/.tmp/recheck_root/logs/test_batch_qiyi_fill_channel_regression/tmp/test_qiyi_fill_channel_water_p0')
+
+    def test_qiyi_fill_channel_water_profile_and_combined_dxf(monkeypatch, tmp_path):
+        """七一充水渠应按变坡专项链完成表3水面线并导出可打开的全部 DXF。"""
+        ezdxf = pytest.importorskip("ezdxf")
+        panel, registered_rows = _run_qiyi_batch_calculation(monkeypatch)
+        settings, calculated_nodes = _calculate_qiyi_nodes(panel, registered_rows)
+        spillway_nodes = [node for node in calculated_nodes if is_spillway_steep_chute_node(node)]
+    
+        assert len(spillway_nodes) == 4
+        assert all(node.water_level &gt; 0 and node.water_depth &gt; 0 and node.velocity &gt; 0 for node in spillway_nodes)
+        payloads = [node.section_params[SPILLWAY_STEEP_CHUTE_PARAM_KEY] for node in spillway_nodes]
+        assert [item["slope_inv"] for item in payloads[0]["chain_subsegments"]] == pytest.approx([100.0, 10.0, 24.5])
+        assert [item["node_count"] for item in payloads[0]["chain_subsegments"]] == [2, 2, 2]
+        assert all(payload["chain_segment_count"] == 3 for payload in payloads)
+        assert payloads[2]["segment_key"] == payloads[3]["segment_key"]
+    
+        out_path = tmp_path / "qiyi_fill_channel_combined.dxf"
+        messages = []
+        export_panel = SimpleNamespace(
+            calculated_nodes=calculated_nodes,
+            nodes=calculated_nodes,
+            _text_export_settings={},
+            _custom_pressurized_pipe_params={},
+            channel_name_edit=_TextStub("七一"),
+            channel_level_combo=_ComboStub("充水渠"),
+        )
+        export_panel.window = lambda: None
+        export_panel._build_settings = lambda: settings
+        export_panel._build_nodes_from_table = lambda: calculated_nodes
+    
+        monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _AcceptedTextDialog)
+        monkeypatch.setattr(cad_tools.QFileDialog, "getSaveFileName", staticmethod(lambda *_args, **_kwargs: (str(out_path), "DXF")))
+        monkeypatch.setattr(cad_tools, "fluent_question", lambda *_args, **_kwargs: False)
+        monkeypatch.setattr(cad_tools, "fluent_info", lambda *_args, **_kwargs: messages.append(("info", _args)))
+        monkeypatch.setattr(cad_tools, "fluent_error", lambda *_args, **_kwargs: messages.append(("error", _args)))
+    
+        cad_tools.export_combined_dxf(export_panel)
+    
+        assert out_path.exists()
+        assert [kind for kind, _ in messages if kind == "error"] == []
+        doc = ezdxf.readfile(out_path)
+        layer_names = {layer.dxf.name for layer in doc.layers}
+        assert "断面汇总表" in layer_names
+        assert "IP坐标表" in layer_names
+        assert any(name.startswith("纵断面_") for name in layer_names)
+    
+        modelspace = doc.modelspace()
+        assert len(modelspace) &gt; 0
+        text_values = [entity.dxf.text for entity in modelspace.query("TEXT")]
+        joined_text = "\n".join(text_values)
+&gt;       assert "七一充" in joined_text
+E       AssertionError: assert '七一充' in '大垭口隧洞\n暗涵-矩形\n蓬莱隧洞\n高新桥倒虹吸\n张家坡隧洞\n滴水岩倒虹吸\n茅草沟隧洞\n泄水渠与陡坡\n1/4000\n1/4000\n1/4000\n-\n1/4000\n-\n1/4000\n1/100\n1/10\n...充IP5\n655160.487385\n3401164.120618\n七充4+644.42\n七充4+644.42\n七充4+644.42\n0.000\n10.000\n0.000\n0.000\n388.045\n388.197'
+
+tests\test_batch_qiyi_fill_channel_regression.py:396: AssertionError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="3" skipped="0" tests="18" time="2.546" timestamp="2026-10-11T10:43:01.562229+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_batch_panel_project_save_normalizes_legacy_rect_culvert_labels[\u6697\u6e20]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_batch_panel_project_save_normalizes_legacy_rect_culvert_labels[\u77e9\u5f62\u6697\u6e20]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_batch_panel_project_save_normalizes_legacy_rect_culvert_labels[\u77e9\u5f62\u6697\u6db5]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels[\u6697\u6e20]" time="0.000">
+      <failure message="AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'">legacy_type = '暗渠'
+
+    @pytest.mark.parametrize("legacy_type", ["暗渠", "矩形暗渠", "矩形暗涵"])
+    def test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels(legacy_type):
+        """表1加载旧项目时应回显为标准矩形暗涵名称。"""
+        panel = _make_batch_panel()
+    
+&gt;       batch_panel_mod.BatchPanel.from_project_dict(
+            panel,
+            {"input_rows": [_make_row(legacy_type)]},
+            skip_dirty_signal=True,
+        )
+
+tests\test_culvert_family_compatibility_unit.py:182: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;[RuntimeError("libshiboken: '__init__' method of object's base class (BatchPanel) not called.") raised in repr()] BatchPanel object at 0x26bab4c89c0&gt;
+d = {'input_rows': [['1', '第一流量段', '建筑物', '暗渠', '', '', ...]]}
+skip_dirty_signal = True
+
+    def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
+        """
+        从字典恢复批量计算面板数据
+    
+        用于 .qxproj 项目文件加载。
+    
+        Args:
+            d: 序列化的字典数据
+            skip_dirty_signal: 是否跳过脏状态信号（加载时应为True）
+        """
+        # 设置守卫标志，防止加载时触发脏状态
+        old_loading = getattr(self, '_loading_project', False)
+        self._loading_project = True
+    
+        try:
+            # 恢复渠道基础信息
+            channel_name = d.get("channel_name", "")
+            if "channel_name" in d:
+                self.channel_name_edit.setText(channel_name)
+    
+            channel_level = d.get("channel_level", "")
+            if channel_level:
+                idx = self.channel_level_combo.findText(channel_level)
+                if idx &gt;= 0:
+                    self.channel_level_combo.setCurrentIndex(idx)
+    
+            start_wl = d.get("start_water_level", "")
+            if "start_water_level" in d:
+                self.start_wl_edit.setText(start_wl)
+    
+            start_station = d.get("start_station", "")
+            if "start_station" in d:
+                self.start_station_edit.setText(start_station)
+    
+            # 恢复流量段设置
+            flow_segments = d.get("flow_segments", "")
+            if "flow_segments" in d:
+                self.flow_segments_edit.setText(flow_segments)
+    
+            # 恢复计算选项
+            self.inc_cb.setChecked(d.get("inc_checked", True))
+            self.detail_cb.setChecked(d.get("detail_checked", True))
+    
+            # 恢复 Excel 第1行手工 Q加大 映射
+            restored_manual_qmax = {}
+            for segment, value in (d.get("manual_qmax_by_segment", {}) or {}).items():
+                try:
+                    restored_manual_qmax[int(segment)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            self._manual_qmax_by_segment = restored_manual_qmax
+    
+            # 恢复输入表格数据
+            input_rows = d.get("input_rows", [])
+            input_header_order = d.get("input_header_order")
+            input_row_meta = d.get("input_row_meta", []) or []
+            self.input_table.setRowCount(0)
+            if input_rows:
+                # 清空现有数据
+                self.input_table.setRowCount(len(input_rows))
+    
+                for row_idx, row_data in enumerate(input_rows):
+                    row_data = self._normalize_project_input_row(row_data, input_header_order)
+                    for col_idx, cell_value in enumerate(row_data):
+                        if col_idx &lt; self.input_table.columnCount():
+                            if col_idx == COL_SECTION_TYPE:
+                                cell_value = normalize_project_section_type(cell_value)
+                            item = QTableWidgetItem(str(cell_value) if cell_value else "")
+                            # 序号列和结构形式列居中
+                            if col_idx in (COL_SEQ, COL_SECTION_TYPE):
+                                item.setTextAlignment(Qt.AlignCenter)
+                            self.input_table.setItem(row_idx, col_idx, item)
+                    if row_idx &lt; len(input_row_meta):
+                        meta = input_row_meta[row_idx]
+                        self._apply_row_hidden_meta(row_idx, meta)
+                        if (
+                            isinstance(meta, dict)
+                            and _RECT_CULVERT_MANUAL_H_META_KEY in meta
+                            and is_rect_culvert_section_type(row_data[COL_SECTION_TYPE])
+                            and not str(row_data[COL_RECT_CULVERT_H]).strip()
+                        ):
+                            self.input_table.setItem(
+                                row_idx,
+                                COL_RECT_CULVERT_H,
+                                QTableWidgetItem(str(meta.get(_RECT_CULVERT_MANUAL_H_META_KEY) or "")),
+                            )
+                            self._set_rect_culvert_manual_h(row_idx, None)
+    
+            has_saved_result_snapshot = any(
+                key in d for key in ("batch_results", "result_rows", "detail_text_cache")
+            )
+            has_nonempty_result_snapshot = bool(
+                d.get("batch_results") or d.get("result_rows") or d.get("detail_text_cache")
+            )
+            if has_saved_result_snapshot and has_nonempty_result_snapshot:
+                # 新项目格式：恢复上次计算现场；失败结果继续保持导出锁定。
+                self.batch_results = copy.deepcopy(d.get("batch_results", []) or [])
+                for item_data in self.batch_results:
+                    if isinstance(item_data, dict) and "input" in item_data:
+                        item_data["input"] = self._normalize_project_input_row(
+                            item_data.get("input", []),
+                            input_header_order,
+                        )
+                result_rows = d.get("result_rows", []) or []
+                if hasattr(self, 'result_table'):
+                    self._restore_result_table_rows(result_rows)
+                detail_text_cache = d.get("detail_text_cache", "") or ""
+                self._detail_text_cache = detail_text_cache
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.setPlainText(detail_text_cache)
+                stored_has_errors = d.get("has_batch_errors")
+                computed_has_errors = self._result_rows_have_errors(result_rows)
+                has_errors = bool(stored_has_errors) or computed_has_errors
+                self._update_lock_state(bool(has_errors))
+                if self.batch_results and not has_errors:
+                    self._register_batch_results_to_shared(show_notice=False)
+                # 失败结果只恢复展示和锁定状态，不缓存输入快照，允许用户不改输入直接重算。
+                self._last_calc_snapshot = None if has_errors else self._make_calc_snapshot()
+                self._last_calc_detail = bool(detail_text_cache)
+            else:
+                # 旧项目格式：只恢复输入，结果保持清空，需要用户重新计算。
+                self.batch_results = []
+                self._detail_text_cache = ""
+                self._last_calc_snapshot = None
+                self._last_calc_detail = None
+                if hasattr(self, 'result_table'):
+                    self.result_table.setRowCount(0)
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.clear()
+                self._update_lock_state(False)
+    
+            # 标记为非示例数据
+            self._is_sample_data = False
+            self._set_excel_import_session_active(False)
+&gt;           self._table_undo_stack.clear()
+            ^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'
+
+app_渠系计算前端\batch\panel.py:5330: AttributeError</failure>
+    </testcase>
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels[\u77e9\u5f62\u6697\u6e20]" time="0.000">
+      <failure message="AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'">legacy_type = '矩形暗渠'
+
+    @pytest.mark.parametrize("legacy_type", ["暗渠", "矩形暗渠", "矩形暗涵"])
+    def test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels(legacy_type):
+        """表1加载旧项目时应回显为标准矩形暗涵名称。"""
+        panel = _make_batch_panel()
+    
+&gt;       batch_panel_mod.BatchPanel.from_project_dict(
+            panel,
+            {"input_rows": [_make_row(legacy_type)]},
+            skip_dirty_signal=True,
+        )
+
+tests\test_culvert_family_compatibility_unit.py:182: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;[RuntimeError("libshiboken: '__init__' method of object's base class (BatchPanel) not called.") raised in repr()] BatchPanel object at 0x26be32eeb00&gt;
+d = {'input_rows': [['1', '第一流量段', '建筑物', '矩形暗渠', '', '', ...]]}
+skip_dirty_signal = True
+
+    def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
+        """
+        从字典恢复批量计算面板数据
+    
+        用于 .qxproj 项目文件加载。
+    
+        Args:
+            d: 序列化的字典数据
+            skip_dirty_signal: 是否跳过脏状态信号（加载时应为True）
+        """
+        # 设置守卫标志，防止加载时触发脏状态
+        old_loading = getattr(self, '_loading_project', False)
+        self._loading_project = True
+    
+        try:
+            # 恢复渠道基础信息
+            channel_name = d.get("channel_name", "")
+            if "channel_name" in d:
+                self.channel_name_edit.setText(channel_name)
+    
+            channel_level = d.get("channel_level", "")
+            if channel_level:
+                idx = self.channel_level_combo.findText(channel_level)
+                if idx &gt;= 0:
+                    self.channel_level_combo.setCurrentIndex(idx)
+    
+            start_wl = d.get("start_water_level", "")
+            if "start_water_level" in d:
+                self.start_wl_edit.setText(start_wl)
+    
+            start_station = d.get("start_station", "")
+            if "start_station" in d:
+                self.start_station_edit.setText(start_station)
+    
+            # 恢复流量段设置
+            flow_segments = d.get("flow_segments", "")
+            if "flow_segments" in d:
+                self.flow_segments_edit.setText(flow_segments)
+    
+            # 恢复计算选项
+            self.inc_cb.setChecked(d.get("inc_checked", True))
+            self.detail_cb.setChecked(d.get("detail_checked", True))
+    
+            # 恢复 Excel 第1行手工 Q加大 映射
+            restored_manual_qmax = {}
+            for segment, value in (d.get("manual_qmax_by_segment", {}) or {}).items():
+                try:
+                    restored_manual_qmax[int(segment)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            self._manual_qmax_by_segment = restored_manual_qmax
+    
+            # 恢复输入表格数据
+            input_rows = d.get("input_rows", [])
+            input_header_order = d.get("input_header_order")
+            input_row_meta = d.get("input_row_meta", []) or []
+            self.input_table.setRowCount(0)
+            if input_rows:
+                # 清空现有数据
+                self.input_table.setRowCount(len(input_rows))
+    
+                for row_idx, row_data in enumerate(input_rows):
+                    row_data = self._normalize_project_input_row(row_data, input_header_order)
+                    for col_idx, cell_value in enumerate(row_data):
+                        if col_idx &lt; self.input_table.columnCount():
+                            if col_idx == COL_SECTION_TYPE:
+                                cell_value = normalize_project_section_type(cell_value)
+                            item = QTableWidgetItem(str(cell_value) if cell_value else "")
+                            # 序号列和结构形式列居中
+                            if col_idx in (COL_SEQ, COL_SECTION_TYPE):
+                                item.setTextAlignment(Qt.AlignCenter)
+                            self.input_table.setItem(row_idx, col_idx, item)
+                    if row_idx &lt; len(input_row_meta):
+                        meta = input_row_meta[row_idx]
+                        self._apply_row_hidden_meta(row_idx, meta)
+                        if (
+                            isinstance(meta, dict)
+                            and _RECT_CULVERT_MANUAL_H_META_KEY in meta
+                            and is_rect_culvert_section_type(row_data[COL_SECTION_TYPE])
+                            and not str(row_data[COL_RECT_CULVERT_H]).strip()
+                        ):
+                            self.input_table.setItem(
+                                row_idx,
+                                COL_RECT_CULVERT_H,
+                                QTableWidgetItem(str(meta.get(_RECT_CULVERT_MANUAL_H_META_KEY) or "")),
+                            )
+                            self._set_rect_culvert_manual_h(row_idx, None)
+    
+            has_saved_result_snapshot = any(
+                key in d for key in ("batch_results", "result_rows", "detail_text_cache")
+            )
+            has_nonempty_result_snapshot = bool(
+                d.get("batch_results") or d.get("result_rows") or d.get("detail_text_cache")
+            )
+            if has_saved_result_snapshot and has_nonempty_result_snapshot:
+                # 新项目格式：恢复上次计算现场；失败结果继续保持导出锁定。
+                self.batch_results = copy.deepcopy(d.get("batch_results", []) or [])
+                for item_data in self.batch_results:
+                    if isinstance(item_data, dict) and "input" in item_data:
+                        item_data["input"] = self._normalize_project_input_row(
+                            item_data.get("input", []),
+                            input_header_order,
+                        )
+                result_rows = d.get("result_rows", []) or []
+                if hasattr(self, 'result_table'):
+                    self._restore_result_table_rows(result_rows)
+                detail_text_cache = d.get("detail_text_cache", "") or ""
+                self._detail_text_cache = detail_text_cache
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.setPlainText(detail_text_cache)
+                stored_has_errors = d.get("has_batch_errors")
+                computed_has_errors = self._result_rows_have_errors(result_rows)
+                has_errors = bool(stored_has_errors) or computed_has_errors
+                self._update_lock_state(bool(has_errors))
+                if self.batch_results and not has_errors:
+                    self._register_batch_results_to_shared(show_notice=False)
+                # 失败结果只恢复展示和锁定状态，不缓存输入快照，允许用户不改输入直接重算。
+                self._last_calc_snapshot = None if has_errors else self._make_calc_snapshot()
+                self._last_calc_detail = bool(detail_text_cache)
+            else:
+                # 旧项目格式：只恢复输入，结果保持清空，需要用户重新计算。
+                self.batch_results = []
+                self._detail_text_cache = ""
+                self._last_calc_snapshot = None
+                self._last_calc_detail = None
+                if hasattr(self, 'result_table'):
+                    self.result_table.setRowCount(0)
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.clear()
+                self._update_lock_state(False)
+    
+            # 标记为非示例数据
+            self._is_sample_data = False
+            self._set_excel_import_session_active(False)
+&gt;           self._table_undo_stack.clear()
+            ^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'
+
+app_渠系计算前端\batch\panel.py:5330: AttributeError</failure>
+    </testcase>
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels[\u77e9\u5f62\u6697\u6db5]" time="0.000">
+      <failure message="AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'">legacy_type = '矩形暗涵'
+
+    @pytest.mark.parametrize("legacy_type", ["暗渠", "矩形暗渠", "矩形暗涵"])
+    def test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels(legacy_type):
+        """表1加载旧项目时应回显为标准矩形暗涵名称。"""
+        panel = _make_batch_panel()
+    
+&gt;       batch_panel_mod.BatchPanel.from_project_dict(
+            panel,
+            {"input_rows": [_make_row(legacy_type)]},
+            skip_dirty_signal=True,
+        )
+
+tests\test_culvert_family_compatibility_unit.py:182: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;[RuntimeError("libshiboken: '__init__' method of object's base class (BatchPanel) not called.") raised in repr()] BatchPanel object at 0x26be325f1c0&gt;
+d = {'input_rows': [['1', '第一流量段', '建筑物', '矩形暗涵', '', '', ...]]}
+skip_dirty_signal = True
+
+    def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
+        """
+        从字典恢复批量计算面板数据
+    
+        用于 .qxproj 项目文件加载。
+    
+        Args:
+            d: 序列化的字典数据
+            skip_dirty_signal: 是否跳过脏状态信号（加载时应为True）
+        """
+        # 设置守卫标志，防止加载时触发脏状态
+        old_loading = getattr(self, '_loading_project', False)
+        self._loading_project = True
+    
+        try:
+            # 恢复渠道基础信息
+            channel_name = d.get("channel_name", "")
+            if "channel_name" in d:
+                self.channel_name_edit.setText(channel_name)
+    
+            channel_level = d.get("channel_level", "")
+            if channel_level:
+                idx = self.channel_level_combo.findText(channel_level)
+                if idx &gt;= 0:
+                    self.channel_level_combo.setCurrentIndex(idx)
+    
+            start_wl = d.get("start_water_level", "")
+            if "start_water_level" in d:
+                self.start_wl_edit.setText(start_wl)
+    
+            start_station = d.get("start_station", "")
+            if "start_station" in d:
+                self.start_station_edit.setText(start_station)
+    
+            # 恢复流量段设置
+            flow_segments = d.get("flow_segments", "")
+            if "flow_segments" in d:
+                self.flow_segments_edit.setText(flow_segments)
+    
+            # 恢复计算选项
+            self.inc_cb.setChecked(d.get("inc_checked", True))
+            self.detail_cb.setChecked(d.get("detail_checked", True))
+    
+            # 恢复 Excel 第1行手工 Q加大 映射
+            restored_manual_qmax = {}
+            for segment, value in (d.get("manual_qmax_by_segment", {}) or {}).items():
+                try:
+                    restored_manual_qmax[int(segment)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            self._manual_qmax_by_segment = restored_manual_qmax
+    
+            # 恢复输入表格数据
+            input_rows = d.get("input_rows", [])
+            input_header_order = d.get("input_header_order")
+            input_row_meta = d.get("input_row_meta", []) or []
+            self.input_table.setRowCount(0)
+            if input_rows:
+                # 清空现有数据
+                self.input_table.setRowCount(len(input_rows))
+    
+                for row_idx, row_data in enumerate(input_rows):
+                    row_data = self._normalize_project_input_row(row_data, input_header_order)
+                    for col_idx, cell_value in enumerate(row_data):
+                        if col_idx &lt; self.input_table.columnCount():
+                            if col_idx == COL_SECTION_TYPE:
+                                cell_value = normalize_project_section_type(cell_value)
+                            item = QTableWidgetItem(str(cell_value) if cell_value else "")
+                            # 序号列和结构形式列居中
+                            if col_idx in (COL_SEQ, COL_SECTION_TYPE):
+                                item.setTextAlignment(Qt.AlignCenter)
+                            self.input_table.setItem(row_idx, col_idx, item)
+                    if row_idx &lt; len(input_row_meta):
+                        meta = input_row_meta[row_idx]
+                        self._apply_row_hidden_meta(row_idx, meta)
+                        if (
+                            isinstance(meta, dict)
+                            and _RECT_CULVERT_MANUAL_H_META_KEY in meta
+                            and is_rect_culvert_section_type(row_data[COL_SECTION_TYPE])
+                            and not str(row_data[COL_RECT_CULVERT_H]).strip()
+                        ):
+                            self.input_table.setItem(
+                                row_idx,
+                                COL_RECT_CULVERT_H,
+                                QTableWidgetItem(str(meta.get(_RECT_CULVERT_MANUAL_H_META_KEY) or "")),
+                            )
+                            self._set_rect_culvert_manual_h(row_idx, None)
+    
+            has_saved_result_snapshot = any(
+                key in d for key in ("batch_results", "result_rows", "detail_text_cache")
+            )
+            has_nonempty_result_snapshot = bool(
+                d.get("batch_results") or d.get("result_rows") or d.get("detail_text_cache")
+            )
+            if has_saved_result_snapshot and has_nonempty_result_snapshot:
+                # 新项目格式：恢复上次计算现场；失败结果继续保持导出锁定。
+                self.batch_results = copy.deepcopy(d.get("batch_results", []) or [])
+                for item_data in self.batch_results:
+                    if isinstance(item_data, dict) and "input" in item_data:
+                        item_data["input"] = self._normalize_project_input_row(
+                            item_data.get("input", []),
+                            input_header_order,
+                        )
+                result_rows = d.get("result_rows", []) or []
+                if hasattr(self, 'result_table'):
+                    self._restore_result_table_rows(result_rows)
+                detail_text_cache = d.get("detail_text_cache", "") or ""
+                self._detail_text_cache = detail_text_cache
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.setPlainText(detail_text_cache)
+                stored_has_errors = d.get("has_batch_errors")
+                computed_has_errors = self._result_rows_have_errors(result_rows)
+                has_errors = bool(stored_has_errors) or computed_has_errors
+                self._update_lock_state(bool(has_errors))
+                if self.batch_results and not has_errors:
+                    self._register_batch_results_to_shared(show_notice=False)
+                # 失败结果只恢复展示和锁定状态，不缓存输入快照，允许用户不改输入直接重算。
+                self._last_calc_snapshot = None if has_errors else self._make_calc_snapshot()
+                self._last_calc_detail = bool(detail_text_cache)
+            else:
+                # 旧项目格式：只恢复输入，结果保持清空，需要用户重新计算。
+                self.batch_results = []
+                self._detail_text_cache = ""
+                self._last_calc_snapshot = None
+                self._last_calc_detail = None
+                if hasattr(self, 'result_table'):
+                    self.result_table.setRowCount(0)
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.clear()
+                self._update_lock_state(False)
+    
+            # 标记为非示例数据
+            self._is_sample_data = False
+            self._set_excel_import_session_active(False)
+&gt;           self._table_undo_stack.clear()
+            ^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'
+
+app_渠系计算前端\batch\panel.py:5330: AttributeError</failure>
+    </testcase>
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_outlet_shape_dialog_normalizes_culvert_family_aliases[\u6697\u6e20-\u6697\u6db5-\u77e9\u5f62-rectangular]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_outlet_shape_dialog_normalizes_culvert_family_aliases[\u77e9\u5f62\u6697\u6e20-\u6697\u6db5-\u77e9\u5f62-rectangular]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_outlet_shape_dialog_normalizes_culvert_family_aliases[\u77e9\u5f62\u6697\u6db5-\u6697\u6db5-\u77e9\u5f62-rectangular]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_outlet_shape_dialog_normalizes_culvert_family_aliases[\u6697\u6db5-\u77e9\u5f62-\u6697\u6db5-\u77e9\u5f62-rectangular]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_outlet_shape_dialog_normalizes_culvert_family_aliases[\u5706\u62f1\u76f4\u5899\u578b\u6697\u6db5-\u6697\u6db5-\u5706\u62f1\u76f4\u5899\u578b-arch_wall]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_outlet_shape_dialog_normalizes_culvert_family_aliases[\u6697\u6db5-\u5706\u62f1\u76f4\u5899\u578b-\u6697\u6db5-\u5706\u62f1\u76f4\u5899\u578b-arch_wall]" time="0.001" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_section_summary_classifies_legacy_culvert_aliases[\u6697\u6e20--rect_culvert]" time="0.001" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_section_summary_classifies_legacy_culvert_aliases[\u77e9\u5f62\u6697\u6e20--rect_culvert]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_section_summary_classifies_legacy_culvert_aliases[\u77e9\u5f62\u6697\u6db5--rect_culvert]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_section_summary_classifies_legacy_culvert_aliases[\u6697\u6db5-\u77e9\u5f62--rect_culvert]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_section_summary_classifies_legacy_culvert_aliases[\u5706\u62f1\u76f4\u5899\u578b\u6697\u6db5--rect_culvert_arch]" time="0.000" />
+    <testcase classname="tests.test_culvert_family_compatibility_unit" name="test_section_summary_classifies_legacy_culvert_aliases[\u77e9\u5f62\u6697\u6db5-\u6697\u6db5-\u5706\u62f1\u76f4\u5899\u578b-rect_culvert_arch]" time="0.000" />
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="3" skipped="0" tests="6" time="18.897" timestamp="2026-10-11T10:50:59.502634+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_geometry_station_regression_unit" name="test_calculate_stations_keeps_real_nodes_stable_with_transition_and_auto_channel" time="0.000" />
+    <testcase classname="tests.test_geometry_station_regression_unit" name="test_prepare_transitions_and_recalculate_geometry_preserve_real_node_stations" time="0.003" />
+    <testcase classname="tests.test_geometry_station_regression_unit" name="test_prepare_transitions_prefers_project_start_station_over_stale_first_row_station" time="0.002" />
+    <testcase classname="tests.test_geometry_station_regression_unit" name="test_sample5_jinhuazhai_station_stays_stable_after_table_roundtrip_and_calculation" time="4.389">
+      <failure message="AssertionError: assert &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; == &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt;&#10; +  where &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; = ChannelNode(flow_section='1', name='-', structure_type=&lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt;, x=645621.441000000...sition_head_loss_friction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}).structure_type&#10; +  and   &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt; = StructureType.RECT_CULVERT">def test_sample5_jinhuazhai_station_stays_stable_after_table_roundtrip_and_calculation():
+        """示例五里金花寨进口桩号在插段后往返表格再计算时应保持稳定。"""
+        module = _load_panel_module()
+        panel = _build_panel(module)
+        try:
+            app = _get_qapp()
+            panel._load_section_sample_5()
+            app.processEvents()
+            panel._run_section_batch_calculate()
+            for _ in range(20):
+                app.processEvents()
+    
+            settings = panel._build_settings()
+            calculator = WaterProfileCalculator(settings)
+            original_nodes = panel._build_nodes_from_table()
+            calculator.preprocess_nodes(original_nodes)
+    
+            def open_channel_callback(reference, _available_length, _prev_struct, _next_struct, flow_section, flow):
+                if not reference:
+                    return None
+                return calculator._build_open_channel_params_from_reference(reference, flow_section, flow)
+    
+            prepared_nodes = calculator.prepare_transitions(original_nodes, open_channel_callback)
+            jinhuazhai_index = next(
+                idx for idx, node in enumerate(prepared_nodes)
+                if str(node.name or "").strip() == "金花寨" and node.get_in_out_str() == "进"
+            )
+            baseline_station = prepared_nodes[jinhuazhai_index].station_MC
+            assert baseline_station == pytest.approx(26242.3995, abs=1e-3)
+    
+            panel._update_table_from_nodes_full(prepared_nodes, settings.get_station_prefix())
+            rebuilt_nodes = panel._build_nodes_from_table()
+            rebuilt_auto_channel = next(node for node in rebuilt_nodes if getattr(node, "is_auto_inserted_channel", False))
+&gt;           assert rebuilt_auto_channel.structure_type == StructureType.RECT_CULVERT
+E           AssertionError: assert &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; == &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt;
+E            +  where &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; = ChannelNode(flow_section='1', name='-', structure_type=&lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt;, x=645621.441000000...sition_head_loss_friction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}).structure_type
+E            +  and   &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt; = StructureType.RECT_CULVERT
+
+tests\test_geometry_station_regression_unit.py:300: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_geometry_station_regression_unit" name="test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition" time="0.001">
+      <failure message="ValueError: 已存断面无法满足当前流量，请调整断面参数。">def test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition():
+        """矩形暗涵接隧洞时，若出口侧长度为 0，不应再插空的渐变段。"""
+        calculator = WaterProfileCalculator(ProjectSettings())
+    
+        culvert_inlet = _make_profile_node(
+            "暗涵A",
+            "矩形暗涵",
+            0.0,
+            0.0,
+            {"B": 2.0},
+            1.0,
+        )
+        culvert_outlet = _make_profile_node(
+            "暗涵A",
+            "矩形暗涵",
+            60.0,
+            60.0,
+            {"B": 2.0},
+            1.0,
+        )
+        tunnel_inlet = _make_profile_node(
+            "金花寨",
+            "隧洞-圆形",
+            80.0,
+            80.0,
+            {"D": 2.0},
+            1.0,
+        )
+        tunnel_outlet = _make_profile_node(
+            "金花寨",
+            "隧洞-圆形",
+            140.0,
+            140.0,
+            {"D": 2.0},
+            1.0,
+        )
+        original_nodes = [culvert_inlet, culvert_outlet, tunnel_inlet, tunnel_outlet]
+    
+        calculator.preprocess_nodes(original_nodes)
+    
+        def open_channel_callback(reference, _available_length, _prev_struct, _next_struct, flow_section, flow):
+            if not reference:
+                return None
+            return calculator._build_open_channel_params_from_reference(reference, flow_section, flow)
+    
+&gt;       prepared_nodes = calculator.prepare_transitions(original_nodes, open_channel_callback)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_geometry_station_regression_unit.py:355: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+推求水面线\core\calculator.py:444: in prepare_transitions
+    nodes = self.identify_and_insert_transitions(nodes, open_channel_callback)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+推求水面线\core\calculator.py:2663: in identify_and_insert_transitions
+    open_channel_params = open_channel_callback(
+tests\test_geometry_station_regression_unit.py:353: in open_channel_callback
+    return calculator._build_open_channel_params_from_reference(reference, flow_section, flow)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;core.calculator.WaterProfileCalculator object at 0x0000012B5D62A190&gt;
+reference = {'arc_radius': 0, 'auto_calculated': False, 'bottom_width': 2.0, 'flow': 1.0, ...}
+default_flow_section = '1', default_flow = 1.0
+
+    def _build_open_channel_params_from_reference(
+        self,
+        reference: Optional[Dict[str, Any]],
+        default_flow_section: str,
+        default_flow: float,
+    ) -&gt; Optional[OpenChannelParams]:
+        if not reference:
+            return None
+        if reference.get('recalculation_error'):
+&gt;           raise ValueError(reference['recalculation_error'])
+E           ValueError: 已存断面无法满足当前流量，请调整断面参数。
+
+推求水面线\core\calculator.py:2142: ValueError</failure>
+    </testcase>
+    <testcase classname="tests.test_geometry_station_regression_unit" name="test_sample5_legacy_auto_channel_payload_still_keeps_jinhuazhai_station_stable" time="13.249">
+      <failure message="AssertionError: assert &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; == &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt;&#10; +  where &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; = ChannelNode(flow_section='1', name='-', structure_type=&lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt;, x=645621.441000000...sition_head_loss_friction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}).structure_type&#10; +  and   &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt; = StructureType.RECT_CULVERT">def test_sample5_legacy_auto_channel_payload_still_keeps_jinhuazhai_station_stable():
+        """旧项目缺少新辅助字段时，茶亭支渠这段桩号仍应保持稳定。"""
+        module = _load_panel_module()
+        panel = _build_panel(module)
+        try:
+            app = _get_qapp()
+            panel._load_section_sample_5()
+            app.processEvents()
+            panel._run_section_batch_calculate()
+            for _ in range(20):
+                app.processEvents()
+    
+            settings = panel._build_settings()
+            calculator = WaterProfileCalculator(settings)
+            original_nodes = panel._build_nodes_from_table()
+            calculator.preprocess_nodes(original_nodes)
+    
+            def open_channel_callback(reference, _available_length, _prev_struct, _next_struct, flow_section, flow):
+                if not reference:
+                    return None
+                return calculator._build_open_channel_params_from_reference(reference, flow_section, flow)
+    
+            prepared_nodes = calculator.prepare_transitions(original_nodes, open_channel_callback)
+            jinhuazhai_index = next(
+                idx for idx, node in enumerate(prepared_nodes)
+                if str(node.name or "").strip() == "金花寨" and node.get_in_out_str() == "进"
+            )
+            baseline_station = prepared_nodes[jinhuazhai_index].station_MC
+    
+            panel._update_table_from_nodes_full(prepared_nodes, settings.get_station_prefix())
+            for row in range(panel.node_table.rowCount()):
+                item = panel.node_table.item(row, 0)
+                payload = item.data(module.Qt.UserRole) if item else None
+                if not isinstance(payload, dict) or not payload.get("_auto_channel"):
+                    continue
+                payload.pop("_auto_channel_structure_type", None)
+                payload.pop("_aux_coords", None)
+                item.setData(module.Qt.UserRole, payload)
+    
+            rebuilt_nodes = panel._build_nodes_from_table()
+            rebuilt_auto_channel = next(node for node in rebuilt_nodes if getattr(node, "is_auto_inserted_channel", False))
+&gt;           assert rebuilt_auto_channel.structure_type == StructureType.RECT_CULVERT
+E           AssertionError: assert &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; == &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt;
+E            +  where &lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt; = ChannelNode(flow_section='1', name='-', structure_type=&lt;StructureType.MINGQU_RECTANGULAR: '明渠-矩形'&gt;, x=645621.441000000...sition_head_loss_friction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}).structure_type
+E            +  and   &lt;StructureType.RECT_CULVERT: '暗涵-矩形'&gt; = StructureType.RECT_CULVERT
+
+tests\test_geometry_station_regression_unit.py:407: AssertionError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="1.000" timestamp="2026-10-11T10:43:04.816848+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_hydraulic_skip_loss_unit" name="test_skip_loss_true_returns_zero" time="0.000" />
+    <testcase classname="tests.test_hydraulic_skip_loss_unit" name="test_skip_loss_false_calculates_normally" time="0.000" />
+    <testcase classname="tests.test_hydraulic_skip_loss_unit" name="test_existing_transition_length_still_builds_length_details" time="0.000" />
+    <testcase classname="tests.test_hydraulic_skip_loss_unit" name="test_skip_loss_still_calculates_length" time="0.000" />
+    <testcase classname="tests.test_hydraulic_skip_loss_unit" name="test_skip_loss_existing_length_still_builds_length_details" time="0.000">
+      <failure message="AssertionError: 已有长度应保留为当前采用长度&#10;assert 7.0 == 7.5&#10; +  where 7.0 = ChannelNode(flow_section='渠道3', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=&lt;InOutType.NORMAL:...': '明渠-梯形', 'downstream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}).transition_length">def test_skip_loss_existing_length_still_builds_length_details():
+        """
+        测试 skip_loss=True 且已有长度时仍能补建双击详情
+    
+        场景：旧结果或表格回填已经给了 transition_length，
+        当前重新计算只需补详情，不应覆盖当前采用长度。
+        """
+        prev_node = ChannelNode()
+        prev_node.structure_type = StructureType.from_string("明渠-梯形")
+        prev_node.flow_section = "渠道3"
+        prev_node.section_params = {"B": 2.2, "m": 1.5, "h": 1.4}
+        prev_node.velocity = 1.3
+        prev_node.water_depth = 1.4
+        prev_node.roughness = 0.014
+    
+        transition = ChannelNode()
+        transition.is_transition = True
+        transition.transition_skip_loss = True
+        transition.transition_type = "进口"
+        transition.transition_form = "曲线形反弯扭曲面"
+        transition.transition_length = 7.5
+        transition.flow_section = "渠道3"
+    
+        next_node = ChannelNode()
+        next_node.structure_type = StructureType.from_string("倒虹吸")
+        next_node.name = "倒虹吸1"
+        next_node.in_out = InOutType.INLET
+        next_node.section_params = {"D": 2.0}
+        next_node.velocity = 2.0
+        next_node.water_depth = 1.6
+        next_node.roughness = 0.014
+        next_node.flow_section = "渠道3"
+    
+        calc = HydraulicCalculator(ProjectSettings())
+        loss = calc.calculate_transition_loss(
+            transition, prev_node, next_node, [prev_node, transition, next_node]
+        )
+    
+        assert loss == 0.0, "skip_loss=True 时损失应保持为 0"
+&gt;       assert transition.transition_length == 7.5, "已有长度应保留为当前采用长度"
+E       AssertionError: 已有长度应保留为当前采用长度
+E       assert 7.0 == 7.5
+E        +  where 7.0 = ChannelNode(flow_section='渠道3', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=&lt;InOutType.NORMAL:...': '明渠-梯形', 'downstream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}).transition_length
+
+tests\test_hydraulic_skip_loss_unit.py:294: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_hydraulic_skip_loss_unit" name="test_main_calculator_preserves_existing_skip_loss_length_details" time="0.000">
+      <failure message="AssertionError: 主计算入口不应覆盖当前采用长度&#10;assert 7.0 == 7.5&#10; +  where 7.0 = ChannelNode(flow_section='渠道4', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=&lt;InOutType.NORMAL:...': '明渠-梯形', 'downstream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}).transition_length">def test_main_calculator_preserves_existing_skip_loss_length_details():
+        """
+        测试主计算入口 calculate_transition_losses() 也走兼容逻辑
+    
+        场景：生产流程中 skip_loss 渐变段已有采用长度（可能来自压缩/合并）。
+        期望：主计算入口不覆盖当前长度，并补建双击详情。
+        """
+        prev_node = ChannelNode()
+        prev_node.structure_type = StructureType.from_string("明渠-梯形")
+        prev_node.flow_section = "渠道4"
+        prev_node.section_params = {"B": 2.2, "m": 1.5, "h": 1.4}
+        prev_node.velocity = 1.3
+        prev_node.water_depth = 1.4
+        prev_node.roughness = 0.014
+    
+        transition = ChannelNode()
+        transition.is_transition = True
+        transition.transition_skip_loss = True
+        transition.transition_type = "进口"
+        transition.transition_form = "曲线形反弯扭曲面"
+        transition.transition_length = 7.5
+        transition.flow_section = "渠道4"
+    
+        next_node = ChannelNode()
+        next_node.structure_type = StructureType.from_string("倒虹吸")
+        next_node.name = "倒虹吸2"
+        next_node.in_out = InOutType.INLET
+        next_node.section_params = {"D": 2.0}
+        next_node.velocity = 2.0
+        next_node.water_depth = 1.6
+        next_node.roughness = 0.014
+        next_node.flow_section = "渠道4"
+    
+        calc = WaterProfileCalculator(ProjectSettings())
+        nodes = [prev_node, transition, next_node]
+    
+        calc.calculate_transition_losses(nodes)
+    
+        assert transition.head_loss_transition == 0.0, "skip_loss=True 时主入口也应保持损失为 0"
+&gt;       assert transition.transition_length == 7.5, "主计算入口不应覆盖当前采用长度"
+E       AssertionError: 主计算入口不应覆盖当前采用长度
+E       assert 7.0 == 7.5
+E        +  where 7.0 = ChannelNode(flow_section='渠道4', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=&lt;InOutType.NORMAL:...': '明渠-梯形', 'downstream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}).transition_length
+
+tests\test_hydraulic_skip_loss_unit.py:341: AssertionError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="21" time="8.699" timestamp="2026-10-11T10:43:06.356850+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_panels_only_show_default_percent_increase_input_on_first_open[open_channel-OpenChannelPanel]" time="1.585" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_panels_only_show_default_percent_increase_input_on_first_open[aqueduct-AqueductPanel]" time="0.148" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_panels_only_show_default_percent_increase_input_on_first_open[tunnel-TunnelPanel]" time="0.131" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_panels_only_show_default_percent_increase_input_on_first_open[culvert-CulvertPanel]" time="0.137" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_panels_only_show_default_percent_increase_input_on_first_open[pressure_pipe-PressurePipePanel]" time="0.301" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_panels_only_show_default_percent_increase_input_on_first_open[spillway_steep_chute-SpillwaySteepChutePanel]" time="0.671">
+      <failure message="assert False is True&#10; +  where False = &lt;built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000191FA465200&gt;()&#10; +    where &lt;built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000191FA465200&gt; = &lt;PySide6.QtWidgets.QLabel(0x191f8e69be0) at 0x00000191FA465200&gt;.isVisible&#10; +      where &lt;PySide6.QtWidgets.QLabel(0x191f8e69be0) at 0x00000191FA465200&gt; = &lt;app_渠系计算前端.spillway_steep_chute.panel.SpillwaySteepChutePanel(0x191f8e63340) at 0x00000191F7D7AB80&gt;.inc_lbl">folder = 'spillway_steep_chute', class_name = 'SpillwaySteepChutePanel'
+
+    @pytest.mark.parametrize(
+        ("folder", "class_name"),
+        [
+            ("open_channel", "OpenChannelPanel"),
+            ("aqueduct", "AqueductPanel"),
+            ("tunnel", "TunnelPanel"),
+            ("culvert", "CulvertPanel"),
+            ("pressure_pipe", "PressurePipePanel"),
+            ("spillway_steep_chute", "SpillwaySteepChutePanel"),
+        ],
+    )
+    def test_panels_only_show_default_percent_increase_input_on_first_open(
+        folder, class_name
+    ):
+        panel = _new_panel(folder, class_name)
+    
+&gt;       _assert_single_visible_increase_input(panel, percent_visible=True)
+
+tests\test_increase_input_mode_panels_unit.py:113: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+panel = &lt;app_渠系计算前端.spillway_steep_chute.panel.SpillwaySteepChutePanel(0x191f8e63340) at 0x00000191F7D7AB80&gt;
+
+    def _assert_single_visible_increase_input(panel, *, percent_visible):
+        assert panel.inc_mode_percent_rb.isChecked() is percent_visible
+        assert panel.inc_mode_q_rb.isChecked() is (not percent_visible)
+&gt;       assert panel.inc_lbl.isVisible() is percent_visible
+E       assert False is True
+E        +  where False = &lt;built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000191FA465200&gt;()
+E        +    where &lt;built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000191FA465200&gt; = &lt;PySide6.QtWidgets.QLabel(0x191f8e69be0) at 0x00000191FA465200&gt;.isVisible
+E        +      where &lt;PySide6.QtWidgets.QLabel(0x191f8e69be0) at 0x00000191FA465200&gt; = &lt;app_渠系计算前端.spillway_steep_chute.panel.SpillwaySteepChutePanel(0x191f8e63340) at 0x00000191F7D7AB80&gt;.inc_lbl
+
+tests\test_increase_input_mode_panels_unit.py:91: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_open_channel_panel_q_increase_mode_roundtrips_and_drives_manual_percent" time="0.119" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_aqueduct_panel_q_increase_mode_roundtrips_and_drives_manual_percent" time="0.083" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_tunnel_panel_q_increase_mode_roundtrips_and_drives_manual_percent" time="0.083" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_culvert_panel_q_increase_mode_roundtrips_and_drives_manual_percent" time="0.087" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_pressure_pipe_panel_q_increase_mode_roundtrips_and_drives_manual_percent" time="0.147" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_pressure_pipe_project_roundtrip_restores_success_result_and_export_text" time="0.964" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_pressure_pipe_project_roundtrip_restores_input_error_result_card" time="0.312" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_spillway_steep_chute_panel_q_increase_mode_roundtrips_and_builds_flow_case" time="0.389" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_siphon_panel_q_increase_mode_roundtrips_in_project_payload" time="0.420" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_siphon_panel_uses_left_narrow_right_wide_flow_bar" time="0.122" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_siphon_panel_shows_compact_hint_and_full_help_tooltip" time="0.136" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_siphon_panel_switching_modes_only_shows_matching_input" time="0.147" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_siphon_panel_places_threshold_between_velocity_and_turn_radius_columns" time="0.143" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_open_channel_detail_output_uses_high_precision_increase_formula_text" time="0.810" />
+    <testcase classname="tests.test_increase_input_mode_panels_unit" name="test_aqueduct_detail_output_uses_high_precision_increase_formula_text" time="1.500" />
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.115" timestamp="2026-10-11T10:43:16.757154+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_open_channel_circular_case_unit" name="test_parse_circular_case_uses_manual_d_key" time="0.001">
+      <failure message="ModuleNotFoundError: No module named '渠系断面设计'">def test_parse_circular_case_uses_manual_d_key():
+&gt;       mod = importlib.import_module(
+            "\u6e20\u7cfb\u65ad\u9762\u8bbe\u8ba1.open_channel.panel"
+        )
+
+tests\test_open_channel_circular_case_unit.py:8: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+F:\装机必备软件\Python\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+&lt;frozen importlib._bootstrap&gt;:1387: in _gcd_import
+    ???
+&lt;frozen importlib._bootstrap&gt;:1360: in _find_and_load
+    ???
+&lt;frozen importlib._bootstrap&gt;:1310: in _find_and_load_unlocked
+    ???
+&lt;frozen importlib._bootstrap&gt;:488: in _call_with_frames_removed
+    ???
+&lt;frozen importlib._bootstrap&gt;:1387: in _gcd_import
+    ???
+&lt;frozen importlib._bootstrap&gt;:1360: in _find_and_load
+    ???
+&lt;frozen importlib._bootstrap&gt;:1310: in _find_and_load_unlocked
+    ???
+&lt;frozen importlib._bootstrap&gt;:488: in _call_with_frames_removed
+    ???
+&lt;frozen importlib._bootstrap&gt;:1387: in _gcd_import
+    ???
+&lt;frozen importlib._bootstrap&gt;:1360: in _find_and_load
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = '渠系断面设计', import_ = &lt;function _gcd_import at 0x00000159A50304A0&gt;
+
+&gt;   ???
+E   ModuleNotFoundError: No module named '渠系断面设计'
+
+&lt;frozen importlib._bootstrap&gt;:1324: ModuleNotFoundError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="2" skipped="0" tests="5" time="2.815" timestamp="2026-10-11T10:43:17.305686+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_open_channel_compound_trapezoid_panel_unit" name="test_open_channel_panel_supports_compound_trapezoid_switch_save_and_result" time="1.674" />
+    <testcase classname="tests.test_open_channel_compound_trapezoid_panel_unit" name="test_open_channel_panel_initial_help_includes_compound_trapezoid" time="0.106" />
+    <testcase classname="tests.test_open_channel_compound_trapezoid_panel_unit" name="test_compound_trapezoid_water_patch_keeps_platform_breakpoints_after_overtopping" time="0.392">
+      <failure message="AssertionError: assert 1 == 2&#10; +  where 1 = len([&lt;Axes: title={'center': '设计流量\nQ=5.00 $\\mathregular{m^{3}/s}$, V=0.94 $\\mathregular{m/s}$'}&gt;])">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000022263C4CDD0&gt;
+
+    def test_compound_trapezoid_water_patch_keeps_platform_breakpoints_after_overtopping(monkeypatch):
+        """水深越过平台后，填充轮廓必须显式经过平台拐点，不能斜切跨过去。"""
+        panel = _build_compound_panel(monkeypatch)
+        _configure_compound_inputs(panel)
+    
+        panel._calculate()
+        _flush_events(6)
+    
+        assert panel.current_result["success"] is True
+        axes = panel.section_fig.axes
+&gt;       assert len(axes) == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = len([&lt;Axes: title={'center': '设计流量\nQ=5.00 $\\mathregular{m^{3}/s}$, V=0.94 $\\mathregular{m/s}$'}&gt;])
+
+tests\test_open_channel_compound_trapezoid_panel_unit.py:180: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_open_channel_compound_trapezoid_panel_unit" name="test_compound_trapezoid_water_patch_stays_simple_below_platform" time="0.114" />
+    <testcase classname="tests.test_open_channel_compound_trapezoid_panel_unit" name="test_compound_trapezoid_default_view_keeps_true_aspect_and_tighter_xlim" time="0.241">
+      <failure message="assert (np.float64(7.529475) - np.float64(-8.1885)) &lt; 12.918">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000002222DDC7570&gt;
+
+    def test_compound_trapezoid_default_view_keeps_true_aspect_and_tighter_xlim(monkeypatch):
+        """默认视图应保持真实比例，同时收紧无意义的横向留白。"""
+        panel = _build_compound_panel(monkeypatch)
+        _configure_compound_inputs(panel)
+    
+        panel._calculate()
+        _flush_events(6)
+    
+        assert panel.current_result["success"] is True
+        outline_width = (panel.current_result["h_prime"] + 5.0) - (-(panel.current_result["h_prime"] + 5.0))
+        max_reasonable_width = 2.0 + 2 * panel.current_result["h_prime"] + 3.0 + 4.0
+    
+        for ax in panel.section_fig.axes:
+            x_min, x_max = ax.get_xlim()
+            assert ax.get_aspect() == pytest.approx(1.0)
+&gt;           assert (x_max - x_min) &lt; max_reasonable_width
+E           assert (np.float64(7.529475) - np.float64(-8.1885)) &lt; 12.918
+
+tests\test_open_channel_compound_trapezoid_panel_unit.py:233: AssertionError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.141" timestamp="2026-10-11T10:43:20.862580+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_siphon_starter_case_defaults_unit" name="test_starter_case_is_blank_and_keeps_transition_defaults" time="0.001">
+      <failure message="assert 0.5 == 0.2">def test_starter_case_is_blank_and_keeps_transition_defaults():
+        data = json.loads(_starter_case_path("工况1.siphon.json").read_text(encoding="utf-8"))
+    
+        assert data["inlet_type"] == "直线扭曲面"
+        assert data["outlet_type"] == "直线扭曲面"
+&gt;       assert data["xi_inlet"] == 0.2
+E       assert 0.5 == 0.2
+
+tests\test_siphon_starter_case_defaults_unit.py:19: AssertionError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="5" time="0.608" timestamp="2026-10-11T10:43:21.531565+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_spatial_bend_event_regression" name="test_dxf_arc_events_use_real_segment_intervals" time="0.378" />
+    <testcase classname="tests.test_spatial_bend_event_regression" name="test_ip_style_arc_points_keep_qz_semantics" time="0.000" />
+    <testcase classname="tests.test_spatial_bend_event_regression" name="test_independent_plan_bend_loss_uses_feature_points_once_per_turn" time="0.014">
+      <failure message="AssertionError: assert 6 == 3&#10; +  where 6 = len(['  平面弯管1: R=4.800m, θ=42.783°', '  平面弯管2: R=4.800m, θ=21.504°', '  平面弯管3: R=4.800m, θ=16.951°', '    平面弯管1（自动计算）: ξ=0.2440', '    平面弯管2（自动计算）: ξ=0.1521', '    平面弯管3（自动计算）: ξ=0.1253'])&#10; +  and   3 = len([PlanFeaturePoint(chainage=69.109458, x=np.float64(645812.8968978922), y=np.float64(3455956.717782864), azimuth_meas_d...40913, 'end_chainage': 212.62186328945606}, turn_radius_is_explicit=False, turn_radius_text='', turn_radius_source='')])">def test_independent_plan_bend_loss_uses_feature_points_once_per_turn():
+        plan_points = _load_sample_plan_points()
+        result = HydraulicCore.execute_calculation(
+            _sample_params(),
+            [],
+            verbose=True,
+            plan_feature_points=plan_points,
+            longitudinal_nodes=[],
+        )
+        counted_points = [
+            point
+            for point in plan_points
+            if point.turn_angle &gt; 0.1 and point.turn_type in (TurnType.ARC, TurnType.FOLD)
+        ]
+        expected_sum = 0.0
+        for point in counted_points:
+            if point.turn_type == TurnType.ARC and point.turn_radius &gt; 0:
+                expected_sum += CoefficientService.calculate_bend_coeff(
+                    point.turn_radius,
+                    result.diameter,
+                    point.turn_angle,
+                    verbose=False,
+                )
+            elif point.turn_type == TurnType.FOLD:
+                expected_sum += CoefficientService.calculate_fold_coeff(
+                    point.turn_angle,
+                    verbose=False,
+                )
+        detail_lines = [
+            line
+            for line in result.calculation_steps
+            if "平面弯管" in line or "平面折管" in line
+        ]
+    
+        assert result.data_mode == "仅平面（独立计算）"
+&gt;       assert len(detail_lines) == len(counted_points)
+E       AssertionError: assert 6 == 3
+E        +  where 6 = len(['  平面弯管1: R=4.800m, θ=42.783°', '  平面弯管2: R=4.800m, θ=21.504°', '  平面弯管3: R=4.800m, θ=16.951°', '    平面弯管1（自动计算）: ξ=0.2440', '    平面弯管2（自动计算）: ξ=0.1521', '    平面弯管3（自动计算）: ξ=0.1253'])
+E        +  and   3 = len([PlanFeaturePoint(chainage=69.109458, x=np.float64(645812.8968978922), y=np.float64(3455956.717782864), azimuth_meas_d...40913, 'end_chainage': 212.62186328945606}, turn_radius_is_explicit=False, turn_radius_text='', turn_radius_source='')])
+
+tests\test_spatial_bend_event_regression.py:172: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_spatial_bend_event_regression" name="test_geometry_diagnostics_are_non_blocking_and_sample_has_no_false_assertion2" time="0.015" />
+    <testcase classname="tests.test_spatial_bend_event_regression" name="test_same_chainage_auto_losses_sum_directly_without_spatial_merger" time="0.001" />
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="0.611" timestamp="2026-10-11T10:59:55.321058+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_spatial_precision_regression_unit" name="test_plan_geometry_rebuild_preserves_six_decimal_storage_precision" time="0.000" />
+    <testcase classname="tests.test_spatial_precision_regression_unit" name="test_turn_node_tagging_uses_six_decimal_chainage_matching" time="0.000" />
+    <testcase classname="tests.test_spatial_precision_regression_unit" name="test_spatial_event_lines_display_three_decimals_while_using_precise_backend_values" time="0.396">
+      <failure message="AssertionError: assert 's=[69.109,72.694] 空间弯管: R_eff=4.800m, θ_3D=42.783°' in '============================================================\n                    计算结果汇总\n===========================...      = 0.1694 m\n\n【3.4 总水面落差 ΔZ】\n  公式 L.1.6: ΔZ = ΔZ1 + ΔZ2 - ΔZ3\n  ΔZ = 0.2320 + 0.9238 - 0.1694\n     = 0.9864 m'">def test_spatial_event_lines_display_three_decimals_while_using_precise_backend_values():
+        plan_points = _load_sample_plan_points()
+        spatial_result = SpatialMerger.merge_and_compute(plan_points, [], verbose=True)
+        counted_events = [
+            event
+            for event in spatial_result.bend_events
+            if math.degrees(event.theta_event) &gt; SpatialMerger.TURN_ANGLE_THRESH
+        ]
+    
+        expected_lines = [
+            (
+                f"  [{event.event_type}] s=[{event.s_a:.3f},{event.s_b:.3f}] "
+                f"θ={math.degrees(event.theta_event):.3f}° "
+                f"R_eff={event.R_eff:.3f}m L={event.L_event:.3f}m"
+            )
+            for event in counted_events
+        ]
+    
+        for line in expected_lines:
+            assert line in spatial_result.computation_steps
+    
+        result = HydraulicCore.execute_calculation(
+            _sample_params(),
+            [],
+            verbose=True,
+            plan_feature_points=plan_points,
+            longitudinal_nodes=[],
+        )
+        detail_text = HydraulicCore.format_result(result, show_steps=True)
+        expected_hydraulic_fragments = [
+            (
+                f"s=[{event.s_a:.3f},{event.s_b:.3f}] 空间弯管: "
+                f"R_eff={event.R_eff:.3f}m, θ_3D={math.degrees(event.theta_event):.3f}°"
+            )
+            for event in counted_events
+            if event.turn_style == TurnType.ARC and event.R_eff &gt; 0
+        ]
+    
+        for fragment in expected_hydraulic_fragments:
+&gt;           assert fragment in detail_text
+E           AssertionError: assert 's=[69.109,72.694] 空间弯管: R_eff=4.800m, θ_3D=42.783°' in '============================================================\n                    计算结果汇总\n===========================...      = 0.1694 m\n\n【3.4 总水面落差 ΔZ】\n  公式 L.1.6: ΔZ = ΔZ1 + ΔZ2 - ΔZ3\n  ΔZ = 0.2320 + 0.9238 - 0.1694\n     = 0.9864 m'
+
+tests\test_spatial_precision_regression_unit.py:190: AssertionError</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="pytest" errors="0" failures="2" skipped="0" tests="9" time="1.133" timestamp="2026-10-11T10:43:22.630173+08:00" hostname="刘思杰">
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_pressure_pipe_side_skip_loss_true" time="0.001" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_open_channel_side_skip_loss_false" time="0.001" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_both_sides_pressurized_skip_loss_true" time="0.000" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_siphon_side_skip_loss_true" time="0.001" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_separate_transitions_skip_loss_correct" time="0.000" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_with_open_channel_insertion" time="0.000" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess" time="0.001">
+      <failure message="AssertionError: 空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段&#10;assert 0 &gt;= 2&#10; +  where 0 = len([])">def test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess():
+        """
+        验证空名称有压管道包夹隧洞时，预处理后仍能在两侧插入渐变段。
+        """
+        pipe_before = ChannelNode()
+        pipe_before.structure_type = StructureType.from_string("有压管道")
+        pipe_before.name = ""
+        pipe_before.section_params = {"D": 1.5}
+        pipe_before.station_MC = 100.0
+    
+        tunnel_inlet = ChannelNode()
+        tunnel_inlet.structure_type = StructureType.from_string("隧洞-圆形")
+        tunnel_inlet.name = "纯牛马"
+        tunnel_inlet.section_params = {"D": 2.0}
+        tunnel_inlet.station_MC = 130.0
+    
+        tunnel_outlet = ChannelNode()
+        tunnel_outlet.structure_type = StructureType.from_string("隧洞-圆形")
+        tunnel_outlet.name = "纯牛马"
+        tunnel_outlet.section_params = {"D": 2.0}
+        tunnel_outlet.station_MC = 180.0
+    
+        pipe_after = ChannelNode()
+        pipe_after.structure_type = StructureType.from_string("有压管道")
+        pipe_after.name = ""
+        pipe_after.section_params = {"D": 1.5}
+        pipe_after.station_MC = 210.0
+    
+        settings = ProjectSettings()
+        calculator = WaterProfileCalculator(settings)
+        nodes = [pipe_before, tunnel_inlet, tunnel_outlet, pipe_after]
+    
+        calculator.preprocess_nodes(nodes)
+        result_nodes = calculator.identify_and_insert_transitions(nodes)
+    
+        transition_rows = [node for node in result_nodes if getattr(node, "is_transition", False)]
+    
+&gt;       assert len(transition_rows) &gt;= 2, "空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段"
+E       AssertionError: 空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段
+E       assert 0 &gt;= 2
+E        +  where 0 = len([])
+
+tests\test_task4_skip_loss_marking.py:294: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_xxpipe_unnamed_pressure_pipe_next_to_directional_drill_has_no_transition_gap" time="0.000" />
+    <testcase classname="tests.test_task4_skip_loss_marking" name="test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps" time="0.001">
+      <failure message="AssertionError: xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧&#10;assert 0 == 2&#10; +  where 0 = len([])">def test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps():
+        """
+        验证 xx管 模式下，整组顺序里只保留匿名有压管道与隧洞之间的两处补段。
+        """
+        def _make_node(flow_section, structure, station, name="", in_out=InOutType.NORMAL, diameter=1.0):
+            node = ChannelNode()
+            node.flow_section = str(flow_section)
+            node.structure_type = StructureType.from_string(structure)
+            node.name = name
+            node.in_out = in_out
+            node.station_MC = station
+            node.section_params = {"D": diameter}
+            return node
+    
+        nodes = [
+            _make_node(1, "有压管道", 100.0, "", InOutType.NORMAL, 1.5),
+            _make_node(1, "隧洞-圆形", 160.0, "纯牛马", InOutType.INLET, 2.0),
+            _make_node(1, "隧洞-圆形", 220.0, "纯牛马", InOutType.OUTLET, 2.0),
+            _make_node(1, "有压管道", 280.0, "", InOutType.NORMAL, 1.5),
+            _make_node(2, "有压管道", 330.0, "", InOutType.NORMAL, 1.0),
+            _make_node(2, "定向钻", 390.0, "半兽人", InOutType.INLET, 1.0),
+            _make_node(2, "定向钻", 450.0, "半兽人", InOutType.OUTLET, 1.0),
+            _make_node(2, "有压管道", 510.0, "", InOutType.NORMAL, 1.0),
+            _make_node(3, "有压管道", 560.0, "", InOutType.NORMAL, 0.8),
+            _make_node(3, "顶管", 620.0, "饿了么", InOutType.INLET, 0.8),
+            _make_node(3, "顶管", 680.0, "饿了么", InOutType.OUTLET, 0.8),
+            _make_node(3, "有压管道", 740.0, "", InOutType.NORMAL, 0.8),
+        ]
+    
+        settings = ProjectSettings()
+        settings.channel_level = "支管"
+        calculator = WaterProfileCalculator(settings)
+    
+        calculator.preprocess_nodes(nodes)
+        gaps = calculator.pre_scan_open_channels(nodes)
+        result_nodes = calculator.identify_and_insert_transitions(nodes)
+    
+        transition_rows = [node for node in result_nodes if getattr(node, "is_transition", False)]
+        open_channel_rows = [node for node in result_nodes if getattr(node, "is_auto_inserted_channel", False)]
+    
+&gt;       assert len(gaps) == 2, "xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧"
+E       AssertionError: xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧
+E       assert 0 == 2
+E        +  where 0 = len([])
+
+tests\test_task4_skip_loss_marking.py:373: AssertionError</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

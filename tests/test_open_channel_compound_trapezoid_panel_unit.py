@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from matplotlib.colors import to_rgba
 from PySide6.QtWidgets import QApplication
 
 
@@ -177,12 +178,24 @@ def test_compound_trapezoid_water_patch_keeps_platform_breakpoints_after_overtop
 
     assert panel.current_result["success"] is True
     axes = panel.section_fig.axes
-    assert len(axes) == 2
+    # 单工况只画一张断面图，设计水体与加大水位同时在该图检查。
+    assert len(axes) == 1
 
     expected_breakpoints = {(-5.0, 1.0), (-2.0, 1.0)}
     for ax in axes:
         rounded_points = set(_rounded_patch_vertices(ax))
         assert expected_breakpoints.issubset(rounded_points)
+        design_depth = panel.current_result["h_design"]
+        increased_depth = panel.current_result["h_increased"]
+        for depth, linestyle in ((design_depth, "-"), (increased_depth, "--")):
+            water_lines = [
+                line for line in ax.lines
+                if to_rgba(line.get_color()) == to_rgba("blue") and line.get_linestyle() == linestyle
+            ]
+            assert len(water_lines) == 1
+            assert list(water_lines[0].get_ydata()) == pytest.approx([depth, depth])
+            assert list(water_lines[0].get_xdata()) == pytest.approx([-4.0 - depth, 1.0 + depth])
+        assert any(text.get_text() == f"h加大={increased_depth:.2f}m" for text in ax.texts)
 
     panel.deleteLater()
 
@@ -232,5 +245,26 @@ def test_compound_trapezoid_default_view_keeps_true_aspect_and_tighter_xlim(monk
         assert ax.get_aspect() == pytest.approx(1.0)
         assert (x_max - x_min) < max_reasonable_width
         assert (x_max - x_min) < outline_width
+
+    # 在与人工查图相同的画布上核验尺寸文字，收紧留白不得以裁切标注为代价。
+    panel.section_fig.set_size_inches(12, 6)
+    panel.section_fig.tight_layout()
+    panel.section_canvas.draw()
+    renderer = panel.section_canvas.get_renderer()
+    for ax in panel.section_fig.axes:
+        axes_box = ax.get_window_extent(renderer)
+        dimension_boxes = {}
+        for text in ax.texts:
+            label = text.get_text()
+            if not label.startswith(("B1=", "B2=", "h1=", "h=", "H=", "h加大=")):
+                continue
+            box = text.get_window_extent(renderer)
+            assert axes_box.contains(box.x0, box.y0), label
+            assert axes_box.contains(box.x1, box.y1), label
+            assert not any(box.overlaps(other) for other in dimension_boxes.values()), label
+            dimension_boxes[label] = box
+        assert len(dimension_boxes) == 6
+        platform_y = ax.transData.transform((0.0, 1.0))[1]
+        assert dimension_boxes["B1=3.00m"].y1 < platform_y
 
     panel.deleteLater()

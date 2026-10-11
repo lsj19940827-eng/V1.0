@@ -1051,6 +1051,8 @@ def test_project_reload_repairs_single_override_warning_and_source():
         state["calculated_nodes"][1]["transition_length_warning"] = ""
         state["calculated_nodes"][1]["transition_length_calc_details"] = {}
         state["node_table_rows"][1][32] = "5.000"
+        # 构造旧工程的缺失详情场景，避免新表格状态覆盖手工修改的兼容字段。
+        state.pop("table_state", None)
     finally:
         panel.deleteLater()
 

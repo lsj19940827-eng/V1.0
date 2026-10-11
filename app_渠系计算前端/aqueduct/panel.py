@@ -6,6 +6,8 @@
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import math
@@ -2936,7 +2938,7 @@ class AqueductPanel(QWidget):
             calc_content_desc=content_desc,
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n{content_desc}',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n{content_desc}',
         )
         doc.add_page_break()
 

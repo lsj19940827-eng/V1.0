@@ -3,8 +3,9 @@
 项目管理器 —— 负责项目的新建、打开、保存、自动保存等操作
 """
 
-import json
+import copy
 import os
+import time
 from datetime import datetime
 from typing import Optional, Any, Dict, List, TYPE_CHECKING, Set
 
@@ -14,6 +15,10 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from app_渠系计算前端.styles import fluent_save_discard_cancel
 
 from app_渠系计算前端.debug_utils import debug_print
+from atomic_json import atomic_write_json
+from app_渠系计算前端.project_codec import ProjectCodec
+from app_渠系计算前端.project_session import ProjectSession, ProjectSnapshot
+from app_渠系计算前端.task_runner import TaskRunner
 
 if TYPE_CHECKING:
     from app_渠系计算前端.batch.panel import BatchPanel
@@ -59,11 +64,17 @@ class ProjectManager(QObject):
 
         # ---- 状态 ----
         self._current_path: str = ""     # 当前项目路径（空串表示新建未保存）
+        self.session = ProjectSession()
+        self._auto_save_runner = TaskRunner(self)
         self._is_dirty: bool = False     # 是否有未保存的修改
 
         # ---- 运行时引用（由 MainWindow 设置）----
         self._panel_registry: Optional["PanelRegistry"] = None
         self._connected_panel_ids: Set[int] = set()
+        self._initial_panel_data: Dict[str, Any] = {}
+        self._reset_on_first_visit: Set[str] = set()
+        self._restoring_project = False
+        self._project_restore_error = ''
 
         # ---- Manager 引用（由 MainWindow 设置）----
         self._siphon_manager: Optional["SiphonManager"] = None
@@ -113,14 +124,63 @@ class ProjectManager(QObject):
         self._panel_registry = panel_registry
         self._siphon_manager = services.get("siphon_manager")
         self._pressure_pipe_manager = services.get("pressure_pipe_manager")
+        self._bind_manager_paths(self._current_path)
         self._connected_panel_ids.clear()
+        self._initial_panel_data.clear()
+        self._reset_on_first_visit.clear()
 
         self._panel_registry.instance_created.connect(self._on_panel_instance_created)
-        for panel in self._panel_registry.iter_instances(create_missing=False):
-            self._connect_panel_dirty_signal(panel)
+        for descriptor in self._panel_registry.descriptors:
+            panel = self._panel_registry.get_existing(descriptor.key)
+            if panel is not None:
+                self._on_panel_instance_created(descriptor.key, panel)
 
-    def _on_panel_instance_created(self, _key: str, panel: Any) -> None:
+    def _on_panel_instance_created(self, key: str, panel: Any) -> None:
+        descriptor = self._panel_registry.descriptor_for_key(key)
+        if descriptor and hasattr(panel, 'to_project_dict'):
+            # 首次装配时保存干净默认值，切换到空工程不能沿用上一工程的输入和结果。
+            state = copy.deepcopy(panel.to_project_dict())
+            if descriptor.project_slot == 'water_profile_panel' and isinstance(state.get('ui_settings'), dict):
+                # 保持新建工程原有的空基础信息规则，不把首屏示例名称和流量作为新工程数据。
+                level = panel.channel_level_combo.itemText(0)
+                state['ui_settings'].update({
+                    'channel_name': '', 'start_water_level': '', 'design_flows_text': '',
+                    'max_flows_text': '', 'start_station_text': '0', 'roughness': '0.017',
+                    'channel_level': level,
+                })
+                state['project_settings'] = {}
+                state.setdefault('merged_section', {})['flow_segments_text'] = ''
+                state.setdefault('batch_panel_compat', {}).update({
+                    'channel_name': '', 'start_water_level': '', 'start_station': '0',
+                    'channel_level': level, 'flow_segments': '',
+                })
+            self._initial_panel_data[descriptor.project_slot] = state
         self._connect_panel_dirty_signal(panel)
+        if descriptor and descriptor.project_slot in self._reset_on_first_visit:
+            # 工程中空缺的模块首次访问时也采用干净初始状态，避免带入启动示例。
+            self._restore_panel(descriptor.project_slot, panel, None)
+            self._reset_on_first_visit.discard(descriptor.project_slot)
+
+    def _restore_panel(self, slot: str, panel: Any, payload: Any) -> None:
+        """先恢复干净默认值，再走原有版本迁移入口，避免默认字段遮蔽旧格式。"""
+        def restore(state):
+            state = copy.deepcopy(state)
+            if slot in ('water_profile_panel', 'batch_panel'):
+                panel.from_project_dict(state, skip_dirty_signal=True)
+            else:
+                panel.from_project_dict(state)
+
+        old_restoring = self._restoring_project
+        self._restoring_project = True
+        try:
+            if hasattr(panel, 'reset_to_default'):
+                panel.reset_to_default()
+            else:
+                restore(self._initial_panel_data.get(slot, {}))
+            if isinstance(payload, dict) and payload:
+                restore(payload)
+        finally:
+            self._restoring_project = old_restoring
 
     def _connect_panel_dirty_signal(self, panel: Any) -> None:
         if panel is None or not hasattr(panel, "data_changed"):
@@ -171,6 +231,9 @@ class ProjectManager(QObject):
     # ----------------------------------------------------------------
     def mark_dirty(self):
         """标记项目为已修改"""
+        if self._restoring_project:
+            return
+        self.session.changed()
         if not self._is_dirty:
             self._is_dirty = True
             self.dirty_changed.emit(True)
@@ -194,17 +257,61 @@ class ProjectManager(QObject):
         self._auto_save_timer.stop()
 
     def _do_auto_save(self):
-        """执行自动保存"""
-        if not self._is_dirty:
+        """界面线程只采集快照，序列化和磁盘写入交给统一后台任务。"""
+        if not self._is_dirty or self._auto_save_runner.isRunning():
             return
-
         try:
             auto_save_path = self._get_auto_save_path()
-            self._save_to_file(auto_save_path)
-            self.status_message.emit(f"自动保存完成: {os.path.basename(auto_save_path)}")
-            self._cleanup_old_auto_saves(os.path.dirname(auto_save_path))
+            snapshot = self.session.capture(self._collect_project_data())
+
+            def write_snapshot(token):
+                token.raise_if_cancelled()
+                token.raise_if_cancelled()
+                atomic_write_json(auto_save_path, snapshot.data)
+                return auto_save_path
+
+            def saved(path):
+                # 自动保存只生成恢复副本，永远不确认正式工程已保存。
+                if snapshot.generation == self.session.generation:
+                    self.status_message.emit(f"自动保存完成: {os.path.basename(path)}")
+                self._cleanup_old_auto_saves(os.path.dirname(path))
+
+            def failed(error):
+                self.status_message.emit(f"自动保存失败: {error}")
+
+            self._auto_save_runner.submit(write_snapshot, on_success=saved, on_error=failed)
         except Exception as e:
             self.status_message.emit(f"自动保存失败: {e}")
+
+    def finish_background_save(self, timeout_ms: int = 1000) -> bool:
+        """关闭时收尾已启动的保存；超时让窗口保持打开，避免销毁活跃线程。"""
+        finished = self._auto_save_runner.wait(timeout_ms)
+        if finished:
+            self.stop_auto_save()
+        return finished
+
+    def finish_background_tasks(self, timeout_ms: int = 1000) -> bool:
+        """关闭时取消计算回写，再收尾磁盘写入；使用总超时避免界面长时间等待。"""
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000
+        for _label, runner in self._iter_calculation_runners():
+            if not runner.isRunning():
+                continue
+            if hasattr(runner, 'invalidate'):
+                runner.invalidate()
+            elif hasattr(runner, 'cancel'):
+                runner.cancel()
+            elif hasattr(runner, 'requestInterruption'):
+                runner.requestInterruption()
+            remaining = max(0, int((deadline - time.monotonic()) * 1000))
+            if not hasattr(runner, 'wait') or not runner.wait(remaining):
+                return False
+        remaining = max(0, int((deadline - time.monotonic()) * 1000))
+        return self.finish_background_save(remaining)
+
+    def _confirm_saved(self, snapshot: ProjectSnapshot) -> None:
+        """旧快照不能清除保存过程中产生的新修改。"""
+        if self.session.confirm_saved(snapshot):
+            self._clear_dirty()
 
     def _cleanup_old_auto_saves(self, auto_dir: str):
         """清理旧的自动保存文件，每个项目前缀只保留最近 MAX_AUTO_SAVE_FILES 个"""
@@ -261,10 +368,11 @@ class ProjectManager(QObject):
         if not self._check_save_before_close():
             return False
 
-        # 清空面板数据
-        self._reset_panels()
-
-        # 重置状态
+        try:
+            self._apply_project_transaction(ProjectCodec.normalize({}), "")
+        except Exception as exc:
+            QMessageBox.critical(None, '新建失败', str(exc))
+            return False
         self._current_path = ""
         self._clear_dirty()
         self.project_changed.emit("")
@@ -273,6 +381,18 @@ class ProjectManager(QObject):
 
     def _reset_panels(self):
         """重置所有面板到初始状态"""
+        self._require_panels_idle()
+        if self._panel_registry is not None:
+            for slot, panel, _label in self._iter_project_panel_entries(create_missing=False):
+                if panel is not None:
+                    self._restore_panel(slot, panel, None)
+            self._reset_on_first_visit = {
+                slot for slot, panel, _label in self._iter_project_panel_entries(create_missing=False)
+                if panel is None
+            }
+            return
+
+        # 兼容尚未绑定注册表的独立面板调用。
         batch_panel = self._get_panel("batch_panel", create_missing=False)
         if batch_panel:
             try:
@@ -315,6 +435,27 @@ class ProjectManager(QObject):
                 except Exception as e:
                     print(f"[ProjectManager] 重置{label}失败: {e}")
 
+    def _iter_calculation_runners(self):
+        """只查询已存在面板和内嵌批量后端，不为状态检查创建页面。"""
+        seen = set()
+        for _slot, panel, label in self._iter_project_panel_entries(create_missing=False):
+            if panel is None:
+                continue
+            for owner in (panel, getattr(panel, '_batch_backend', None)):
+                if owner is None:
+                    continue
+                for name in ('calculation_runner', '_batch_worker'):
+                    runner = getattr(owner, name, None)
+                    if runner is not None and id(runner) not in seen:
+                        seen.add(id(runner))
+                        yield label, runner
+
+    def _require_panels_idle(self):
+        """后台任务及结果回调应用完成前不切换工程。"""
+        for label, runner in self._iter_calculation_runners():
+            if runner.isRunning():
+                raise RuntimeError(f'{label} 正在批量计算或执行其他计算任务，请等待计算完成后再切换工程。')
+
     # ----------------------------------------------------------------
     # 打开项目
     # ----------------------------------------------------------------
@@ -342,14 +483,11 @@ class ProjectManager(QObject):
 
         # 加载项目
         try:
-            data = self._load_from_file(path)
+            self._load_from_file(path)
             self._current_path = path
             self._clear_dirty()
             self._add_recent_project(path)
             self.project_changed.emit(path)
-            # project_changed 信号会触发 set_project_path，可能覆盖刚恢复的 manager 数据
-            # 对于新版 .qxproj（含 manager 数据），需要重新应用以确保 .qxproj 数据为准
-            self._reapply_manager_data(data)
             self.status_message.emit(f"已打开项目: {os.path.basename(path)}")
             return True
         except Exception as e:
@@ -365,8 +503,8 @@ class ProjectManager(QObject):
             return self.save_as_project()
 
         try:
-            self._save_to_file(self._current_path)
-            self._clear_dirty()
+            snapshot = self._save_to_file(self._current_path)
+            self._confirm_saved(snapshot)
             self.status_message.emit(f"已保存: {os.path.basename(self._current_path)}")
             return True
         except Exception as e:
@@ -391,7 +529,7 @@ class ProjectManager(QObject):
         if not path.lower().endswith(PROJECT_EXT):
             path += PROJECT_EXT
 
-        water_profile_panel = self._get_panel("water_profile_panel")
+        water_profile_panel = self._get_panel("water_profile_panel", create_missing=False)
         old_first_jump_marker = None
         marker_reset_applied = False
         if water_profile_panel and hasattr(water_profile_panel, "reset_first_success_auto_jump_marker"):
@@ -404,14 +542,13 @@ class ProjectManager(QObject):
                 marker_reset_applied = False
 
         try:
-            self._save_to_file(path)
+            snapshot = self._save_to_file(path)
+            self._bind_manager_paths(path)
             self._current_path = path
-            self._clear_dirty()
+            self.session.path = path
+            self._confirm_saved(snapshot)
             self._add_recent_project(path)
-            # 快照 manager 数据，防止 project_changed 触发 set_project_path 时被覆盖/清空
-            manager_snapshot = self._snapshot_manager_data()
             self.project_changed.emit(path)
-            self._reapply_manager_data(manager_snapshot)
             self.status_message.emit(f"已保存: {os.path.basename(path)}")
             return True
         except Exception as e:
@@ -476,60 +613,58 @@ class ProjectManager(QObject):
         return self._check_save_before_close()
 
     # ----------------------------------------------------------------
-    # Manager 数据保护（防止 set_project_path 覆盖）
+    # 文件读写与工程事务
     # ----------------------------------------------------------------
-    def _snapshot_manager_data(self) -> Dict[str, Any]:
-        """快照当前 manager 内存数据"""
-        result: Dict[str, Any] = {}
-        if self._siphon_manager:
-            try:
-                result["siphon_manager_data"] = self._siphon_manager.to_dict()
-            except Exception:
-                pass
-        if self._pressure_pipe_manager:
-            try:
-                result["pressure_pipe_manager_data"] = self._pressure_pipe_manager.to_dict()
-            except Exception:
-                pass
-        return result
+    def _bind_manager_paths(self, path: str) -> None:
+        """路径绑定不触发磁盘读取，工程内容只由解码后的快照提交。"""
+        for manager in (self._siphon_manager, self._pressure_pipe_manager):
+            if manager is not None and hasattr(manager, 'bind_project_path'):
+                manager.bind_project_path(path)
 
-    def _reapply_manager_data(self, data: Dict[str, Any]):
-        """将 manager 数据重新写回（仅当数据存在时覆盖）"""
-        if self._siphon_manager and data.get("siphon_manager_data"):
-            try:
-                self._siphon_manager.from_dict(data["siphon_manager_data"])
-            except Exception as e:
-                print(f"[ProjectManager] 重新应用SiphonManager数据失败: {e}")
-        if self._pressure_pipe_manager and data.get("pressure_pipe_manager_data"):
-            try:
-                self._pressure_pipe_manager.from_dict(data["pressure_pipe_manager_data"])
-            except Exception as e:
-                print(f"[ProjectManager] 重新应用PressurePipeManager数据失败: {e}")
-
-    # ----------------------------------------------------------------
-    # 文件读写
-    # ----------------------------------------------------------------
-    def _save_to_file(self, path: str):
-        """保存项目到文件"""
-        data = self._collect_project_data()
-
-        # 确保目录存在
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    def _save_to_file(self, path: str) -> ProjectSnapshot:
+        """采集独立快照并原子写入，失败时保持旧工程与未保存状态。"""
+        snapshot = self.session.capture(self._collect_project_data())
+        atomic_write_json(path, snapshot.data)
+        return snapshot
 
     def _load_from_file(self, path: str) -> Dict[str, Any]:
-        """从文件加载项目，返回原始数据字典"""
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        self._restore_project_data(data)
+        """先完成版本和关键数据块校验，再一次提交到运行时。"""
+        data = ProjectCodec.read(path)
+        self._apply_project_transaction(data, path)
         return data
+
+    def _apply_project_transaction(self, data: Dict[str, Any], path: str) -> None:
+        """任一关键模块恢复失败即回滚，成功后才切换工程会话。"""
+        self._require_panels_idle()
+        previous = None if self._project_restore_error else self._collect_project_data()
+        previous_path = self.session.path
+        old_restoring = self._restoring_project
+        self._restoring_project = True
+        try:
+            self._restore_project_data(data)
+            self._bind_manager_paths(path)
+        except Exception as exc:
+            if previous is not None:
+                try:
+                    self._restore_project_data(previous)
+                    self._bind_manager_paths(previous_path)
+                except Exception as rollback_exc:
+                    self._project_restore_error = str(rollback_exc)
+                    raise RuntimeError(f'{exc}；恢复原界面也失败，已暂停保存，请重新打开工程。') from exc
+            else:
+                self._project_restore_error = str(exc)
+            raise
+        finally:
+            self._restoring_project = old_restoring
+        self.session.commit(data, path)
+        self._project_restore_error = ''
 
     def _collect_project_data(self) -> Dict[str, Any]:
         """收集所有面板数据"""
-        data = {
+        if self._project_restore_error:
+            raise RuntimeError('工程界面尚未完整恢复，请重新打开工程后再保存。')
+        data = self.session.data
+        data.update({
             "version": "2.0",
             "created_at": datetime.now().isoformat(),
             "merged_panel": None,
@@ -542,55 +677,56 @@ class ProjectManager(QObject):
             "siphon_panel": None,
             "pressure_pipe_panel": None,
             "spillway_steep_chute_panel": None,
-            "earthwork_panel": None,
             "siphon_manager_data": None,
             "pressure_pipe_manager_data": None,
             "report_meta": None,
-        }
+        })
 
         # ---- 合并面板（双写：merged_panel + water_profile_panel）----
         water_profile_data = None
-        water_profile_panel = self._get_panel("water_profile_panel")
+        water_profile_panel = self._get_panel("water_profile_panel", create_missing=False)
         if water_profile_panel:
             try:
                 water_profile_data = water_profile_panel.to_project_dict()
                 data["merged_panel"] = water_profile_data
                 data["water_profile_panel"] = water_profile_data
             except Exception as e:
-                print(f"[ProjectManager] 收集WaterProfilePanel数据失败: {e}")
+                raise RuntimeError(f"收集水面线数据失败：{e}") from e
 
         # ---- 批量面板（双写窗口：优先真实batch_panel，否则写兼容块）----
-        batch_panel = self._get_panel("batch_panel")
+        batch_panel = self._get_panel("batch_panel", create_missing=False)
         if batch_panel:
             try:
                 data["batch_panel"] = batch_panel.to_project_dict()
             except Exception as e:
-                print(f"[ProjectManager] 收集BatchPanel数据失败: {e}")
+                raise RuntimeError(f"收集批量计算数据失败：{e}") from e
         elif isinstance(water_profile_data, dict):
             compat_batch = water_profile_data.get("batch_panel_compat")
             if isinstance(compat_batch, dict) and compat_batch:
                 data["batch_panel"] = compat_batch
 
         # ---- 其余面板数据 ----
-        for key, panel, label in self._iter_project_panel_entries(exclude_slots={"water_profile_panel"}):
+        for key, panel, label in self._iter_project_panel_entries(
+            create_missing=False, exclude_slots={"water_profile_panel"}
+        ):
             if panel:
                 try:
                     data[key] = panel.to_project_dict()
                 except Exception as e:
-                    print(f"[ProjectManager] 收集{label}数据失败: {e}")
+                    raise RuntimeError(f"收集 {label} 数据失败：{e}") from e
 
         # ---- Manager 数据 ----
         if self._siphon_manager:
             try:
                 data["siphon_manager_data"] = self._siphon_manager.to_dict()
             except Exception as e:
-                print(f"[ProjectManager] 收集SiphonManager数据失败: {e}")
+                raise RuntimeError(f"收集倒虹吸管理数据失败：{e}") from e
 
         if self._pressure_pipe_manager:
             try:
                 data["pressure_pipe_manager_data"] = self._pressure_pipe_manager.to_dict()
             except Exception as e:
-                print(f"[ProjectManager] 收集PressurePipeManager数据失败: {e}")
+                raise RuntimeError(f"收集有压管道管理数据失败：{e}") from e
 
         # ---- 项目设置（report_meta）双写：存入 .qxproj 同时保留 QSettings ----
         try:
@@ -599,26 +735,26 @@ class ProjectManager(QObject):
             from dataclasses import asdict
             data["report_meta"] = asdict(meta)
         except Exception as e:
-            print(f"[ProjectManager] 收集report_meta数据失败: {e}")
+            raise RuntimeError(f"收集项目设置失败：{e}") from e
 
         return data
 
     def _restore_project_data(self, data: Dict[str, Any]):
         """恢复所有面板数据"""
-        # ---- 合并面板恢复（读取优先级：merged_panel > water_profile_panel）----
+        data = ProjectCodec.normalize(data)
+        existing_slots = {
+            slot for slot, panel, _label in self._iter_project_panel_entries(create_missing=False)
+            if panel is not None
+        }
         batch_panel_data = data.get("batch_panel")
-        merged_panel_data = data.get("merged_panel")
-        water_profile_data = merged_panel_data if merged_panel_data else data.get("water_profile_panel")
-        if isinstance(water_profile_data, dict) and isinstance(batch_panel_data, dict):
-            if not isinstance(water_profile_data.get("batch_panel_compat"), dict):
-                water_profile_data = dict(water_profile_data)
-                water_profile_data["batch_panel_compat"] = batch_panel_data
-        water_profile_panel = self._get_panel("water_profile_panel")
-        if water_profile_panel and water_profile_data:
+        water_profile_data = data.get("merged_panel") or data.get("water_profile_panel")
+        # 没有保存数据的未访问页面继续保持未创建；已有页面仍需清空旧工程状态。
+        water_profile_panel = self._get_panel("water_profile_panel", create_missing=bool(water_profile_data))
+        if water_profile_panel:
             try:
-                water_profile_panel.from_project_dict(water_profile_data, skip_dirty_signal=True)
+                self._restore_panel('water_profile_panel', water_profile_panel, water_profile_data)
             except Exception as e:
-                print(f"[ProjectManager] 恢复WaterProfilePanel数据失败: {e}")
+                raise RuntimeError(f"恢复水面线数据失败：{e}") from e
 
         # ---- 兼容恢复 batch_panel（老界面/回滚版本需要）----
         if (not batch_panel_data) and isinstance(water_profile_data, dict):
@@ -628,30 +764,34 @@ class ProjectManager(QObject):
         batch_panel = self._get_panel("batch_panel")
         if batch_panel and batch_panel_data:
             try:
-                batch_panel.from_project_dict(batch_panel_data, skip_dirty_signal=True)
+                self._restore_panel('batch_panel', batch_panel, batch_panel_data)
             except Exception as e:
-                print(f"[ProjectManager] 恢复BatchPanel数据失败: {e}")
+                raise RuntimeError(f"恢复批量计算数据失败：{e}") from e
 
         # ---- 其余面板数据 ----
-        for key, panel, label in self._iter_project_panel_entries(exclude_slots={"water_profile_panel"}):
-            if panel and data.get(key):
+        for key, panel, label in self._iter_project_panel_entries(
+            create_missing=False, exclude_slots={"water_profile_panel"}
+        ):
+            if panel is None and data.get(key):
+                panel = self._get_panel(key)
+            if panel and (data.get(key) or key in existing_slots):
                 try:
-                    panel.from_project_dict(data[key])
+                    self._restore_panel(key, panel, data.get(key))
                 except Exception as e:
-                    print(f"[ProjectManager] 恢复{label}数据失败: {e}")
+                    raise RuntimeError(f"恢复 {label} 数据失败：{e}") from e
 
         # ---- Manager 数据 ----
         if self._siphon_manager and data.get("siphon_manager_data"):
             try:
                 self._siphon_manager.from_dict(data["siphon_manager_data"])
             except Exception as e:
-                print(f"[ProjectManager] 恢复SiphonManager数据失败: {e}")
+                raise RuntimeError(f"恢复倒虹吸管理数据失败：{e}") from e
 
         if self._pressure_pipe_manager and data.get("pressure_pipe_manager_data"):
             try:
                 self._pressure_pipe_manager.from_dict(data["pressure_pipe_manager_data"])
             except Exception as e:
-                print(f"[ProjectManager] 恢复PressurePipeManager数据失败: {e}")
+                raise RuntimeError(f"恢复有压管道管理数据失败：{e}") from e
 
         # ---- 项目设置（report_meta）双写：从 .qxproj 恢复并同步到 QSettings ----
         if data.get("report_meta"):
@@ -661,7 +801,12 @@ class ProjectManager(QObject):
                 meta = ReportMeta(**meta_dict)
                 save_meta(meta)
             except Exception as e:
-                print(f"[ProjectManager] 恢复report_meta数据失败: {e}")
+                raise RuntimeError(f"恢复报告信息失败：{e}") from e
+
+        self._reset_on_first_visit = {
+            slot for slot, panel, _label in self._iter_project_panel_entries(create_missing=False)
+            if panel is None
+        }
 
     # ----------------------------------------------------------------
     # 最近项目

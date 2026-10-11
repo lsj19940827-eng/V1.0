@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-11",
+  "entry": "formal main.py from physical current-source copy",
+  "isolated_data": true,
+  "isolated_QSettings": true,
+  "webengine": "native default, no QTextBrowser override",
+  "window_title": "渠系建筑物水力计算系统 V1.4.4",
+  "window_handle": 3548742,
+  "process_ids": [
+    13784,
+    46704
+  ],
+  "actions": [
+    "启动正式窗口",
+    "点击推求水面线并观察分栏布局",
+    "点击倒虹吸设计并观察工况载入",
+    "Alt+F4关闭"
+  ],
+  "final_observations": {
+    "target_window_absent": true,
+    "both_processes_terminated": true,
+    "main_requested_exit_code": 0,
+    "stderr": ""
+  },
+  "limits": "Desktop smoke proves pages and closure only; standalone process probes separately record actual OS exit code. No packaged acceptance or full hydraulic computation in this smoke."
+}

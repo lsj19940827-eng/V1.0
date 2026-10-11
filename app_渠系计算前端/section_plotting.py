@@ -186,7 +186,9 @@ def draw_dimension_annotations(
         )
 
     if dims.show_height and dims.height_label:
-        x = max(B / 2.0, x_max - x_span * 0.18) + x_span * 0.05
+        x = dims.height_x
+        if x is None:
+            x = max(B / 2.0, x_max - x_span * 0.18) + x_span * 0.05
         _draw_vertical_dimension(
             ax,
             VerticalDimension(x, 0.0, H, _fmt_m(dims.height_label, H), color="purple"),
@@ -194,7 +196,9 @@ def draw_dimension_annotations(
         )
 
     if dims.show_water_depth and water_depth > 0 and dims.water_label:
-        x = x_min + x_span * 0.10
+        x = dims.water_depth_x
+        if x is None:
+            x = x_min + x_span * 0.10
         _draw_vertical_dimension(
             ax,
             VerticalDimension(x, 0.0, water_depth, _fmt_m(dims.water_label, water_depth), color="blue", text_side="left"),

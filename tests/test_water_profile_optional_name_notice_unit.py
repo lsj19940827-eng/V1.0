@@ -3,12 +3,15 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -91,6 +94,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -165,6 +169,7 @@ def _install_panel_import_stubs():
     sys.modules["shared.shared_data_manager"] = shared_mod
 
 
+@isolated_imports
 def _load_panel_module():
     patched_names = [
         "PySide6",
@@ -243,6 +248,7 @@ def _make_node(structure_type, name=""):
     )
 
 
+@isolated_imports
 def test_show_optional_blank_name_notice_skips_xxpipe_pressure_pipe_rows():
     module = _load_panel_module()
     module.StructureType = SimpleNamespace(
@@ -262,6 +268,7 @@ def test_show_optional_blank_name_notice_skips_xxpipe_pressure_pipe_rows():
     assert _FakeInfoBar.records == []
 
 
+@isolated_imports
 def test_show_optional_blank_name_notice_skips_open_channel_notice():
     module = _load_panel_module()
     module.StructureType = SimpleNamespace(
@@ -281,6 +288,7 @@ def test_show_optional_blank_name_notice_skips_open_channel_notice():
     assert _FakeInfoBar.records == []
 
 
+@isolated_imports
 def test_show_optional_blank_name_notice_warns_for_culvert_rows():
     module = _load_panel_module()
     module.StructureType = SimpleNamespace(
@@ -302,6 +310,7 @@ def test_show_optional_blank_name_notice_warns_for_culvert_rows():
     assert "第1行（暗涵-圆拱直墙型）" in _FakeInfoBar.records[0]["content"]
 
 
+@isolated_imports
 def test_open_siphon_calculator_blocks_missing_siphon_names_with_clear_notice():
     module = _load_panel_module()
     module.InfoBar = _FakeInfoBar

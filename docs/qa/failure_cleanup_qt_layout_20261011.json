@@ -1,0 +1,573 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-11T12:20:12.931216+08:00",
+  "result": {
+    "final_independent_pytest_counts": {
+      "tests": 54,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "final_independent_processes": 8,
+    "actual_process_exit_codes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "original_fixture_before_probe": {
+      "tests": 2,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "original_fixture_after_probe": {
+      "tests": 2,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "corrected_fixture_before": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "corrected_fixture_after": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "root_cause": "The layout fixture wrote a slender-axis tooltip onto an empty canvas while a normal 100 ms debounced redraw was pending. The redraw recalculated the true canvas bounds as None and correctly cleared text/tooltip and hid the hint. Six processEvents calls do not define timer completion, so the old test depended on wall-clock scheduling.",
+  "evidence": [
+    "Same original test timing on the before physical source and after source reproduced the tooltip assertion failure. Instrumentation left the original method behavior unchanged and recorded processEvents -> _do_update_canvas -> _update_canvas_hint, bounds=None, suggest=False, tooltip cleared.",
+    "A controlled pending redraw observed by QSignalSpy on the real timer timeout cleared the false manually written hint on both before and after production code.",
+    "The production canvas condition and redraw methods have identical ASTs before and after. No production source was changed for this layout failure.",
+    "Corrected tests pass two real plan feature points at (0,0) and (0,1616.1) through SiphonPanel.set_params, wait for the real canvas timeout signal when active, and assert exact bounds, auto-selected plan view, hint visibility, exact label text, and exact tooltip.",
+    "Original row-height, unchanged parameter-area height, and single-line assertions remain. Cleanup explicitly delivers the dialog DeferredDelete.",
+    "No random sleep, retry-until-pass loop, relaxed assertion, or forced process exit is used."
+  ],
+  "ast_equivalence_against_fresh_baseline": {
+    "app_渠系计算前端/siphon/panel.py:_update_canvas": true,
+    "app_渠系计算前端/siphon/panel.py:_do_update_canvas": true,
+    "app_渠系计算前端/siphon/panel.py:_update_canvas_hint": true,
+    "app_渠系计算前端/siphon/canvas_view.py:content_bounds": true,
+    "app_渠系计算前端/siphon/canvas_view.py:should_suggest_detail_view": true,
+    "app_渠系计算前端/siphon/canvas_view.py:auto_select_view": true,
+    "app_渠系计算前端/siphon/canvas_view.py:_get_plan_feature_points_for_draw": true,
+    "app_渠系计算前端/siphon/canvas_view.py:_get_plan_path_coords_for_draw": true
+  },
+  "source_sha256": {
+    "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+    "app_渠系计算前端/siphon/canvas_view.py": "16ee945fc438a279416f933d8f89f00d7b9b0f757b4171137de5c5c9a3befa0a",
+    "tests/test_siphon_multi_dialog_layout_unit.py": "5839d0f7113cba2170ead293e2b47242eb17ca98026b78bd6c6af1fe7d40915e",
+    "tools/qa_qt_exit_probe.py": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354"
+  },
+  "baseline_archive_sha256": "723ce317a7a3651d94c513a028bd9cd591caf05631d8e0730e6bd1f30211742c",
+  "layout_test_diff": "--- before/tests/test_siphon_multi_dialog_layout_unit.py\n+++ after/tests/test_siphon_multi_dialog_layout_unit.py\n@@ -7,6 +7,8 @@\n os.environ.setdefault(\"QT_QPA_PLATFORM\", \"offscreen\")\n os.environ.setdefault(\"QTWEBENGINE_DISABLE_SANDBOX\", \"1\")\n \n+from PySide6.QtCore import QCoreApplication, QEvent\n+from PySide6.QtTest import QSignalSpy\n from PySide6.QtWidgets import QApplication, QWidget\n \n import app_渠系计算前端.siphon.panel as siphon_panel_mod\n@@ -32,6 +34,41 @@\n     app = _get_qapp()\n     for _ in range(max(1, rounds)):\n         app.processEvents()\n+\n+\n+def _wait_for_canvas_redraw(panel):\n+    \"\"\"等待真实防抖更新完成，不让布局断言与未到期的重绘竞争。\"\"\"\n+    timer = panel._canvas_timer\n+    if timer.isActive():\n+        finished = QSignalSpy(timer.timeout)\n+        assert finished.wait(1000), \"画布防抖定时器未完成\"\n+    _flush_events()\n+    assert not timer.isActive()\n+\n+\n+def _show_real_plan_hint(panel):\n+    \"\"\"通过真实细长平面数据触发提示，不能手写一个会被重绘清除的标签。\"\"\"\n+    panel.set_params(\n+        skip_confirm=True,\n+        plan_feature_points=[\n+            {\"chainage\": 0.0, \"x\": 0.0, \"y\": 0.0},\n+            {\"chainage\": 1616.1, \"x\": 0.0, \"y\": 1616.1},\n+        ],\n+        plan_total_length=1616.1,\n+    )\n+    _wait_for_canvas_redraw(panel)\n+    assert panel.canvas.get_view_mode() == \"plan\"\n+    assert panel.canvas.content_bounds() == (0.0, 0.0, 0.0, 1616.1)\n+    assert panel.canvas.should_suggest_detail_view()\n+    assert panel.lbl_canvas_hint.isVisible()\n+    assert panel.lbl_canvas_hint.text() == \"平面图较细长，建议点“展开”查看大图\"\n+    assert panel.lbl_canvas_hint.toolTip() == \"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\"\n+\n+\n+def _close_dialog(dialog):\n+    dialog.close()\n+    dialog.deleteLater()\n+    QCoreApplication.sendPostedEvents(dialog, QEvent.DeferredDelete)\n \n \n def _make_group():\n@@ -73,6 +110,7 @@\n     dialog.resize(1365, 768)\n     dialog.show()\n     _flush_events()\n+    _wait_for_canvas_redraw(dialog._get_current_panel())\n     return dialog\n \n \n@@ -93,16 +131,13 @@\n     assert rows[\"np_row\"].height() >= panel.spin_num_pipes.sizeHint().height()\n     assert rows[\"turn_row\"].height() >= panel.edit_turn_n.sizeHint().height()\n \n-    panel.lbl_canvas_hint.setText(\"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\")\n-    panel.lbl_canvas_hint.setVisible(True)\n-    _flush_events()\n+    _show_real_plan_hint(panel)\n \n     assert rows[\"v_row\"].height() >= panel.edit_v.sizeHint().height()\n     assert rows[\"np_row\"].height() >= panel.spin_num_pipes.sizeHint().height()\n     assert rows[\"turn_row\"].height() >= panel.edit_turn_n.sizeHint().height()\n \n-    dialog.close()\n-    dialog.deleteLater()\n+    _close_dialog(dialog)\n \n \n def test_canvas_hint_does_not_shrink_params_area_and_stays_single_line(monkeypatch):\n@@ -111,14 +146,10 @@\n \n     params_height_before = panel.params_notebook.height()\n \n-    panel.lbl_canvas_hint.setText(\"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\")\n-    panel.lbl_canvas_hint.setToolTip(\"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\")\n-    panel.lbl_canvas_hint.setVisible(True)\n-    _flush_events()\n+    _show_real_plan_hint(panel)\n \n     assert panel.params_notebook.height() == params_height_before\n     assert panel.lbl_canvas_hint.wordWrap() is False\n     assert panel.lbl_canvas_hint.toolTip()\n \n-    dialog.close()\n-    dialog.deleteLater()\n+    _close_dialog(dialog)",
+  "trace_probe_source": "\"\"\"诊断：保留原回调，记录画布提示的清空路径。\"\"\"\nimport json\nfrom pathlib import Path\nimport runpy\nimport traceback\n\nfrom PySide6.QtTest import QSignalSpy\n\noriginal_test = runpy.run_path(str(Path(__file__).with_name('test_siphon_multi_dialog_layout_unit.py')))\n\n\ndef instrument(monkeypatch):\n    panel_class = original_test['siphon_panel_mod'].SiphonPanel\n    original = panel_class._update_canvas_hint\n    def trace(self):\n        before = self.lbl_canvas_hint.toolTip()\n        result = original(self)\n        if before or self.lbl_canvas_hint.toolTip():\n            print('HINT_TRACE', json.dumps({'before':before,'after':self.lbl_canvas_hint.toolTip(),\n                'bounds':self.canvas.content_bounds(),'view':self.canvas.get_view_mode(),\n                'suggest':self.canvas.should_suggest_detail_view(),\n                'stack':traceback.format_stack(limit=6)},ensure_ascii=False),flush=True)\n        return result\n    monkeypatch.setattr(panel_class,'_update_canvas_hint',trace)\n\n\ndef test_original_fixture_timing(monkeypatch):\n    instrument(monkeypatch)\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\n\n\ndef test_pending_redraw_removes_handwritten_hint_for_empty_axis(monkeypatch):\n    instrument(monkeypatch)\n    dialog=original_test['_make_dialog'](monkeypatch)\n    panel=dialog._get_current_panel()\n    hint='当前平面图轴线较细长，建议点“展开”或双击预览查看大图。'\n    panel.lbl_canvas_hint.setText(hint)\n    panel.lbl_canvas_hint.setToolTip(hint)\n    panel.lbl_canvas_hint.setVisible(True)\n    assert not panel.canvas.should_suggest_detail_view()\n    timer=panel._canvas_timer\n    spy=QSignalSpy(timer.timeout)\n    panel._update_canvas()\n    assert spy.wait(1000), '未观察到正式画布防抖定时器完成'\n    assert spy.count()==1\n    assert panel.lbl_canvas_hint.toolTip()==''\n    assert not panel.lbl_canvas_hint.isVisible()\n    dialog.close()\n    dialog.deleteLater()\n",
+  "corrected_test_source": "# -*- coding: utf-8 -*-\n\"\"\"多倒虹吸窗口关键输入区紧凑布局回归测试。\"\"\"\n\nimport os\nfrom types import SimpleNamespace\n\nos.environ.setdefault(\"QT_QPA_PLATFORM\", \"offscreen\")\nos.environ.setdefault(\"QTWEBENGINE_DISABLE_SANDBOX\", \"1\")\n\nfrom PySide6.QtCore import QCoreApplication, QEvent\nfrom PySide6.QtTest import QSignalSpy\nfrom PySide6.QtWidgets import QApplication, QWidget\n\nimport app_渠系计算前端.siphon.panel as siphon_panel_mod\nfrom app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog\n\n\nclass _FakeWebEngineView(QWidget):\n    \"\"\"测试替身：避免 QWebEngineView 在无头环境触发子进程崩溃。\"\"\"\n\n    def setHtml(self, *_args, **_kwargs):\n        return None\n\n\ndef _fake_web_view_factory(parent=None):\n    return _FakeWebEngineView(parent)\n\n\ndef _get_qapp():\n    return QApplication.instance() or QApplication([])\n\n\ndef _flush_events(rounds: int = 6):\n    app = _get_qapp()\n    for _ in range(max(1, rounds)):\n        app.processEvents()\n\n\ndef _wait_for_canvas_redraw(panel):\n    \"\"\"等待真实防抖更新完成，不让布局断言与未到期的重绘竞争。\"\"\"\n    timer = panel._canvas_timer\n    if timer.isActive():\n        finished = QSignalSpy(timer.timeout)\n        assert finished.wait(1000), \"画布防抖定时器未完成\"\n    _flush_events()\n    assert not timer.isActive()\n\n\ndef _show_real_plan_hint(panel):\n    \"\"\"通过真实细长平面数据触发提示，不能手写一个会被重绘清除的标签。\"\"\"\n    panel.set_params(\n        skip_confirm=True,\n        plan_feature_points=[\n            {\"chainage\": 0.0, \"x\": 0.0, \"y\": 0.0},\n            {\"chainage\": 1616.1, \"x\": 0.0, \"y\": 1616.1},\n        ],\n        plan_total_length=1616.1,\n    )\n    _wait_for_canvas_redraw(panel)\n    assert panel.canvas.get_view_mode() == \"plan\"\n    assert panel.canvas.content_bounds() == (0.0, 0.0, 0.0, 1616.1)\n    assert panel.canvas.should_suggest_detail_view()\n    assert panel.lbl_canvas_hint.isVisible()\n    assert panel.lbl_canvas_hint.text() == \"平面图较细长，建议点“展开”查看大图\"\n    assert panel.lbl_canvas_hint.toolTip() == \"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\"\n\n\ndef _close_dialog(dialog):\n    dialog.close()\n    dialog.deleteLater()\n    QCoreApplication.sendPostedEvents(dialog, QEvent.DeferredDelete)\n\n\ndef _make_group():\n    return SimpleNamespace(\n        name=\"测试倒虹吸\",\n        design_flow=0.51,\n        roughness=0.012,\n        inlet_transition_form=\"\",\n        outlet_transition_form=\"\",\n        siphon_transition_inlet_zeta=0.0,\n        siphon_transition_outlet_zeta=0.0,\n        upstream_velocity=0.686,\n        downstream_velocity=0.686,\n        upstream_velocity_increased=0.0,\n        downstream_velocity_increased=0.0,\n        upstream_section_B=None,\n        upstream_section_h=None,\n        upstream_section_m=None,\n        plan_segments=[],\n        plan_total_length=1616.1,\n        plan_feature_points=[],\n        downstream_structure_type=\"\",\n        downstream_section_B=None,\n        downstream_section_h=None,\n        downstream_section_m=None,\n        downstream_section_D=None,\n        downstream_section_R=None,\n        upstream_velocity_source=\"missing\",\n        downstream_velocity_source=\"missing\",\n        upstream_velocity_provenance={},\n        downstream_velocity_provenance={},\n    )\n\n\ndef _make_dialog(monkeypatch):\n    _get_qapp()\n    monkeypatch.setattr(siphon_panel_mod, \"create_web_view\", _fake_web_view_factory)\n    dialog = MultiSiphonDialog(None, [_make_group()])\n    dialog.resize(1365, 768)\n    dialog.show()\n    _flush_events()\n    _wait_for_canvas_redraw(dialog._get_current_panel())\n    return dialog\n\n\ndef _row_metrics(panel):\n    return {\n        \"v_row\": panel.edit_v.parentWidget(),\n        \"np_row\": panel.spin_num_pipes.parentWidget(),\n        \"turn_row\": panel.edit_turn_n.parentWidget(),\n    }\n\n\ndef test_key_input_rows_keep_full_height_in_multi_siphon_dialog(monkeypatch):\n    dialog = _make_dialog(monkeypatch)\n    panel = dialog._get_current_panel()\n    rows = _row_metrics(panel)\n\n    assert rows[\"v_row\"].height() >= panel.edit_v.sizeHint().height()\n    assert rows[\"np_row\"].height() >= panel.spin_num_pipes.sizeHint().height()\n    assert rows[\"turn_row\"].height() >= panel.edit_turn_n.sizeHint().height()\n\n    _show_real_plan_hint(panel)\n\n    assert rows[\"v_row\"].height() >= panel.edit_v.sizeHint().height()\n    assert rows[\"np_row\"].height() >= panel.spin_num_pipes.sizeHint().height()\n    assert rows[\"turn_row\"].height() >= panel.edit_turn_n.sizeHint().height()\n\n    _close_dialog(dialog)\n\n\ndef test_canvas_hint_does_not_shrink_params_area_and_stays_single_line(monkeypatch):\n    dialog = _make_dialog(monkeypatch)\n    panel = dialog._get_current_panel()\n\n    params_height_before = panel.params_notebook.height()\n\n    _show_real_plan_hint(panel)\n\n    assert panel.params_notebook.height() == params_height_before\n    assert panel.lbl_canvas_hint.wordWrap() is False\n    assert panel.lbl_canvas_hint.toolTip()\n\n    _close_dialog(dialog)\n",
+  "original_final_suite_failure_log": "..                                                                       [100%]\n2 passed in 3.17s\nPYTEST_RETURNED 0\n\n---STDERR---\n",
+  "limits": [
+    "Offscreen Qt validation in an isolated workspace and isolated QSettings; this supplement does not claim a packaged native desktop acceptance.",
+    "The initial long-running orchestration session ended after five completed records; no matching probe processes remained. The three missing files were then each run once to completion in separate calls. All eight final records are complete and have actual exit 0."
+  ],
+  "final_record_names": [
+    "qt_layout_final_test_qt_deferred_lifecycle_unit.json",
+    "qt_layout_final_test_siphon_multi_dialog_layout_unit.json",
+    "qt_layout_final_test_siphon_multi_dialog_longitudinal_reset_unit.json",
+    "qt_layout_final_test_water_profile_flow_selector_unit.json",
+    "qt_layout_final_test_water_profile_init_shared_batch_results_unit.json",
+    "qt_layout_final_test_water_profile_start_station_regression_unit.json",
+    "qt_layout_final_test_water_profile_transition_length_details_regression_unit.json",
+    "qt_layout_final_test_water_profile_transition_qxproj_roundtrip_unit.json"
+  ],
+  "records": {
+    "qt_layout_after_trace.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_qt_hint_trace_probe.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_after_trace.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_after_trace.xml",
+        "retain_app": true,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 1,
+      "exit_code_hex": "0x1",
+      "elapsed_seconds": 2.989,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\nHINT_TRACE {\"before\": \"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\", \"after\": \"\", \"bounds\": null, \"view\": \"profile\", \"suggest\": false, \"stack\": [\"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\_pytest\\\\python.py\\\", line 166, in pytest_pyfunc_call\\n    result = testfunction(**testargs)\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 29, in test_original_fixture_timing\\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_siphon_multi_dialog_layout_unit.py\\\", line 117, in test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\\n    _flush_events()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_siphon_multi_dialog_layout_unit.py\\\", line 34, in _flush_events\\n    app.processEvents()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\app_渠系计算前端\\\\siphon\\\\panel.py\\\", line 6189, in _do_update_canvas\\n    self._update_canvas_hint()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 22, in trace\\n    'stack':traceback.format_stack(limit=6)},ensure_ascii=False),flush=True)\\n\"]}\nF[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\nHINT_TRACE {\"before\": \"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\", \"after\": \"\", \"bounds\": null, \"view\": \"profile\", \"suggest\": false, \"stack\": [\"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\pluggy\\\\_manager.py\\\", line 120, in _hookexec\\n    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\\n\", \"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\pluggy\\\\_callers.py\\\", line 121, in _multicall\\n    res = hook_impl.function(*args)\\n\", \"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\_pytest\\\\python.py\\\", line 166, in pytest_pyfunc_call\\n    result = testfunction(**testargs)\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 44, in test_pending_redraw_removes_handwritten_hint_for_empty_axis\\n    assert spy.wait(1000), '未观察到正式画布防抖定时器完成'\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\app_渠系计算前端\\\\siphon\\\\panel.py\\\", line 6189, in _do_update_canvas\\n    self._update_canvas_hint()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 22, in trace\\n    'stack':traceback.format_stack(limit=6)},ensure_ascii=False),flush=True)\\n\"]}\n.\n================================== FAILURES ===================================\n________________________ test_original_fixture_timing _________________________\ntests\\test_qt_hint_trace_probe.py:29: in test_original_fixture_timing\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\ntests\\test_siphon_multi_dialog_layout_unit.py:121: in test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\n    assert panel.lbl_canvas_hint.toolTip()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_qt_hint_trace_probe.py::test_original_fixture_timing - Asse...\n1 failed, 1 passed in 2.14s\nPYTEST_RETURNED 1\nNORMAL_EXIT_BEGIN 1 True\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_qt_hint_trace_probe.py": "c30bacd11f73a162d4d0e8d3bf52b6b1be14369846128b0fc2f3a6aad5cbe9f2",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"1\" skipped=\"0\" tests=\"2\" time=\"2.145\" timestamp=\"2026-10-11T12:08:36.166309+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_hint_trace_probe\" name=\"test_original_fixture_timing\" time=\"0.212\"><failure message=\"AssertionError\">tests\\test_qt_hint_trace_probe.py:29: in test_original_fixture_timing\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\ntests\\test_siphon_multi_dialog_layout_unit.py:121: in test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\n    assert panel.lbl_canvas_hint.toolTip()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError</failure></testcase><testcase classname=\"tests.test_qt_hint_trace_probe\" name=\"test_pending_redraw_removes_handwritten_hint_for_empty_axis\" time=\"0.276\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_before_trace.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_qt_hint_trace_probe.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_before_trace.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_before_trace.xml",
+        "retain_app": true,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 1,
+      "exit_code_hex": "0x1",
+      "elapsed_seconds": 3.2,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\nHINT_TRACE {\"before\": \"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\", \"after\": \"\", \"bounds\": null, \"view\": \"profile\", \"suggest\": false, \"stack\": [\"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\_pytest\\\\python.py\\\", line 166, in pytest_pyfunc_call\\n    result = testfunction(**testargs)\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 29, in test_original_fixture_timing\\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_siphon_multi_dialog_layout_unit.py\\\", line 117, in test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\\n    _flush_events()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_siphon_multi_dialog_layout_unit.py\\\", line 34, in _flush_events\\n    app.processEvents()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\app_渠系计算前端\\\\siphon\\\\panel.py\\\", line 6189, in _do_update_canvas\\n    self._update_canvas_hint()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 22, in trace\\n    'stack':traceback.format_stack(limit=6)},ensure_ascii=False),flush=True)\\n\"]}\nF[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\nHINT_TRACE {\"before\": \"当前平面图轴线较细长，建议点“展开”或双击预览查看大图。\", \"after\": \"\", \"bounds\": null, \"view\": \"profile\", \"suggest\": false, \"stack\": [\"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\pluggy\\\\_manager.py\\\", line 120, in _hookexec\\n    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\\n\", \"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\pluggy\\\\_callers.py\\\", line 121, in _multicall\\n    res = hook_impl.function(*args)\\n\", \"  File \\\"D:\\\\V1.0\\\\.venv\\\\Lib\\\\site-packages\\\\_pytest\\\\python.py\\\", line 166, in pytest_pyfunc_call\\n    result = testfunction(**testargs)\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 44, in test_pending_redraw_removes_handwritten_hint_for_empty_axis\\n    assert spy.wait(1000), '未观察到正式画布防抖定时器完成'\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\app_渠系计算前端\\\\siphon\\\\panel.py\\\", line 6189, in _do_update_canvas\\n    self._update_canvas_hint()\\n\", \"  File \\\"D:\\\\V1.0\\\\.tmp\\\\failure_cleanup_20261011\\\\qt_layout_workspace\\\\tests\\\\test_qt_hint_trace_probe.py\\\", line 22, in trace\\n    'stack':traceback.format_stack(limit=6)},ensure_ascii=False),flush=True)\\n\"]}\n.\n================================== FAILURES ===================================\n________________________ test_original_fixture_timing _________________________\ntests\\test_qt_hint_trace_probe.py:29: in test_original_fixture_timing\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\ntests\\test_siphon_multi_dialog_layout_unit.py:121: in test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\n    assert panel.lbl_canvas_hint.toolTip()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_qt_hint_trace_probe.py::test_original_fixture_timing - Asse...\n1 failed, 1 passed in 2.24s\nPYTEST_RETURNED 1\nNORMAL_EXIT_BEGIN 1 True\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_qt_hint_trace_probe.py": "c30bacd11f73a162d4d0e8d3bf52b6b1be14369846128b0fc2f3a6aad5cbe9f2",
+        "app_渠系计算前端/bootstrap.py": "6aba41dabb4646cf5eb1a563dc9dbbada7d0a6d188b98ac1b0aeb192a5a017bc",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "74e9176c826fbd135f64eb504aba7cf715294a60bea5b75f99230a170d764c23",
+        "app_渠系计算前端/siphon/panel.py": "446e82510a98b7c4cb3256f4bec2a6d9b4a729888a045375cdae87f3f27673ba",
+        "app_渠系计算前端/water_profile/panel.py": "d77534b1fe580bbb58655f4ba991226cee5318e32395d160240d75037e355d8c"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"1\" skipped=\"0\" tests=\"2\" time=\"2.239\" timestamp=\"2026-10-11T12:08:09.127155+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_hint_trace_probe\" name=\"test_original_fixture_timing\" time=\"0.202\"><failure message=\"AssertionError\">tests\\test_qt_hint_trace_probe.py:29: in test_original_fixture_timing\n    original_test['test_canvas_hint_does_not_shrink_params_area_and_stays_single_line'](monkeypatch)\ntests\\test_siphon_multi_dialog_layout_unit.py:121: in test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\n    assert panel.lbl_canvas_hint.toolTip()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError</failure></testcase><testcase classname=\"tests.test_qt_hint_trace_probe\" name=\"test_pending_redraw_removes_handwritten_hint_for_empty_axis\" time=\"0.283\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_qt_deferred_lifecycle_unit.json": {
+      "arguments": {
+        "workspace": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_workspace",
+        "test_file": [
+          "tests/test_qt_deferred_lifecycle_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_qt_deferred_lifecycle_unit.json",
+        "junit": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_qt_deferred_lifecycle_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 6.153,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n........[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 0\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 0\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n..\n12 passed in 5.23s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_qt_deferred_lifecycle_unit.py": "1c5881756482a6bd04526826e1850e721ecc21bfeb956f21a264d765ae94c95b",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"12\" time=\"5.236\" timestamp=\"2026-10-11T12:10:32.366139+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[False]\" time=\"1.694\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\" time=\"0.246\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_follow_panel_lifetime[False]\" time=\"1.105\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_follow_panel_lifetime[True]\" time=\"0.300\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[False-False]\" time=\"0.337\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[False-True]\" time=\"0.251\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[True-False]\" time=\"0.254\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[True-True]\" time=\"0.249\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_autosave_timer_is_destroyed_with_panel\" time=\"0.233\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_raise_timer_follows_dialog_lifetime[False]\" time=\"0.124\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_raise_timer_follows_dialog_lifetime[True]\" time=\"0.123\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_live_siphon_autosave_still_persists_current_inputs\" time=\"0.210\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_siphon_multi_dialog_layout_unit.json": {
+      "arguments": {
+        "workspace": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_workspace",
+        "test_file": [
+          "tests/test_siphon_multi_dialog_layout_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_siphon_multi_dialog_layout_unit.json",
+        "junit": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_siphon_multi_dialog_layout_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.565,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\n.\n2 passed in 2.61s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_siphon_multi_dialog_layout_unit.py": "5839d0f7113cba2170ead293e2b47242eb17ca98026b78bd6c6af1fe7d40915e",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.610\" timestamp=\"2026-10-11T12:10:28.795670+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_siphon_multi_dialog_layout_unit\" name=\"test_key_input_rows_keep_full_height_in_multi_siphon_dialog\" time=\"0.414\" /><testcase classname=\"tests.test_siphon_multi_dialog_layout_unit\" name=\"test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\" time=\"0.337\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_siphon_multi_dialog_longitudinal_reset_unit.json": {
+      "arguments": {
+        "workspace": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_workspace",
+        "test_file": [
+          "tests/test_siphon_multi_dialog_longitudinal_reset_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_siphon_multi_dialog_longitudinal_reset_unit.json",
+        "junit": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_siphon_multi_dialog_longitudinal_reset_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 2.907,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 2\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=True, MANAGER_AVAILABLE=True\n[倒虹吸重命名迁移] '旧倒虹吸1' → '大营山'\n[倒虹吸重命名迁移] '旧倒虹吸2' → '庙梁子'\n[DEBUG _load_saved_data] 调用 _reapply_table_data()\n[DEBUG _reapply_table_data] 开始, groups数量: 2\n[DEBUG _reapply_table_data] 调用 panel.set_params() for 大营山\n[DEBUG _reapply_table_data] 调用 panel.set_params() for 庙梁子\n[DEBUG _reapply_table_data] 完成\n[DEBUG _load_saved_data] _reapply_table_data() 完成\n[DEBUG _load_saved_data] 完成\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=True, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] 调用 _reapply_table_data()\n[DEBUG _reapply_table_data] 开始, groups数量: 1\n[DEBUG _reapply_table_data] 调用 panel.set_params() for 庙梁子\n[DEBUG _reapply_table_data] 完成\n[DEBUG _load_saved_data] _reapply_table_data() 完成\n[DEBUG _load_saved_data] 完成\n[DEBUG MultiSiphonDialog] __init__ 完成\n.\n2 passed in 1.97s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_siphon_multi_dialog_longitudinal_reset_unit.py": "5bf2a2f4121ce58640f22f86a9584e68d15e56c579549d04212e6aa8bd3eeb7f",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"1.980\" timestamp=\"2026-10-11T12:10:38.634343+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_siphon_multi_dialog_longitudinal_reset_unit\" name=\"test_water_profile_entry_does_not_restore_renamed_historical_longitudinal\" time=\"0.439\" /><testcase classname=\"tests.test_siphon_multi_dialog_longitudinal_reset_unit\" name=\"test_water_profile_save_does_not_mark_blank_profile_as_example\" time=\"0.135\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_water_profile_flow_selector_unit.json": {
+      "arguments": {
+        "workspace": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_workspace",
+        "test_file": [
+          "tests/test_water_profile_flow_selector_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_water_profile_flow_selector_unit.json",
+        "junit": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_water_profile_flow_selector_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 5.228,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.......\n7 passed in 4.11s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_water_profile_flow_selector_unit.py": "346c346b858c578a0a90962568cfba7b6bb728c01d8004bdc87143f2f9d82957",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"7\" time=\"4.112\" timestamp=\"2026-10-11T12:10:41.722473+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_defaults_to_first_segment_and_shows_summary\" time=\"1.985\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_switch_keeps_design_and_max_on_same_segment\" time=\"0.255\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_design_flow_change_recomputes_all_max_flows\" time=\"0.265\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_programmatic_flow_values_refresh_main_view\" time=\"0.236\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_project_reset_panels_clears_flow_selector_values\" time=\"0.289\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_main_view_no_longer_exposes_flow_segment_editor_entry\" time=\"0.220\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_display_hides_float_tail_and_preserves_values_after_restore\" time=\"0.744\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_water_profile_init_shared_batch_results_unit.json": {
+      "arguments": {
+        "workspace": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_workspace",
+        "test_file": [
+          "tests/test_water_profile_init_shared_batch_results_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_water_profile_init_shared_batch_results_unit.json",
+        "junit": "D:\\V1.0\\.tmp\\failure_cleanup_20261011\\qt_layout_final_test_water_profile_init_shared_batch_results_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.164,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n...\n3 passed in 2.21s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_water_profile_init_shared_batch_results_unit.py": "f402a0e668497351a96131312b4cbe56b7414890bf73c48f09061c40bef62744",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"3\" time=\"2.212\" timestamp=\"2026-10-11T12:10:47.014036+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_init_shared_batch_results_unit\" name=\"test_water_profile_panel_init_keeps_existing_shared_batch_results\" time=\"1.704\" /><testcase classname=\"tests.test_water_profile_init_shared_batch_results_unit\" name=\"test_import_from_batch_prefers_shared_max_flows_per_segment\" time=\"0.193\" /><testcase classname=\"tests.test_water_profile_init_shared_batch_results_unit\" name=\"test_import_from_batch_keeps_auto_rules_when_shared_max_flows_are_empty\" time=\"0.197\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_water_profile_start_station_regression_unit.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_water_profile_start_station_regression_unit.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_final_test_water_profile_start_station_regression_unit.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_final_test_water_profile_start_station_regression_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.051,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n..\n2 passed in 2.22s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_water_profile_start_station_regression_unit.py": "ca0e84ba5e3244c727aeaa28e87f30912fc8561e0f43bd1bf5b5ab99db952821",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.220\" timestamp=\"2026-10-11T12:18:50.453759+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_table3_recalculate_geometry_uses_project_start_station\" time=\"1.656\" /><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\" time=\"0.466\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_water_profile_transition_length_details_regression_unit.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_water_profile_transition_length_details_regression_unit.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_final_test_water_profile_transition_length_details_regression_unit.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_final_test_water_profile_transition_length_details_regression_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 5.792,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n....................\n20 passed in 4.77s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_water_profile_transition_length_details_regression_unit.py": "a822a79f9db7829597bd1769207932d2a0b82e67a94ea07a6c036a56b5a8ebbd",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"20\" time=\"4.770\" timestamp=\"2026-10-11T12:18:54.056290+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_project_reload_repairs_missing_transition_length_details\" time=\"1.700\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_detail_refresh_replaces_stale_pressure_pipe_length\" time=\"0.183\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_refreshes_stale_pressure_pipe_details\" time=\"0.182\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_require_existing_transition_instances\" time=\"0.162\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_switch_to_current_hit_scope_after_transitions_exist\" time=\"0.165\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_rule_dialog_displays_hit_scope_copy\" time=\"0.009\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_requires_inserted_transition_instances\" time=\"0.166\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_insert_transitions_no_longer_defers_to_length_rule_nudge\" time=\"0.150\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_after_insert_uses_current_rows_only\" time=\"0.182\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_reports_updated_and_skipped_rows\" time=\"0.169\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_clamps_requested_length_to_physical_limit\" time=\"0.177\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_uses_real_gap_for_direct_transition_without_auto_channel\" time=\"0.164\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_process_section_displays_requested_and_physical_limit\" time=\"0.000\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_dialog_displays_rule_target_and_physical_limit\" time=\"0.000\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_require_transition_rows_even_if_table_text_changes\" time=\"0.159\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_override_blocks_values_that_require_topology_rebuild\" time=\"0.176\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_override_allows_values_within_current_local_slack\" time=\"0.181\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_lazy_repairs_missing_details\" time=\"0.176\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_respects_explicit_zero_length\" time=\"0.183\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_project_reload_repairs_single_override_warning_and_source\" time=\"0.350\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_final_test_water_profile_transition_qxproj_roundtrip_unit.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_water_profile_transition_qxproj_roundtrip_unit.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_final_test_water_profile_transition_qxproj_roundtrip_unit.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_final_test_water_profile_transition_qxproj_roundtrip_unit.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 4.12,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n......\n6 passed in 3.17s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_water_profile_transition_qxproj_roundtrip_unit.py": "214f54772671142777cfb69864b71dabb18f78c1926b58f0c7072f811f6b419a",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"6\" time=\"3.174\" timestamp=\"2026-10-11T12:19:00.555781+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_table_refresh_preserves_fractional_slope_denominators[True]\" time=\"1.280\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_table_refresh_preserves_fractional_slope_denominators[False]\" time=\"0.168\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit\" time=\"0.567\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_qxproj_roundtrip_recovers_successful_gate_when_old_project_saved_false\" time=\"0.364\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_qxproj_load_uses_project_settings_flow_lists_when_ui_text_missing\" time=\"0.164\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_old_project_flow_snapshot_is_reformatted_without_losing_value\" time=\"0.175\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_fixed_after.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_siphon_multi_dialog_layout_unit.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_fixed_after.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_fixed_after.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.005,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\n.\n2 passed in 2.14s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_siphon_multi_dialog_layout_unit.py": "5839d0f7113cba2170ead293e2b47242eb17ca98026b78bd6c6af1fe7d40915e",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.142\" timestamp=\"2026-10-11T12:09:30.850797+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_siphon_multi_dialog_layout_unit\" name=\"test_key_input_rows_keep_full_height_in_multi_siphon_dialog\" time=\"0.391\" /><testcase classname=\"tests.test_siphon_multi_dialog_layout_unit\" name=\"test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\" time=\"0.327\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "qt_layout_fixed_before.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_20261011/qt_layout_workspace",
+        "test_file": [
+          "tests/test_siphon_multi_dialog_layout_unit.py"
+        ],
+        "destruction_case": null,
+        "json": ".tmp/failure_cleanup_20261011/qt_layout_fixed_before.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_20261011/qt_layout_fixed_before.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.313,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见\n.\n2 passed in 2.41s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_siphon_multi_dialog_layout_unit.py": "5839d0f7113cba2170ead293e2b47242eb17ca98026b78bd6c6af1fe7d40915e",
+        "app_渠系计算前端/bootstrap.py": "6aba41dabb4646cf5eb1a563dc9dbbada7d0a6d188b98ac1b0aeb192a5a017bc",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "74e9176c826fbd135f64eb504aba7cf715294a60bea5b75f99230a170d764c23",
+        "app_渠系计算前端/siphon/panel.py": "446e82510a98b7c4cb3256f4bec2a6d9b4a729888a045375cdae87f3f27673ba",
+        "app_渠系计算前端/water_profile/panel.py": "d77534b1fe580bbb58655f4ba991226cee5318e32395d160240d75037e355d8c"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.414\" timestamp=\"2026-10-11T12:09:56.153433+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_siphon_multi_dialog_layout_unit\" name=\"test_key_input_rows_keep_full_height_in_multi_siphon_dialog\" time=\"0.389\" /><testcase classname=\"tests.test_siphon_multi_dialog_layout_unit\" name=\"test_canvas_hint_does_not_shrink_params_area_and_stays_single_line\" time=\"0.335\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  }
+}

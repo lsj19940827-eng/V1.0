@@ -1,0 +1,175 @@
+{
+  "baseline_archive_sha256": "723ce317a7a3651d94c513a028bd9cd591caf05631d8e0730e6bd1f30211742c",
+  "files": [
+    {
+      "path": "app_渠系计算前端/bootstrap.py",
+      "before_sha256": "6aba41dabb4646cf5eb1a563dc9dbbada7d0a6d188b98ac1b0aeb192a5a017bc",
+      "after_sha256": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b"
+    },
+    {
+      "path": "app_渠系计算前端/siphon/multi_siphon_dialog.py",
+      "before_sha256": "74e9176c826fbd135f64eb504aba7cf715294a60bea5b75f99230a170d764c23",
+      "after_sha256": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f"
+    },
+    {
+      "path": "app_渠系计算前端/siphon/panel.py",
+      "before_sha256": "446e82510a98b7c4cb3256f4bec2a6d9b4a729888a045375cdae87f3f27673ba",
+      "after_sha256": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390"
+    },
+    {
+      "path": "app_渠系计算前端/water_profile/panel.py",
+      "before_sha256": "d77534b1fe580bbb58655f4ba991226cee5318e32395d160240d75037e355d8c",
+      "after_sha256": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+    },
+    {
+      "path": "app_渠系计算前端/section_shapes.py",
+      "before_sha256": "73d391d7f07f4981ff075b10ed3312ebe7d65e142203a5618f2c7b5f39a6db15",
+      "after_sha256": "2e7121c666b2726402560472abd0c865c5d48944bea4a9cbddd00ed8431c9a8e"
+    },
+    {
+      "path": "app_渠系计算前端/section_plotting.py",
+      "before_sha256": "4386845ce168adfa2887fc0d9cea0a89fb6286f6eed1386f0d149df5a04b7c50",
+      "after_sha256": "bc0b9441c2ca053c82223442d58c30f6105c0fca863c80ac9824e6134d354e76"
+    },
+    {
+      "path": "app_渠系计算前端/open_channel/panel.py",
+      "before_sha256": "d4f8087972da82543d8d84595acacc796f715af2705e0e635dfc786b587aa94e",
+      "after_sha256": "b9f413ed33332e62215d70f2bb1cfad407dc252399a3dd39fc5dd8f7e8247b37"
+    },
+    {
+      "path": "tools/check_architecture.py",
+      "before_sha256": "809f6c85ed25507a85ad7b995c8e801abcce7d645e80036d42d44ad1d4c19426",
+      "after_sha256": "452dd05e4dcad885e71b93d05d67e65abafb38bdf764fca4861826be491fb6c0"
+    },
+    {
+      "path": "tools/qa_qt_exit_probe.py",
+      "before_sha256": null,
+      "after_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354"
+    },
+    {
+      "path": "tests/test_geometry_station_regression_unit.py",
+      "before_sha256": "40d0fc4c898dce76d19d5f30054655817440f62c52666d6c991784ab97ea72ed",
+      "after_sha256": "b8f23ff5faca35b269f1a65dc246ae6c44b287716c468cd86f35082fcc8ce877"
+    },
+    {
+      "path": "tests/test_hydraulic_skip_loss_unit.py",
+      "before_sha256": "88b2f74a668908484dfe82d726efa7c35e69c504243d29bb9e513d3542637868",
+      "after_sha256": "84321ba3a064516288bcc5feb3c02225bf12bc255082b8e957f70955d6d9c053"
+    },
+    {
+      "path": "tests/test_task4_skip_loss_marking.py",
+      "before_sha256": "6ab6f947b4112bde223e98992eb3c8456118b77532ddf8da2a53287f13145f74",
+      "after_sha256": "aa3ce0bf905fa864050e38e5875bb410e9219e5652aa4d419dae61f39562e0d7"
+    },
+    {
+      "path": "tests/test_batch_qiyi_fill_channel_regression.py",
+      "before_sha256": "cb22346e6a0676ca19cadc24fac4e8fd637c679a90532f1447b789913a713f53",
+      "after_sha256": "8d744aed1f5bc6e4799c955fa28d4d2880006fb234dceb09b61ec16083b913e0"
+    },
+    {
+      "path": "tests/test_culvert_family_compatibility_unit.py",
+      "before_sha256": "dc6092664ed4128a2b99dfa794179a4414540fd8515013b4eb846089077acb02",
+      "after_sha256": "aae30a7365a9d199bb644ea27da8748c9bf458d515f9e4527ba7aea151b0da80"
+    },
+    {
+      "path": "tests/test_increase_input_mode_panels_unit.py",
+      "before_sha256": "c19f7a0bc36cfd77678d72980a037e344bf21ab39071cabf9369f4bc0d77d6a3",
+      "after_sha256": "76abeda7e9b4b4c1501974bafc41328aa0676e7edfbf31a92efa6f8930391696"
+    },
+    {
+      "path": "tests/test_open_channel_circular_case_unit.py",
+      "before_sha256": "9f48b894e683dcd59d58467c5a82143fe9c5e139b9cff4cd0b33f14c8f1dce2e",
+      "after_sha256": "70fe993115d681dfb4ee94672a1fb5f1bc1e3f5c03088e63f8ed5cd584759f19"
+    },
+    {
+      "path": "tests/test_open_channel_compound_trapezoid_panel_unit.py",
+      "before_sha256": "c8675efba96d8dbbe40eccfa487359062e01a264247021b1553429e65a12f95d",
+      "after_sha256": "f3b961b9b684abc1f6f9434b354a448f84d6a4f1a352d6006c5f0af33c2cc453"
+    },
+    {
+      "path": "tests/test_siphon_starter_case_defaults_unit.py",
+      "before_sha256": "0bca49fc65f7a83ab4c3a1e432df2b6cfac4a6a99155966a9e242c4f8d3d498a",
+      "after_sha256": "7368c5f62e3aa089012fe45be1663f4a7f7cfb0ccaf9b766dac3bbbc658f821d"
+    },
+    {
+      "path": "tests/test_spatial_bend_event_regression.py",
+      "before_sha256": "6e116494099741a66fdb203819b584b4fa4a4bca40c56928a7e48eb1d72b92d4",
+      "after_sha256": "b25652747daed96c347325abc1f1bacf769c536990af435571e90d48ed14d6fe"
+    },
+    {
+      "path": "tests/test_spatial_precision_regression_unit.py",
+      "before_sha256": "d4ba58cbc9b6494241894446511b6ca1929dec7916c31399465d34c212f79573",
+      "after_sha256": "fd7cec37deb73acd5ef78194b6762ec596283675c97265d07e4337c693c58e3c"
+    },
+    {
+      "path": "tests/test_qt_deferred_lifecycle_unit.py",
+      "before_sha256": null,
+      "after_sha256": "1c5881756482a6bd04526826e1850e721ecc21bfeb956f21a264d765ae94c95b"
+    },
+    {
+      "path": "tests/test_app_panel_registry_unit.py",
+      "before_sha256": "d6ef6e0c7bfc280bb53ab224295a2ee0ff497c46b020e78e5477f50d5417edc3",
+      "after_sha256": "c364d7896a6727986688a128aabf17044babbf436412cfe726a2474972132375"
+    },
+    {
+      "path": "tests/test_architecture_checker_unit.py",
+      "before_sha256": "04c9d235fa6546fe3d7f7c5aab3a3d2954ec9d858d6239a37563f1f4ac7fc55e",
+      "after_sha256": "ba4580550042076514cba4290df5e2a87dd0b106b7dcf375430f7ae3ffa33102"
+    },
+    {
+      "path": "tests/test_siphon_multi_dialog_layout_unit.py",
+      "before_sha256": "5edf0a73a23c86b707600be9b3ef4df4e8978e2950d822de1a92152232404622",
+      "after_sha256": "5839d0f7113cba2170ead293e2b47242eb17ca98026b78bd6c6af1fe7d40915e"
+    },
+    {
+      "path": "tests/test_webengine_diagnostics_unit.py",
+      "before_sha256": "2235b211ddcd1dc42d4690404176cfd64c7c96929f8bccfcd1285c4f966d7c1d",
+      "after_sha256": "929393246e26e43ec6a8f1298a82d2d6314a70b2edac64b052a9b1f4df761ca3"
+    }
+  ],
+  "shared_files_refreshed_for_verification_only": [
+    "app_渠系计算前端/project_codec.py",
+    "app_渠系计算前端/project_manager.py",
+    "app_渠系计算前端/earthwork/project_state.py",
+    "app_渠系计算前端/earthwork/project_resources.py"
+  ],
+  "version_unchanged": true,
+  "documentation": [
+    {
+      "path": "docs/PRD_架构优化与工程状态.md",
+      "sha256": "aaf687c5e0c66d355099cae967cfaadc8b33d930dc755c6553a9a3fa479e7c76"
+    },
+    {
+      "path": "docs/PRD_明渠水力计算.md",
+      "sha256": "95f2d9fa2c2dba45671455a62e9d3c2ef70a4644f08186eddca31ea5a898e5aa"
+    },
+    {
+      "path": "docs/PRD_合并批量计算与水面线面板.md",
+      "sha256": "b8bb704290c662b40a2dbaf5fcdf7ad6a1202550c723d2fc03efb77a0c2705cd"
+    },
+    {
+      "path": "docs/PRD_推求水面线.md",
+      "sha256": "38cff957eaa1869d4558f2728a3d92dac563216c91966eaae3a684b98371b344"
+    },
+    {
+      "path": "docs/PRD_泄水渠与陡坡水力计算.md",
+      "sha256": "b69a0583bd0d8aa16f0267b7cf887ff9a7e3be412d828f683fcee07882092843"
+    },
+    {
+      "path": "docs/PRD_倒虹吸水力计算.md",
+      "sha256": "582eef9225cb463eda66a3f78347dc1a3b42c1151d075809dbaca54121ba543a"
+    },
+    {
+      "path": "docs/PRD_渐变段与明渠段插入算法.md",
+      "sha256": "033b299988dbc628016e35f713d8fab4c0ccaeba7d5d954ff2c42919c02ac7b2"
+    },
+    {
+      "path": "docs/diagnostics/架构优化核验_20261011.md",
+      "sha256": "2da2900647d8c92ac62749b30f396efc15e5cb8e5d47eb95d8e45b06cfb31b4b"
+    },
+    {
+      "path": "docs/diagnostics/遗留失败与Qt退出核验_20261011.md",
+      "sha256": "77768a60f670c0e7400a57832c32b6cb27ec7c0ddfaad8b82d4c3f74ff9e5f68"
+    }
+  ]
+}

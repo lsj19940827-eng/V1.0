@@ -1,0 +1,270 @@
+{
+  "files": 51,
+  "totals": {
+    "tests": 648,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "execution": "independent processes; offscreen Qt; isolated settings; bootstrap WMI guard",
+  "results": [
+    {
+      "file": "tests/test_app_panel_registry_unit.py",
+      "code": 0,
+      "seconds": 1.27
+    },
+    {
+      "file": "tests/test_batch_calculation_service_unit.py",
+      "code": 0,
+      "seconds": 0.78
+    },
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "code": 0,
+      "seconds": 24.63
+    },
+    {
+      "file": "tests/test_batch_panel_dialog_parent_unit.py",
+      "code": 0,
+      "seconds": 1.97
+    },
+    {
+      "file": "tests/test_case_detail_toggle_unit.py",
+      "code": 0,
+      "seconds": 2.03
+    },
+    {
+      "file": "tests/test_culvert_arch_panel_batch_unit.py",
+      "code": 0,
+      "seconds": 2.69
+    },
+    {
+      "file": "tests/test_culvert_family_compatibility_unit.py",
+      "code": 0,
+      "seconds": 3.14
+    },
+    {
+      "file": "tests/test_domain_architecture_contracts_unit.py",
+      "code": 0,
+      "seconds": 3.48
+    },
+    {
+      "file": "tests/test_formula_cache_lifecycle_unit.py",
+      "code": 0,
+      "seconds": 1.62
+    },
+    {
+      "file": "tests/test_architecture_checker_unit.py",
+      "code": 0,
+      "seconds": 4.13
+    },
+    {
+      "file": "tests/test_batch_qiyi_fill_channel_regression.py",
+      "code": 0,
+      "seconds": 6.05
+    },
+    {
+      "file": "tests/test_building_length_statistics_ui_unit.py",
+      "code": 0,
+      "seconds": 5.84
+    },
+    {
+      "file": "tests/test_geometry_station_regression_unit.py",
+      "code": 0,
+      "seconds": 104.03,
+      "rechecked": true
+    },
+    {
+      "file": "tests/test_hydraulic_skip_loss_unit.py",
+      "code": 0,
+      "seconds": 1.57
+    },
+    {
+      "file": "tests/test_import_state_guard_unit.py",
+      "code": 0,
+      "seconds": 0.69
+    },
+    {
+      "file": "tests/test_increase_input_mode_panels_unit.py",
+      "code": 0,
+      "seconds": 10.16
+    },
+    {
+      "file": "tests/test_model_import_identity_unit.py",
+      "code": 0,
+      "seconds": 2.67
+    },
+    {
+      "file": "tests/test_open_channel_circular_case_unit.py",
+      "code": 0,
+      "seconds": 1.64
+    },
+    {
+      "file": "tests/test_open_channel_compound_trapezoid_panel_unit.py",
+      "code": 0,
+      "seconds": 3.67
+    },
+    {
+      "file": "tests/test_persistence_atomic_services_unit.py",
+      "code": 0,
+      "seconds": 0.64
+    },
+    {
+      "file": "tests/test_pressure_pipe_chain_apply_unit.py",
+      "code": 0,
+      "seconds": 3.05
+    },
+    {
+      "file": "tests/test_pressure_pipe_export_longitudinal_nodes_unit.py",
+      "code": 0,
+      "seconds": 2.14
+    },
+    {
+      "file": "tests/test_pressure_pipe_export_results_unit.py",
+      "code": 0,
+      "seconds": 1.66
+    },
+    {
+      "file": "tests/test_pressure_pipe_first_entry_unit.py",
+      "code": 0,
+      "seconds": 4.12
+    },
+    {
+      "file": "tests/test_profile_state_architecture.py",
+      "code": 0,
+      "seconds": 2.8
+    },
+    {
+      "file": "tests/test_project_atomic_save_unit.py",
+      "code": 0,
+      "seconds": 0.67
+    },
+    {
+      "file": "tests/test_project_codec_unit.py",
+      "code": 0,
+      "seconds": 0.79
+    },
+    {
+      "file": "tests/test_project_lazy_save_unit.py",
+      "code": 0,
+      "seconds": 5.67
+    },
+    {
+      "file": "tests/test_project_transaction_async_unit.py",
+      "code": 0,
+      "seconds": 0.88
+    },
+    {
+      "file": "tests/test_qt_deferred_lifecycle_unit.py",
+      "code": 0,
+      "seconds": 6.1
+    },
+    {
+      "file": "tests/test_siphon_multi_dialog_layout_unit.py",
+      "code": 0,
+      "seconds": 3.59
+    },
+    {
+      "file": "tests/test_siphon_starter_case_defaults_unit.py",
+      "code": 0,
+      "seconds": 2.2
+    },
+    {
+      "file": "tests/test_spatial_bend_event_regression.py",
+      "code": 0,
+      "seconds": 1.37,
+      "rechecked": true
+    },
+    {
+      "file": "tests/test_spatial_precision_regression_unit.py",
+      "code": 0,
+      "seconds": 1.27,
+      "rechecked": true
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_export_unit.py",
+      "code": 0,
+      "seconds": 2.63
+    },
+    {
+      "file": "tests/test_table_interaction_performance_unit.py",
+      "code": 0,
+      "seconds": 4.63
+    },
+    {
+      "file": "tests/test_task4_skip_loss_marking.py",
+      "code": 0,
+      "seconds": 1.68
+    },
+    {
+      "file": "tests/test_task_runner_and_batch_async_unit.py",
+      "code": 0,
+      "seconds": 3.06
+    },
+    {
+      "file": "tests/test_tunnel_arch_wall_height_panel_batch_unit.py",
+      "code": 0,
+      "seconds": 2.95
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py",
+      "code": 0,
+      "seconds": 3.14
+    },
+    {
+      "file": "tests/test_water_profile_batch_sync_unit.py",
+      "code": 0,
+      "seconds": 2.17
+    },
+    {
+      "file": "tests/test_water_profile_building_plan_unit.py",
+      "code": 0,
+      "seconds": 0.66
+    },
+    {
+      "file": "tests/test_water_profile_coord_precision_unit.py",
+      "code": 0,
+      "seconds": 2.8
+    },
+    {
+      "file": "tests/test_water_profile_optional_name_notice_unit.py",
+      "code": 0,
+      "seconds": 2.04
+    },
+    {
+      "file": "tests/test_water_profile_start_station_regression_unit.py",
+      "code": 0,
+      "seconds": 3.84
+    },
+    {
+      "file": "tests/test_water_profile_state_async_unit.py",
+      "code": 0,
+      "seconds": 6.57
+    },
+    {
+      "file": "tests/test_water_profile_transition_length_details_regression_unit.py",
+      "code": 0,
+      "seconds": 7.1
+    },
+    {
+      "file": "tests/test_water_profile_transition_ready_unit.py",
+      "code": 0,
+      "seconds": 4.51
+    },
+    {
+      "file": "tests/test_webengine_diagnostics_unit.py",
+      "code": 0,
+      "seconds": 0.8
+    },
+    {
+      "file": "tests/test_word_export_common_unit.py",
+      "code": 0,
+      "seconds": 2.64
+    },
+    {
+      "file": "tests/test_build_patch_floor_unit.py",
+      "code": 0,
+      "seconds": 0.72
+    }
+  ]
+}

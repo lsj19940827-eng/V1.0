@@ -9,17 +9,25 @@
 """
 
 import math
-import sys
-import os
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 
-# 添加倒虹吸系统路径以复用系数服务
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '倒虹吸水力计算系统'))
+# 必需计算依赖使用完整包入口；加载失败必须显式报告，不能切换备用系数。
 try:
-    from siphon_coefficients import CoefficientService
-except ImportError:
-    CoefficientService = None
+    from 倒虹吸水力计算系统.siphon_coefficients import CoefficientService
+    from 倒虹吸水力计算系统.siphon_models import PlanFeaturePoint, LongitudinalNode, TurnType
+except ImportError as exc:
+    raise ImportError("有压管道计算缺少必需的倒虹吸系数或模型组件") from exc
+
+SPATIAL_AVAILABLE = True  # 保留旧调用方的能力标志。
+
+
+def _require_coefficient_service():
+    """对故障注入或运行期组件丢失给出明确错误。"""
+    if CoefficientService is None:
+        raise RuntimeError("倒虹吸系数服务不可用，无法进行局部损失计算")
+    return CoefficientService
+
 
 # ============================================================
 # 1. 管材参数（复制自有压管道设计.py，避免循环依赖）
@@ -1755,14 +1763,10 @@ def calc_bend_local_loss(D_m: float, turn_radius_m: float, turn_angle_deg: float
     
     R_D = turn_radius_m / D_m
     
-    # 使用倒虹吸的系数服务查表
-    if CoefficientService:
-        xi_90 = CoefficientService.get_xi_90(R_D)
-        gamma = CoefficientService.get_gamma(turn_angle_deg)
-    else:
-        # 如果无法导入，使用简化公式
-        xi_90 = _lookup_xi90_simplified(R_D)
-        gamma = _lookup_gamma_simplified(turn_angle_deg)
+    # 统一使用正式表，缺少服务时明确失败。
+    service = _require_coefficient_service()
+    xi_90 = service.get_xi_90(R_D)
+    gamma = service.get_gamma(turn_angle_deg)
     
     xi_bend = xi_90 * gamma
     hj = xi_bend * V_m_s ** 2 / (2 * GRAVITY)
@@ -1784,23 +1788,13 @@ def calc_bend_local_loss(D_m: float, turn_radius_m: float, turn_angle_deg: float
 
 
 def _lookup_xi90_simplified(R_D: float) -> float:
-    """简化的直角弯道系数查表（备用）"""
-    table = [
-        (0.5, 1.20), (1.0, 0.80), (1.5, 0.60), (2.0, 0.48),
-        (3.0, 0.36), (4.0, 0.30), (5.0, 0.29), (6.0, 0.28),
-        (7.0, 0.27), (8.0, 0.26), (9.0, 0.25), (10.0, 0.24),
-    ]
-    return _linear_interpolate(table, R_D)
+    """兼容历史私有入口，始终查正式系数表。"""
+    return _require_coefficient_service().get_xi_90(R_D)
 
 
 def _lookup_gamma_simplified(angle: float) -> float:
-    """简化的角度修正系数查表（备用）"""
-    table = [
-        (5, 0.125), (10, 0.23), (20, 0.40), (30, 0.55),
-        (40, 0.65), (50, 0.75), (60, 0.83), (70, 0.88),
-        (80, 0.95), (90, 1.00), (100, 1.05), (120, 1.13), (140, 1.20),
-    ]
-    return _linear_interpolate(table, angle)
+    """兼容历史私有入口，始终查正式角度修正表。"""
+    return _require_coefficient_service().get_gamma(angle)
 
 
 def _linear_interpolate(table: List[Tuple[float, float]], x: float) -> float:
@@ -2228,21 +2222,6 @@ def calc_total_head_loss(
 # 7. 独立叠加模式计算
 # ============================================================
 
-# 导入倒虹吸兼容模型和系数表；保留历史兼容对象，不在本计算入口调用三维空间合并。
-import sys
-import os
-_siphon_dir = os.path.join(os.path.dirname(__file__), '..', '..', '倒虹吸水力计算系统')
-if _siphon_dir not in sys.path:
-    sys.path.insert(0, _siphon_dir)
-
-try:
-    from siphon_models import PlanFeaturePoint, LongitudinalNode, TurnType
-    from siphon_coefficients import CoefficientService
-    SPATIAL_AVAILABLE = True
-except ImportError:
-    SPATIAL_AVAILABLE = False
-
-
 def _convert_ip_points_to_plan_features(ip_points: List[Dict]) -> List[PlanFeaturePoint]:
     """
     将ip_points转换为PlanFeaturePoint列表
@@ -2537,16 +2516,9 @@ def _calc_plan_local_losses(
 
 
 def _calc_fold_xi(angle_deg: float) -> float:
-    """计算折管局部损失系数。"""
-    if CoefficientService:
-        xi_value = CoefficientService.calculate_fold_coeff(angle_deg, verbose=False)
-        if isinstance(xi_value, tuple):
-            return float(xi_value[0])
-        return float(xi_value)
-
-    half_angle_rad = math.radians(angle_deg) / 2
-    sin_half = math.sin(half_angle_rad)
-    return 0.9457 * sin_half ** 2 + 2.047 * sin_half ** 4
+    """计算折管局部损失系数，缺少统一服务时明确失败。"""
+    xi_value = _require_coefficient_service().calculate_fold_coeff(angle_deg, verbose=False)
+    return float(xi_value[0] if isinstance(xi_value, tuple) else xi_value)
 
 
 def calc_fold_local_loss(turn_angle_deg: float, V_pipe: float) -> Tuple[float, float, Dict]:

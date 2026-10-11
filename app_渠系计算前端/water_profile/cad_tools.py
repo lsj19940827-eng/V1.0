@@ -13001,16 +13001,6 @@ class SectionSummaryDialog(QDialog):
                     formatted_names[flow_section_idx].append(base_name)
         return formatted_names
 
-    def _build_q_segment_label(self, flow_section_idx):
-        base_label = self._segment_name(flow_section_idx)
-        names = self._q_segment_structure_names.get(flow_section_idx, [])
-        if not names:
-            return base_label, ""
-        if len(names) <= 2:
-            summary = "、".join(names)
-        else:
-            summary = f"{names[0]}、{names[1]}等{len(names)}项"
-        return f"{base_label}（{summary}）", "、".join(names)
 
     def _pressure_pipe_material_key(self, material_value):
         normalizer = getattr(self, "_normalize_pressure_pipe_material_key", None)
@@ -13030,18 +13020,7 @@ class SectionSummaryDialog(QDialog):
         lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         return lbl
 
-    def _styled_name_value_label(self, text, tooltip_text="", max_lines=3):
-        lbl = _MultiLineElidedLabel(text, tooltip_text=tooltip_text, max_lines=max_lines)
-        lbl.setStyleSheet("font-size:12px;")
-        return lbl
 
-    def _build_q_segment_label(self, flow_section_idx):
-        base_label = self._segment_name(flow_section_idx)
-        names = self._q_segment_structure_names.get(flow_section_idx, [])
-        if not names:
-            return base_label, ""
-        summary = ", ".join(names)
-        return f"{base_label}（{summary}）", summary
 
     def _styled_name_value_label(self, text, tooltip_text="", max_lines=None):
         if max_lines is not None:

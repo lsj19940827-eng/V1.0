@@ -14,6 +14,12 @@
 """
 
 import math
+from calc_渠系计算算法内核.flat_bottom_circle import (
+    build_flat_bottom_circle_geometry,
+    flat_bottom_circle_area,
+    flat_bottom_circle_perimeter,
+    flat_bottom_circle_surface_width,
+)
 from typing import Callable, Dict, Any, Tuple
 
 # ============================================================
@@ -109,31 +115,11 @@ def _ceil_to_digits(value: float, digits: int) -> float:
 
 
 def _build_flat_bottom_circular_geometry(D: float, B: float) -> Dict[str, float]:
-    """构造平底圆形隧洞几何参数。"""
-    if D <= 0:
-        raise ValueError("平底圆形断面要求直径 D 大于 0")
-    if B <= 0:
-        raise ValueError("平底圆形断面要求平底宽 B 大于 0")
-    if B > D + GEOM_TOLERANCE:
-        raise ValueError("平底圆形断面要求平底宽 B 不得大于直径 D")
-
-    radius = D / 2.0
-    half_bottom = B / 2.0
-    center_y = math.sqrt(max(radius * radius - half_bottom * half_bottom, 0.0))
-    cut_height = radius - center_y
-    H_total = radius + center_y
-    cut_theta = 2.0 * math.asin(_clamp(B / D, -1.0, 1.0))
-    cut_area = radius * radius * (cut_theta - math.sin(cut_theta)) / 2.0
-    A_total = math.pi * radius * radius - cut_area
-    return {
-        "D": D,
-        "B": B,
-        "radius": radius,
-        "center_y": center_y,
-        "cut_height": cut_height,
-        "H_total": H_total,
-        "A_total": A_total,
-    }
+    """保留历史返回字段，由共享纯几何构造平底圆形。"""
+    geometry = build_flat_bottom_circle_geometry(D, B)
+    return {key: geometry[key] for key in (
+        "D", "B", "radius", "center_y", "cut_height", "H_total", "A_total"
+    )}
 
 
 # ============================================================
@@ -201,42 +187,36 @@ def calculate_circular_outputs(D: float, h: float, n: float, slope: float) -> Di
 
 
 def calculate_flat_bottom_circular_area(D: float, B: float, h: float) -> float:
-    """计算平底圆形断面过水面积。"""
+    """计算平底圆形断面过水面积，保留原有浅水容差。"""
     if D <= 0 or B <= 0 or h <= 0:
         return 0.0
     geom = _build_flat_bottom_circular_geometry(D, B)
     h = _clamp(h, 0.0, geom["H_total"])
     if h <= GEOM_TOLERANCE:
         return 0.0
-    full_depth = geom["cut_height"] + h
-    return calculate_circular_area(D, full_depth) - calculate_circular_area(D, geom["cut_height"])
+    return flat_bottom_circle_area(geom, h)
 
 
 def calculate_flat_bottom_circular_perimeter(D: float, B: float, h: float) -> float:
-    """计算平底圆形断面湿周。"""
+    """计算平底圆形断面湿周，保留原有浅水容差。"""
     if D <= 0 or B <= 0 or h <= 0:
         return 0.0
     geom = _build_flat_bottom_circular_geometry(D, B)
     h = _clamp(h, 0.0, geom["H_total"])
     if h <= GEOM_TOLERANCE:
         return 0.0
-    radius = geom["radius"]
-    center_y = geom["center_y"]
-    start_angle = -math.asin(_clamp(center_y / radius, -1.0, 1.0))
-    water_angle = math.asin(_clamp((h - center_y) / radius, -1.0, 1.0))
-    return B + 2.0 * radius * (water_angle - start_angle)
+    return flat_bottom_circle_perimeter(geom, h)
 
 
 def calculate_flat_bottom_circular_surface_width(D: float, B: float, h: float) -> float:
-    """计算平底圆形断面水面宽。"""
+    """计算平底圆形断面水面宽，保留原有浅水容差。"""
     if D <= 0 or B <= 0 or h <= 0:
         return 0.0
     geom = _build_flat_bottom_circular_geometry(D, B)
     h = _clamp(h, 0.0, geom["H_total"])
-    if h <= GEOM_TOLERANCE or h >= geom["H_total"] - GEOM_TOLERANCE:
+    if h <= GEOM_TOLERANCE:
         return 0.0
-    radius = geom["radius"]
-    return 2.0 * math.sqrt(max(0.0, radius * radius - (h - geom["center_y"]) ** 2))
+    return flat_bottom_circle_surface_width(geom, h)
 
 
 def calculate_flat_bottom_circular_outputs(D: float, B: float, h: float, n: float, slope: float) -> Dict[str, float]:

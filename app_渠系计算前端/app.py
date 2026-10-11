@@ -79,6 +79,8 @@ def _create_siphon_panel(*, siphon_manager):
     return SiphonPanel(
         siphon_manager=siphon_manager,
         siphon_name="单倒虹吸",
+        # 主窗口的工程状态由 ProjectManager 恢复，避免延迟自动存档覆盖刚打开的工程。
+        disable_autosave_load=True,
     )
 
 
@@ -101,6 +103,7 @@ def _create_spillway_steep_chute_panel():
     from app_渠系计算前端.spillway_steep_chute import SpillwaySteepChutePanel
 
     return SpillwaySteepChutePanel()
+
 
 
 class NavButton(PushButton):
@@ -228,8 +231,9 @@ class MainWindow(QMainWindow):
         from 推求水面线.managers.siphon_manager import SiphonManager
         from 推求水面线.managers.pressure_pipe_manager import PressurePipeManager
 
-        self.siphon_manager = SiphonManager()
-        self.pressure_pipe_manager = PressurePipeManager()
+        # 主工程数据只通过 ProjectCodec 导入，启动时不读取全局历史旁文件。
+        self.siphon_manager = SiphonManager(load_existing=False)
+        self.pressure_pipe_manager = PressurePipeManager(load_existing=False)
 
     def _build_panel_registry(self) -> PanelRegistry:
         descriptors = [
@@ -579,16 +583,6 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self._update_recent_menu()
 
-        # 更新 SiphonManager 的项目路径
-        if hasattr(self, 'siphon_manager') and self.siphon_manager:
-            self.siphon_manager.set_project_path(path)
-            print(f"[SiphonManager] 项目路径已更新: {path}")
-
-        # 更新 PressurePipeManager 的项目路径
-        if hasattr(self, 'pressure_pipe_manager') and self.pressure_pipe_manager:
-            self.pressure_pipe_manager.set_project_path(path)
-            print(f"[PressurePipeManager] 项目路径已更新: {path}")
-
     def _on_dirty_changed(self, is_dirty: bool):
         """脏状态变化时更新窗口标题"""
         self._update_window_title()
@@ -727,6 +721,11 @@ class MainWindow(QMainWindow):
                 return
         else:
             debug_print("[DEBUG] No project_manager found")
+
+        if hasattr(self, 'project_manager') and not self.project_manager.finish_background_tasks():
+            self.statusBar().showMessage("正在结束后台任务，请稍后再关闭。", 5000)
+            event.ignore()
+            return
 
         debug_print("[DEBUG] Proceeding with close")
         self.hide()

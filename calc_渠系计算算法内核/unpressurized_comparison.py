@@ -4,8 +4,6 @@ import math
 import re
 from functools import lru_cache
 
-from scipy.optimize import brentq
-
 STANDARD_SLOPES = (500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000)
 DEFAULT_ROUGHNESS = 0.014
 DEFAULT_RANGE = (500, 4000, 500)
@@ -14,6 +12,13 @@ DEFAULT_CLEARANCE_AREA = 15.0
 MAX_CUSTOM_SLOPES = 200
 FLOW_BASES = ("设计流量", "加大流量")
 MODEL_NOTE = "圆管无压均匀流；多解区采用较浅水深支，不包含下游顶托影响。"
+
+
+def brentq(*args, **kwargs):
+    """实际求解时再加载数值库，读取坡度配置和创建界面不加载求解器。"""
+    from scipy.optimize import brentq as solve
+
+    return solve(*args, **kwargs)
 
 
 def parse_slope_text(text):

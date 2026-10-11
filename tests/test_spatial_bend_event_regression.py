@@ -1,5 +1,6 @@
 import math
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -134,8 +135,16 @@ def test_ip_style_arc_points_keep_qz_semantics():
     assert (event.s_a, event.s_b) == pytest.approx(expected_interval, abs=1e-3)
 
 
-def test_independent_plan_bend_loss_uses_feature_points_once_per_turn():
+def test_independent_plan_bend_loss_uses_feature_points_once_per_turn(monkeypatch):
     plan_points = _load_sample_plan_points()
+    bend_calls = []
+    original_bend_coeff = CoefficientService.calculate_bend_coeff
+
+    def tracked_bend_coeff(radius, diameter, angle, **kwargs):
+        bend_calls.append((radius, angle))
+        return original_bend_coeff(radius, diameter, angle, **kwargs)
+
+    monkeypatch.setattr(CoefficientService, "calculate_bend_coeff", tracked_bend_coeff)
     result = HydraulicCore.execute_calculation(
         _sample_params(),
         [],
@@ -148,10 +157,13 @@ def test_independent_plan_bend_loss_uses_feature_points_once_per_turn():
         for point in plan_points
         if point.turn_angle > 0.1 and point.turn_type in (TurnType.ARC, TurnType.FOLD)
     ]
+    expected_bends = [(point.turn_radius, point.turn_angle) for point in counted_points
+                      if point.turn_type == TurnType.ARC and point.turn_radius > 0]
+    assert bend_calls == expected_bends
     expected_sum = 0.0
     for point in counted_points:
         if point.turn_type == TurnType.ARC and point.turn_radius > 0:
-            expected_sum += CoefficientService.calculate_bend_coeff(
+            expected_sum += original_bend_coeff(
                 point.turn_radius,
                 result.diameter,
                 point.turn_angle,
@@ -165,11 +177,17 @@ def test_independent_plan_bend_loss_uses_feature_points_once_per_turn():
     detail_lines = [
         line
         for line in result.calculation_steps
-        if "平面弯管" in line or "平面折管" in line
+        if re.fullmatch(r"  平面(?:弯管|折管)\d+: .+", line)
     ]
+    # 逐弯道几何明细和合计式中的贡献项各出现一次，不能把两层展示误算为重复计损。
+    contribution_lines = [line for line in result.calculation_steps
+                          if re.fullmatch(r"    平面(?:弯管|折管)\d+（自动计算）: ξ=\d+\.\d{4}", line)]
 
     assert result.data_mode == "仅平面（独立计算）"
     assert len(detail_lines) == len(counted_points)
+    assert len(contribution_lines) == len(counted_points)
+    assert [int(re.search(r"(?:弯管|折管)(\d+)", line).group(1)) for line in detail_lines] == list(range(1, len(counted_points) + 1))
+    assert [int(re.search(r"(?:弯管|折管)(\d+)", line).group(1)) for line in contribution_lines] == list(range(1, len(counted_points) + 1))
     assert result.xi_sum_middle == pytest.approx(expected_sum, rel=1e-6, abs=1e-6)
 
 

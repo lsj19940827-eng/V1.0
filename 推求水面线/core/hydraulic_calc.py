@@ -81,18 +81,17 @@ def _normalize_fill_channel_value(value: str) -> str:
     text = str(value or "").strip()
     return SPILLWAY_STEEP_CHUTE_TEXT if text in FILL_CHANNEL_ALIASES else text
 
-try:
-    from app_渠系计算前端.tunnel.geometry import (
-        build_flat_bottom_circle_geometry,
-        flat_bottom_circle_area,
-        flat_bottom_circle_perimeter,
-        flat_bottom_circle_surface_width,
-    )
-except Exception:
-    build_flat_bottom_circle_geometry = None
-    flat_bottom_circle_area = None
-    flat_bottom_circle_perimeter = None
-    flat_bottom_circle_surface_width = None
+from 推求水面线.models.pressure_pipe_override import (
+    normalize_pressure_pipe_window_override,
+    get_pressure_pipe_window_override,
+)
+
+from calc_渠系计算算法内核.flat_bottom_circle import (
+    build_flat_bottom_circle_geometry,
+    flat_bottom_circle_area,
+    flat_bottom_circle_perimeter,
+    flat_bottom_circle_surface_width,
+)
 
 
 class HydraulicCalculator:
@@ -127,17 +126,6 @@ class HydraulicCalculator:
         # 有压管道水头损失字典（按名称匹配）
         self.pressure_pipe_losses: Dict[str, float] = {}
 
-    def _get_effective_structure_value(self, node: Optional[ChannelNode]) -> str:
-        """读取节点的有效结构类型，暗涵优先使用家族子类型。"""
-        if node is None:
-            return ""
-        params = getattr(node, "section_params", {}) or {}
-        culvert_family_type = str(params.get(self._CULVERT_FAMILY_TYPE_KEY, "") or "").strip()
-        if culvert_family_type:
-            return culvert_family_type
-        structure_type = getattr(node, "structure_type", None)
-        value = structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
-        return _normalize_fill_channel_value(value)
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
@@ -203,88 +191,15 @@ class HydraulicCalculator:
             "effective_length": effective_length,
         }
 
-    def _normalize_pressure_pipe_window_override(self, value) -> Dict[str, object]:
-        """规范化匿名有压管道窗口覆盖载荷。"""
-        if not isinstance(value, dict):
-            return {}
-        enabled = bool(value.get("enabled", False))
-        identity = str(value.get("identity", "") or "").strip()
-        if not enabled or not identity:
-            return {}
-        def _coerce_row_index(raw_value) -> int:
-            """把行号字段规范为整数，缺失时回退到 -1。"""
-            if raw_value is None:
-                return -1
-            if isinstance(raw_value, str) and not raw_value.strip():
-                return -1
-            try:
-                return int(raw_value)
-            except (TypeError, ValueError):
-                return -1
-        normalized = {
-            "enabled": True,
-            "identity": identity,
-            "storage_key": str(value.get("storage_key", "") or identity).strip() or identity,
-            "display_name": str(value.get("display_name", "") or "").strip(),
-            "group_mode": str(value.get("group_mode", "") or "unnamed_row_segment").strip(),
-            "data_mode": str(value.get("data_mode", "") or "").strip(),
-            "applied_at": str(value.get("applied_at", "") or "").strip(),
-            "calc_steps": str(value.get("calc_steps", "") or "").strip(),
-            "target_row_index": _coerce_row_index(value.get("target_row_index", -1)),
-            "upstream_row_index": _coerce_row_index(value.get("upstream_row_index", -1)),
-        }
-        for field_name in (
-            "Q",
-            "D",
-            "total_length",
-            "pipe_velocity",
-            "friction_loss",
-            "total_bend_loss",
-            "local_loss",
-            "inlet_transition_loss",
-            "outlet_transition_loss",
-            "total_head_loss",
-        ):
-            try:
-                normalized[field_name] = float(value.get(field_name, 0.0) or 0.0)
-            except (TypeError, ValueError):
-                normalized[field_name] = 0.0
-        manual_total = value.get("manual_total_head_loss", None)
-        if manual_total is not None and str(manual_total).strip() != "":
-            try:
-                normalized["manual_total_head_loss"] = float(manual_total)
-            except (TypeError, ValueError):
-                pass
-        manual_source = str(value.get("manual_override_source", "") or "").strip()
-        if manual_source:
-            normalized["manual_override_source"] = manual_source
-        manual_updated_at = str(value.get("manual_override_updated_at", "") or "").strip()
-        if manual_updated_at:
-            normalized["manual_override_updated_at"] = manual_updated_at
-        for detail_field in ("friction_details", "bend_details", "local_details"):
-            detail_value = value.get(detail_field, {})
-            normalized[detail_field] = copy.deepcopy(detail_value) if isinstance(detail_value, dict) else {}
-        return normalized
+    @staticmethod
+    def _normalize_pressure_pipe_window_override(value) -> Dict[str, object]:
+        """兼容旧计算入口，统一采用专项结果契约。"""
+        return normalize_pressure_pipe_window_override(value)
 
-    def _get_pressure_pipe_window_override(self, node: Optional[ChannelNode]) -> Dict[str, object]:
-        """读取逐段有压成员窗口覆盖结果。"""
-        if node is None:
-            return {}
-        override = self._normalize_pressure_pipe_window_override(
-            getattr(node, "pressure_pipe_window_override", {})
-        )
-        if not override:
-            params = getattr(node, "section_params", {}) or {}
-            override = self._normalize_pressure_pipe_window_override(
-                params.get("pressure_pipe_window_override", {})
-            )
-        if override:
-            normalized_copy = copy.deepcopy(override)
-            setattr(node, "pressure_pipe_window_override", normalized_copy)
-            params = getattr(node, "section_params", None)
-            if isinstance(params, dict):
-                params["pressure_pipe_window_override"] = copy.deepcopy(override)
-        return override
+    @staticmethod
+    def _get_pressure_pipe_window_override(node: Optional[ChannelNode]) -> Dict[str, object]:
+        """从节点唯一真源读取专项结果并迁移旧工程。"""
+        return get_pressure_pipe_window_override(node)
 
     @staticmethod
     def _is_pressure_pipe_row_override_mode(group_mode: str) -> bool:
@@ -472,41 +387,41 @@ class HydraulicCalculator:
 
     def _build_flat_bottom_circle_geom(self, D: float, B: float):
         """构造平底圆形共享几何，异常时返回 None。"""
-        if build_flat_bottom_circle_geometry is None or D <= ZERO_TOLERANCE or B <= ZERO_TOLERANCE:
+        if D <= ZERO_TOLERANCE or B <= ZERO_TOLERANCE:
             return None
         try:
             return build_flat_bottom_circle_geometry(D, B)
-        except Exception:
+        except ValueError:
             return None
 
     def _flat_bottom_circle_area(self, D: float, B: float, h: float) -> float:
         """计算平底圆形面积。"""
         geom = self._build_flat_bottom_circle_geom(D, B)
-        if geom is None or flat_bottom_circle_area is None:
+        if geom is None:
             return 0.0
         try:
             return float(flat_bottom_circle_area(geom, h))
-        except Exception:
+        except ValueError:
             return 0.0
 
     def _flat_bottom_circle_perimeter(self, D: float, B: float, h: float) -> float:
         """计算平底圆形湿周。"""
         geom = self._build_flat_bottom_circle_geom(D, B)
-        if geom is None or flat_bottom_circle_perimeter is None:
+        if geom is None:
             return 0.0
         try:
             return float(flat_bottom_circle_perimeter(geom, h))
-        except Exception:
+        except ValueError:
             return 0.0
 
     def _flat_bottom_circle_surface_width(self, D: float, B: float, h: float) -> float:
         """计算平底圆形水面宽。"""
         geom = self._build_flat_bottom_circle_geom(D, B)
-        if geom is None or flat_bottom_circle_surface_width is None:
+        if geom is None:
             return 0.0
         try:
             return float(flat_bottom_circle_surface_width(geom, h))
-        except Exception:
+        except ValueError:
             return 0.0
 
     def _get_compound_trapezoid_params(self, params: dict) -> dict:

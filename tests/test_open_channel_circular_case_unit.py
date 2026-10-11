@@ -2,11 +2,12 @@
 """Unit tests for open-channel circular case parsing."""
 
 import importlib
+import pytest
 
 
 def test_parse_circular_case_uses_manual_d_key():
     mod = importlib.import_module(
-        "\u6e20\u7cfb\u65ad\u9762\u8bbe\u8ba1.open_channel.panel"
+        "app_渠系计算前端.open_channel.panel"
     )
     panel_cls = mod.OpenChannelPanel
 
@@ -29,3 +30,4 @@ def test_parse_circular_case_uses_manual_d_key():
     assert params["manual_D"] == 2.8
     assert "manual_b" not in params
     assert result.get("success") is True
+    assert result["D_design"] == pytest.approx(2.8)

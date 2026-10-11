@@ -601,7 +601,7 @@ class WaterProfileCalculator:
             params[SPILLWAY_STEEP_CHUTE_PARAM_KEY] = payload
 
     def calculate_all(self, nodes: List[ChannelNode], 
-                      open_channel_callback=None) -> List[ChannelNode]:
+                      open_channel_callback=None, *, cancel_check=None) -> List[ChannelNode]:
         """
         执行完整计算流程
         
@@ -620,6 +620,8 @@ class WaterProfileCalculator:
         Returns:
             计算完成的节点列表（包含渐变段行）
         """
+        checkpoint = cancel_check or (lambda: None)
+        checkpoint()
         if not nodes:
             return nodes
         
@@ -628,6 +630,7 @@ class WaterProfileCalculator:
         
         # 1. 预处理
         self.preprocess_nodes(nodes)
+        checkpoint()
         
         # 2. 识别并插入渐变段行和明渠段（仅在尚未插入时执行）
         if not has_auxiliary_nodes:
@@ -635,6 +638,7 @@ class WaterProfileCalculator:
 
         # 3. 几何计算
         self._calculate_geometry_preserving_special_turns(nodes)
+        checkpoint()
 
         # 3b. 泄水渠与陡坡按连续专项链标记，供表3水面线联算调用专项内核
         self._hydrate_spillway_steep_chute_flow_context(nodes)
@@ -642,30 +646,39 @@ class WaterProfileCalculator:
         
         # 4. 水力计算（包含渐变段损失计入下游水位）
         self.calculate_hydraulics(nodes)
+        checkpoint()
         
         # 5. 渐变段水头损失计算
         self.calculate_transition_losses(nodes)
+        checkpoint()
         
         # 6. 更新总水头损失（使用真正的渐变段损失值替换预估值）
         self._update_total_head_loss(nodes)
+        checkpoint()
         
         # 7. 使用已计算的渐变段损失重新递推水位
         self.hyd_calc.recalculate_water_levels_with_transition_losses(nodes)
+        checkpoint()
 
         # 8. 应用公式10.3.6计算倒虹吸出口渐变段末端渠底高程
         self.hyd_calc.apply_siphon_outlet_elevation(nodes)
+        checkpoint()
 
         # 9. 倒虹吸内部水位按倒进/倒出桩号线性分布（只影响展示和导出水位线）
         self.hyd_calc.apply_siphon_linear_water_level_distribution(nodes)
+        checkpoint()
 
         # 10. 对整表末尾闸行执行高程回推（仅补缺失项）
         self.hyd_calc.apply_terminal_gate_elevation_backfill(nodes)
+        checkpoint()
         
         # 11. 计算累计总水头损失
         self._calculate_cumulative_head_loss(nodes)
+        checkpoint()
 
         # 12. 导出前约束：真实节点同桩号高程冲突校验
         self._validate_real_node_station_conflicts(nodes)
+        checkpoint()
         
         return nodes
     

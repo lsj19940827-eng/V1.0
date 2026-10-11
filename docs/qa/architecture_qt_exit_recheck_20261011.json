@@ -1,0 +1,40 @@
+{
+  "exit_code": 0,
+  "exit_code_hex": "0x0",
+  "elapsed_seconds": 14.0,
+  "stdout": "QT_APP_RETAINED\n......................................                                   [100%]\n38 passed in 12.24s\nPYTEST_RETURNED 0\n",
+  "stderr": "",
+  "environment": "Qt offscreen, QTextBrowser, WMI guard before project imports, strong QApplication reference",
+  "normal_interpreter_exit": true,
+  "production_code_changed": false,
+  "counts": {
+    "tests": 38,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "by_test_file": {
+    "tests.test_water_profile_start_station_regression_unit": 2,
+    "tests.test_water_profile_transition_length_details_regression_unit": 20,
+    "tests.test_water_profile_flow_selector_unit": 7,
+    "tests.test_water_profile_transition_qxproj_roundtrip_unit": 6,
+    "tests.test_water_profile_init_shared_batch_results_unit": 3
+  },
+  "all_passed": true,
+  "pytest_main_returned": true,
+  "scope_note": "本轮五文件组合的所有断言及Windows进程正常退出均已验证；没有复现此前逐文件执行器的原生退出异常，因此不将其根因推断为已经确证。",
+  "lifecycle_note": "QApplication在pytest收集前创建并由启动脚本模块强引用保持到正常解释器退出；未清空QObject属性、强制GC、额外sendPostedEvents或调用os._exit。",
+  "verification_script": "\"\"\"保留 Qt 应用生命周期的退出复核；不跳过解释器正常收尾。\"\"\"\nimport faulthandler\nimport os\nimport platform\nimport sys\nfrom pathlib import Path\n\nfaulthandler.enable(all_threads=True)\nif sys.platform.startswith('win'):\n    def _disabled_wmi_query(*args, **kwargs):\n        raise OSError('Windows WMI query disabled to avoid startup hang')\n    platform._wmi_query = _disabled_wmi_query\n    if hasattr(platform, '_wmi'):\n        platform._wmi = None\n    platform._uname_cache = None\nsys.path.insert(0, str(Path.cwd()))\nos.environ['QT_QPA_PLATFORM'] = 'offscreen'\nos.environ['CODEX_FORCE_QTEXTBROWSER'] = '1'\nos.environ['QTWEBENGINE_DISABLE_SANDBOX'] = '1'\nfrom PySide6.QtWidgets import QApplication\n\napp = QApplication.instance() or QApplication([])\nprint('QT_APP_RETAINED', flush=True)\nimport pytest\n\nfiles = [\n    'tests/test_water_profile_start_station_regression_unit.py',\n    'tests/test_water_profile_transition_length_details_regression_unit.py',\n    'tests/test_water_profile_flow_selector_unit.py',\n    'tests/test_water_profile_transition_qxproj_roundtrip_unit.py',\n    'tests/test_water_profile_init_shared_batch_results_unit.py',\n]\ncode = pytest.main([*files, '-q', '--tb=short', '--basetemp', '.tmp/recheck_qt_exit/pytest',\n                    '--junitxml', 'docs/qa/architecture_qt_exit_recheck_20261011.xml'])\nprint('PYTEST_RETURNED', int(code), flush=True)\nraise SystemExit(code)\n",
+  "outer_runner": "\"\"\"由外层进程记录断言结果和真实操作系统退出码。\"\"\"\nimport json\nimport os\nimport subprocess\nimport sys\nimport time\nfrom pathlib import Path\n\nroot = Path.cwd()\nenv = dict(os.environ)\nenv['PYTHONIOENCODING'] = 'utf-8'\nstart = time.monotonic()\nrun = subprocess.run([str(root/'.venv/Scripts/python.exe'), str(root/'.tmp/recheck_qt_exit/child.py')],\n                     cwd=root, env=env, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)\nrecord = {'exit_code': run.returncode, 'exit_code_hex': hex(run.returncode & 0xffffffff),\n          'elapsed_seconds': round(time.monotonic()-start, 2), 'stdout': run.stdout, 'stderr': run.stderr,\n          'environment': 'Qt offscreen, QTextBrowser, WMI guard before project imports, strong QApplication reference',\n          'normal_interpreter_exit': True, 'production_code_changed': False}\n(root/'docs/qa/architecture_qt_exit_recheck_20261011.json').write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding='utf-8')\nprint(run.stdout)\nprint(run.stderr)\nprint('ACTUAL_PROCESS_EXIT', record['exit_code_hex'], flush=True)\n",
+  "source_sha256": {
+    "tests/test_water_profile_start_station_regression_unit.py": "ca0e84ba5e3244c727aeaa28e87f30912fc8561e0f43bd1bf5b5ab99db952821",
+    "tests/test_water_profile_transition_length_details_regression_unit.py": "a822a79f9db7829597bd1769207932d2a0b82e67a94ea07a6c036a56b5a8ebbd",
+    "tests/test_water_profile_flow_selector_unit.py": "346c346b858c578a0a90962568cfba7b6bb728c01d8004bdc87143f2f9d82957",
+    "tests/test_water_profile_transition_qxproj_roundtrip_unit.py": "214f54772671142777cfb69864b71dabb18f78c1926b58f0c7072f811f6b419a",
+    "tests/test_water_profile_init_shared_batch_results_unit.py": "f402a0e668497351a96131312b4cbe56b7414890bf73c48f09061c40bef62744",
+    "app_渠系计算前端/water_profile/panel.py": "d77534b1fe580bbb58655f4ba991226cee5318e32395d160240d75037e355d8c",
+    "app_渠系计算前端/water_profile/table_state_adapter.py": "41a5796b35f000a95ef3e7e2688a06b6d1bbecf0c5de58c3dcf1667d13f75d98",
+    "推求水面线/models/profile_state.py": "86ca8bc198c00fc37ffdc40046ee2758033b44256c1b64a59f05247fa46ea390",
+    "推求水面线/models/profile_node_codec.py": "e52580acc132a60364909366d409a4c6ffb9c9f49875adb5f713edfe311a2f59"
+  }
+}

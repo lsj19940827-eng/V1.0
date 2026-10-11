@@ -7,6 +7,9 @@ Task 4 验证测试：渐变段跳过损失标记逻辑
 
 import sys
 import os
+import copy
+
+import pytest
 
 # 添加父目录到路径以支持相对导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
@@ -254,9 +257,10 @@ def test_with_open_channel_insertion():
         "隧洞侧的进口渐变段应标记 skip_loss=False"
 
 
-def test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess():
+@pytest.mark.parametrize("same_flow_section", [True, False])
+def test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess(same_flow_section):
     """
-    验证空名称有压管道包夹隧洞时，预处理后仍能在两侧插入渐变段。
+    验证匿名管道夹隧洞：同段洞口为隐式边界，跨段仍在两侧插入渐变段。
     """
     pipe_before = ChannelNode()
     pipe_before.structure_type = StructureType.from_string("有压管道")
@@ -285,16 +289,28 @@ def test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_prepr
     settings = ProjectSettings()
     calculator = WaterProfileCalculator(settings)
     nodes = [pipe_before, tunnel_inlet, tunnel_outlet, pipe_after]
+    for node in nodes:
+        node.flow_section = "1"
+    if not same_flow_section:
+        pipe_after.flow_section = "2"
 
     calculator.preprocess_nodes(nodes)
+    before = copy.deepcopy([node.to_dict() for node in nodes])
     result_nodes = calculator.identify_and_insert_transitions(nodes)
 
     transition_rows = [node for node in result_nodes if getattr(node, "is_transition", False)]
 
-    assert len(transition_rows) >= 2, "空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段"
-    assert getattr(result_nodes[1], "is_transition", False) == True, "隧洞进口前应出现渐变段"
-    assert getattr(result_nodes[-2], "is_transition", False) == True, "隧洞出口后应出现渐变段"
-    assert all(node.transition_skip_loss for node in transition_rows), "含有压管道侧的渐变段应保持 skip_loss=True"
+    assert [node.to_dict() for node in nodes] == before, "插段识别不能修改真实输入节点"
+    assert [node for node in result_nodes if not node.is_transition] == nodes
+    if same_flow_section:
+        assert transition_rows == [], "同段连续管线中的匿名洞口不重复插默认渐变段"
+        assert len(result_nodes) == 4
+    else:
+        assert len(transition_rows) == 2, "跨流量段不能套用隐式洞口，应保留两侧插段"
+        assert result_nodes[1].is_transition, "隧洞进口前应出现渐变段"
+        assert result_nodes[-2].is_transition, "隧洞出口后应出现渐变段"
+        assert all(node.transition_skip_loss for node in transition_rows)
+        assert [node.transition_length for node in transition_rows] == pytest.approx([30.0, 30.0])
     assert nodes[0].in_out == InOutType.NORMAL, "空名称有压管道原始进出口状态仍应保持 NORMAL"
     assert nodes[-1].in_out == InOutType.NORMAL, "空名称有压管道原始进出口状态仍应保持 NORMAL"
 
@@ -330,9 +346,10 @@ def test_xxpipe_unnamed_pressure_pipe_next_to_directional_drill_has_no_transitio
     assert result["need_open_channel"] == False, "xx管 匿名有压管道紧邻定向钻时不应再弹补段"
 
 
-def test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps():
+@pytest.mark.parametrize("same_flow_section", [True, False])
+def test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps(same_flow_section):
     """
-    验证 xx管 模式下，整组顺序里只保留匿名有压管道与隧洞之间的两处补段。
+    验证预扫描与插入一致：同段隐式洞口不补段，跨段只保留隧洞两侧补段。
     """
     def _make_node(flow_section, structure, station, name="", in_out=InOutType.NORMAL, diameter=1.0):
         node = ChannelNode()
@@ -358,6 +375,8 @@ def test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps():
         _make_node(3, "顶管", 680.0, "饿了么", InOutType.OUTLET, 0.8),
         _make_node(3, "有压管道", 740.0, "", InOutType.NORMAL, 0.8),
     ]
+    if not same_flow_section:
+        nodes[3].flow_section = "2"
 
     settings = ProjectSettings()
     settings.channel_level = "支管"
@@ -370,13 +389,20 @@ def test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps():
     transition_rows = [node for node in result_nodes if getattr(node, "is_transition", False)]
     open_channel_rows = [node for node in result_nodes if getattr(node, "is_auto_inserted_channel", False)]
 
-    assert len(gaps) == 2, "xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧"
-    assert {(gap["prev_name"], gap["next_name"]) for gap in gaps} == {
-        ("", "纯牛马"),
-        ("纯牛马", ""),
-    }, "预扫描补段应只落在纯牛马隧洞前后"
-    assert len(open_channel_rows) == 0, "无可复制明渠参考时，不应额外插入补段行"
-    assert len(transition_rows) == 2, "实际插入时应只保留纯牛马前后两条渐变段"
+    assert len(open_channel_rows) == 0, "未提供有效流量、坡降和参考时不自动拟定明渠"
+    if same_flow_section:
+        assert gaps == [], "同段隐式洞口及同类承压衔接均不应列为补段缺口"
+        assert transition_rows == []
+        assert result_nodes == nodes
+    else:
+        assert len(gaps) == 2
+        assert {(gap["prev_name"], gap["next_name"]) for gap in gaps} == {
+            ("", "纯牛马"),
+            ("纯牛马", ""),
+        }, "跨段时也只在隧洞两侧插段，定向钻与顶管侧不插段"
+        assert len(transition_rows) == 2
+        assert all(node.transition_skip_loss for node in transition_rows)
+        assert [node.transition_length for node in transition_rows] == pytest.approx([60.0, 60.0])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-11",
+  "app_version": "1.4.4",
+  "entrypoint": "main.py through project pythonw",
+  "environment": "真实桌面、WebEngine；专用临时QSettings；入口前禁用WMI与正式bootstrap一致",
+  "flow": [
+    "打开专用3节点工程",
+    "推求水面线表3点击执行计算",
+    "显示结果摘要与详细过程",
+    "项目菜单保存",
+    "项目菜单重新打开同一工程",
+    "结果与导出显示相同摘要和详细过程",
+    "Alt+F4正常关闭，窗口列表确认已退出"
+  ],
+  "node_count": 3,
+  "table_state_rows": 3,
+  "saved_bytes": 106546,
+  "saved_sha256": "1fbe2dc3e304c282a1fffffa162c3eb1adfc0a29e021c7460bd02eeacfdd29b2",
+  "result_nodes": [
+    {
+      "x": 0.0,
+      "y": 0.0,
+      "water_depth": 1.234567890123,
+      "station_MC": 0.0,
+      "water_level": 100.0,
+      "bottom_elevation": 98.765432109877,
+      "head_loss_cumulative": 0.0,
+      "profile_row_id": "d9685bb33cdc4eb285b463e223b2a0f2"
+    },
+    {
+      "x": 100.123457,
+      "y": 0.0,
+      "water_depth": 1.234567890123,
+      "station_MC": 100.123457,
+      "water_level": 99.949938,
+      "bottom_elevation": 98.715370109877,
+      "head_loss_cumulative": 0.050062,
+      "profile_row_id": "4c89d34ab17c4795ad819e0d3a7d2ffa"
+    },
+    {
+      "x": 200.246914,
+      "y": 0.0,
+      "water_depth": 1.234567890123,
+      "station_MC": 200.246914,
+      "water_level": 99.899876,
+      "bottom_elevation": 98.665308109877,
+      "head_loss_cumulative": 0.100124,
+      "profile_row_id": "2f9f966f70eb4b7fa47ebc286cc45bfc"
+    }
+  ],
+  "visible_summary": {
+    "nodes": 3,
+    "length_m": 200.247,
+    "water_level_drop_m": 0.1,
+    "water_level_start_m": 100.0,
+    "water_level_end_m": 99.9
+  },
+  "reopen_result_summary_and_detail_visible": true,
+  "closed_normally": true,
+  "user_project_modified": false,
+  "packaged_app_verified": false,
+  "native_word_or_print_verified": false
+}

@@ -3,6 +3,7 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,8 @@ def _load_module(module_name: str, file_path: Path):
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -65,6 +68,7 @@ def _install_panel_import_stubs():
     styles_mod.BG = styles_mod.CARD = styles_mod.BD = styles_mod.T1 = styles_mod.T2 = ""
     styles_mod.DIALOG_STYLE = ""
     styles_mod.auto_resize_table = lambda *args, **kwargs: None
+    styles_mod.schedule_table_resize = lambda *args, **kwargs: None
     styles_mod.CollapsibleGroupBox = type("CollapsibleGroupBox", (), {})
     styles_mod.fluent_info = lambda *args, **kwargs: None
     styles_mod.fluent_question = lambda *args, **kwargs: True
@@ -98,6 +102,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -207,6 +212,7 @@ def _restore_runtime_pressure_pipe_extractor_stub(saved_utils, saved_extractor):
         sys.modules["utils"] = saved_utils
 
 
+@isolated_imports
 def _load_panel_class():
     patched_names = [
         "PySide6",
@@ -246,6 +252,7 @@ def _load_panel_class():
                 sys.modules[name] = old_module
 
 
+@isolated_imports
 def test_get_pressure_pipe_export_results_prefers_calc_records_over_manager():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -278,6 +285,7 @@ def test_get_pressure_pipe_export_results_prefers_calc_records_over_manager():
     assert result["1::牛马道"]["source"] == "calc_records"
 
 
+@isolated_imports
 def test_get_pressure_pipe_export_results_uses_manager_when_calc_records_missing():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -299,6 +307,7 @@ def test_get_pressure_pipe_export_results_uses_manager_when_calc_records_missing
     assert result["1::牛马道"]["source"] == "manager"
 
 
+@isolated_imports
 def test_get_pressure_pipe_export_results_matches_same_name_by_identity_without_cross_flow_mix():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -334,6 +343,7 @@ def test_get_pressure_pipe_export_results_matches_same_name_by_identity_without_
     assert result["2::同名管道"]["total_head_loss"] == 4.222
 
 
+@isolated_imports
 def test_get_pressure_pipe_export_results_uses_table3_current_value_before_calc_records_and_manager():
     WaterProfilePanel = _load_panel_class()
     saved_utils = sys.modules.get("utils")
@@ -375,6 +385,7 @@ def test_get_pressure_pipe_export_results_uses_table3_current_value_before_calc_
     assert result["3::牛马道"]["source"] == "table3"
 
 
+@isolated_imports
 def test_get_pressure_pipe_export_results_uses_table3_external_head_loss_when_head_loss_siphon_missing():
     WaterProfilePanel = _load_panel_class()
     saved_utils = sys.modules.get("utils")
@@ -406,6 +417,7 @@ def test_get_pressure_pipe_export_results_uses_table3_external_head_loss_when_he
     assert result["3::牛马道"]["source"] == "table3"
 
 
+@isolated_imports
 def test_get_pressure_pipe_export_results_prefers_row_identity_over_legacy_identity():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

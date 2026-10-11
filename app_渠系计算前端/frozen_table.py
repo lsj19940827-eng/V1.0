@@ -25,6 +25,7 @@ class FrozenColumnTableWidget(QTableWidget):
     undoRequested = Signal()
     redoRequested = Signal()
     deleteRequested = Signal()  # Delete 键按下前发射，面板可记录快照
+    deleteFinished = Signal()  # 删除通知结束后统一刷新联动结果
     readOnlyDeleteAttempted = Signal()  # 用户在只读单元格上尝试删除时发射
 
     def __init__(self, rows=0, cols=0, frozen_count=4, parent=None):
@@ -436,14 +437,18 @@ class FrozenColumnTableWidget(QTableWidget):
             return
         # 先通知面板记录快照（在修改前）
         self.deleteRequested.emit()
-        self.blockSignals(True)
-        for idx in editable_indexes:
-            item = self.item(idx.row(), idx.column())
-            item.setText("")
-        self.blockSignals(False)
-        # 逐个触发 cellChanged 以便面板可处理联动（如水头损失重算）
-        for idx in editable_indexes:
-            self.cellChanged.emit(idx.row(), idx.column())
+        try:
+            was_blocked = self.blockSignals(True)
+            try:
+                for idx in editable_indexes:
+                    self.item(idx.row(), idx.column()).setText("")
+            finally:
+                self.blockSignals(was_blocked)
+            # 保留逐格业务通知，支持批量处理的面板在结束信号中合并昂贵计算。
+            for idx in editable_indexes:
+                self.cellChanged.emit(idx.row(), idx.column())
+        finally:
+            self.deleteFinished.emit()
 
     def _navigate_next_editable(self, forward=True):
         """Tab / Shift+Tab：跳到下一个/上一个可编辑单元格，跳过不可编辑列。"""

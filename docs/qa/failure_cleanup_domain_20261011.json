@@ -1,0 +1,217 @@
+{
+  "scope": "本轮剩余 18 项中分配的 7 项：桩号几何、渐变段采用长度、匿名管线洞口拓扑。",
+  "result": "7 项原失败对应合同已校正，6 个测试文件共 45 项通过，真实测试进程正常退出 0。",
+  "production_changes": [],
+  "test_files_changed": [
+    "tests/test_geometry_station_regression_unit.py",
+    "tests/test_hydraulic_skip_loss_unit.py",
+    "tests/test_task4_skip_loss_marking.py"
+  ],
+  "prd_updated": {
+    "path": "docs/PRD_渐变段与明渠段插入算法.md",
+    "lines": [
+      9,
+      15
+    ],
+    "summary": "同步回归输入约束和长度/隐式洞口/类型契约，不改变公式和产品行为。"
+  },
+  "cases": [
+    {
+      "original_test_id": "tests/test_geometry_station_regression_unit.py::test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition",
+      "classification": "incomplete_fixture",
+      "original_failure": "暗涵只给底宽而缺少 H_total；现行参考复算拒绝无法求水深的已存断面。",
+      "contract_evidence": [
+        "docs/PRD_渐变段与明渠段插入算法.md:29",
+        "推求水面线/core/calculator.py:1967"
+      ],
+      "repair": "为两个暗涵端点补 H_total=2.0 的有效净高。",
+      "retained_or_added_assertions": [
+        "仍仅 1 条进口渐变段、长度 6.0，无零长度出口行。",
+        "补段仍为暗涵且底宽 2.0，复算水深在净高范围内。"
+      ]
+    },
+    {
+      "original_test_id": "tests/test_geometry_station_regression_unit.py::test_sample5_jinhuazhai_station_stays_stable_after_table_roundtrip_and_calculation",
+      "classification": "outdated_contract_assertion",
+      "original_failure": "把首个自动连接段一律断言为 RECT_CULVERT，与按实际来源选型的现行规则冲突。",
+      "contract_evidence": [
+        "docs/PRD_渐变段与明渠段插入算法.md:19-34",
+        "推求水面线/core/calculator.py:2065"
+      ],
+      "repair": "首段检查为矩形明渠，同时要求实际相邻暗涵存在；逐段比较往返前后类型和桩号。",
+      "retained_or_added_assertions": [
+        "金花寨进口基准 26242.3995 保持原断言。",
+        "全部连接段类型列表一致，全部辅助段 MC 桩号一致。",
+        "后续完整 calculate_all 后金花寨进口桩号仍不变。"
+      ]
+    },
+    {
+      "original_test_id": "tests/test_geometry_station_regression_unit.py::test_sample5_legacy_auto_channel_payload_still_keeps_jinhuazhai_station_stable",
+      "classification": "outdated_contract_assertion",
+      "original_failure": "旧元数据缺字段时仍使用失效的一律暗涵断言。",
+      "contract_evidence": [
+        "docs/PRD_渐变段与明渠段插入算法.md:19-34",
+        "tests/test_geometry_station_regression_unit.py:381"
+      ],
+      "repair": "保留删除 _auto_channel_structure_type 和 _aux_coords 的旧数据恢复场景，逐段验证真实类型。",
+      "retained_or_added_assertions": [
+        "首段矩形明渠且另有实际暗涵。",
+        "所有连接段结构类型往返一致。",
+        "旧字段缺失后完整计算仍保持金花寨进口桩号。"
+      ]
+    },
+    {
+      "original_test_id": "tests/test_hydraulic_skip_loss_unit.py::test_skip_loss_existing_length_still_builds_length_details",
+      "classification": "outdated_contract_assertion",
+      "original_failure": "没有合并或覆盖来源的旧长度 7.5 大于当前公式 7.0，却要求无条件保留。",
+      "contract_evidence": [
+        "推求水面线/core/hydraulic_calc.py:3213-3238",
+        "tests/test_transition_length_pressure_pipe_alignment_unit.py:106",
+        "docs/PRD_渐变段与明渠段插入算法.md:31-32"
+      ],
+      "repair": "扩为旧缓存、已压缩、合并缺口、单条覆盖四情形。",
+      "retained_or_added_assertions": [
+        "无来源旧值 7.5 更新至公式值 7.0。",
+        "已压缩 6.5 保留，merged_gap_length=7.5 保留，显式 override=7.5 保留。",
+        "逐项检查公式、采用值、L_result、uses_existing_length、source。",
+        "局部、沿程及总渐变损失均为零。"
+      ]
+    },
+    {
+      "original_test_id": "tests/test_hydraulic_skip_loss_unit.py::test_main_calculator_preserves_existing_skip_loss_length_details",
+      "classification": "outdated_contract_assertion",
+      "original_failure": "主计算入口重复同一无来源旧值一律保留断言。",
+      "contract_evidence": [
+        "推求水面线/core/hydraulic_calc.py:3213-3238",
+        "tests/test_transition_length_pressure_pipe_alignment_unit.py:106"
+      ],
+      "repair": "主入口同样扩为旧缓存、已压缩、合并缺口、单条覆盖四情形。",
+      "retained_or_added_assertions": [
+        "通过 WaterProfileCalculator.calculate_transition_losses 验证四来源采用语义。",
+        "逐项检查公式、采用值、L_result、uses_existing_length、source。",
+        "局部、沿程及总渐变损失均为零。"
+      ]
+    },
+    {
+      "original_test_id": "tests/test_task4_skip_loss_marking.py::test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess",
+      "classification": "outdated_contract_assertion",
+      "original_failure": "同段匿名管道包围隧洞已成为隐式洞口，旧用例仍要求两侧默认插段。",
+      "contract_evidence": [
+        "docs/PRD_有压管道批量计算_V1.0.md:946-947",
+        "推求水面线/utils/pressure_pipe_tunnel.py:11",
+        "推求水面线/core/calculator.py:136"
+      ],
+      "repair": "扩为同流量段与跨流量段正反两情形。",
+      "retained_or_added_assertions": [
+        "同段无插段且保留原 4 行。",
+        "跨段仍有两条合并渐变段，各 30.0 且 skip_loss=True。",
+        "真实节点完整 to_dict 前后不变，匿名管道保持 NORMAL。"
+      ]
+    },
+    {
+      "original_test_id": "tests/test_task4_skip_loss_marking.py::test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps",
+      "classification": "outdated_contract_assertion",
+      "original_failure": "整组预扫描沿用隐式洞口启用前的两缺口期望。",
+      "contract_evidence": [
+        "docs/PRD_有压管道批量计算_V1.0.md:946-947",
+        "tests/test_pressure_pipe_implicit_tunnel_boundary_unit.py:54"
+      ],
+      "repair": "扩为同流量段与跨流量段，保留定向钻及顶管相邻承压不插段场景。",
+      "retained_or_added_assertions": [
+        "同段预扫描无缺口、实际无插段，原始节点顺序保持。",
+        "跨段仅隧洞前后两个缺口和两条 60.0 渐变段，skip_loss=True。",
+        "缺少有效流量坡降时不凭空拟定明渠。"
+      ]
+    }
+  ],
+  "validation": {
+    "tests": 45,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "duration_seconds": 9.351,
+    "timestamp": "2026-10-11T11:52:58.997871+08:00",
+    "file_counts": {
+      "tests.test_geometry_station_regression_unit": 6,
+      "tests.test_hydraulic_skip_loss_unit": 12,
+      "tests.test_task4_skip_loss_marking": 11,
+      "tests.test_transition_length_pressure_pipe_alignment_unit": 2,
+      "tests.test_transition_length_rule_resolution_unit": 4,
+      "tests.test_pressure_pipe_implicit_tunnel_boundary_unit": 10
+    },
+    "normal_process_exit_code": 0,
+    "pytest_return_marker": "PYTEST_RETURNED 0",
+    "exit_method": "sys.exit(int(exit_code)); no os._exit",
+    "isolation": [
+      "源码与全部测试资料复制到隔离 workspace",
+      "QSettings 使用临时 Ini 文件",
+      "offscreen，QTextBrowser",
+      "进程内持有 QApplication 强引用",
+      "正式 bootstrap 等价 WMI 禁用"
+    ],
+    "junit": "docs/qa/failure_cleanup_domain_20261011.xml",
+    "junit_sha256": "bb080d438acd1cc92d3bf3c682ce6ce0ac7aee29d64ba0cb5d51a1fe38e7b998",
+    "log": "docs/qa/failure_cleanup_domain_20261011.log",
+    "log_sha256": "3560485b7c58ec81a099dad3b2582c209c086d16dc1b883f4a1aa8a56be085e5",
+    "exit_record": "docs/qa/failure_cleanup_domain_20261011.exit.txt",
+    "coverage_limit": "自动化离屏验证；未执行打包桌面和人工界面验收。本组正常退出不能替代其他测试进程的析构验证。"
+  },
+  "source_verification": [
+    {
+      "path": "推求水面线/core/calculator.py",
+      "phase_baseline_sha256": "23c67ac91b89f592e62cfc33f271eb658b468978bc7d02a70d0666fb4b4911d7",
+      "current_sha256": "23c67ac91b89f592e62cfc33f271eb658b468978bc7d02a70d0666fb4b4911d7",
+      "unchanged_since_phase_baseline": true
+    },
+    {
+      "path": "推求水面线/core/hydraulic_calc.py",
+      "phase_baseline_sha256": "f1d56f114f0af56aa6a6f6316fb2d9305a0c6014c7e8a7d5bd0cf77dbc2c0235",
+      "current_sha256": "f1d56f114f0af56aa6a6f6316fb2d9305a0c6014c7e8a7d5bd0cf77dbc2c0235",
+      "unchanged_since_phase_baseline": true
+    },
+    {
+      "path": "推求水面线/core/connection_channel.py",
+      "phase_baseline_sha256": "ee9d82f6e2fd375dde6852089facb91d7b8ea07125f8d1d9d05caeb791f89d23",
+      "current_sha256": "ee9d82f6e2fd375dde6852089facb91d7b8ea07125f8d1d9d05caeb791f89d23",
+      "unchanged_since_phase_baseline": true
+    },
+    {
+      "path": "推求水面线/utils/pressure_pipe_tunnel.py",
+      "phase_baseline_sha256": "7ca8382b3177706d56bd8ce8995336114ba49a7950945403fd00315d08344a04",
+      "current_sha256": "7ca8382b3177706d56bd8ce8995336114ba49a7950945403fd00315d08344a04",
+      "unchanged_since_phase_baseline": true
+    }
+  ],
+  "tested_file_verification": [
+    {
+      "path": "tests/test_geometry_station_regression_unit.py",
+      "sha256": "b8f23ff5faca35b269f1a65dc246ae6c44b287716c468cd86f35082fcc8ce877",
+      "tested_copy_matches_current": true
+    },
+    {
+      "path": "tests/test_hydraulic_skip_loss_unit.py",
+      "sha256": "84321ba3a064516288bcc5feb3c02225bf12bc255082b8e957f70955d6d9c053",
+      "tested_copy_matches_current": true
+    },
+    {
+      "path": "tests/test_task4_skip_loss_marking.py",
+      "sha256": "aa3ce0bf905fa864050e38e5875bb410e9219e5652aa4d419dae61f39562e0d7",
+      "tested_copy_matches_current": true
+    },
+    {
+      "path": "tests/test_transition_length_pressure_pipe_alignment_unit.py",
+      "sha256": "42c6ffad547c30d5e601c3c2432e7251c42f34f94ff889664bea7441adfb7502",
+      "tested_copy_matches_current": true
+    },
+    {
+      "path": "tests/test_transition_length_rule_resolution_unit.py",
+      "sha256": "085c0b993d6a991fc96eff219ceabd372ab220a11f31d98a5dd4b69198819def",
+      "tested_copy_matches_current": true
+    },
+    {
+      "path": "tests/test_pressure_pipe_implicit_tunnel_boundary_unit.py",
+      "sha256": "2ffa4c0a9f6f3914ba77ee2969582cc186e06e3bb5b82491d115f638626fa3b5",
+      "tested_copy_matches_current": true
+    }
+  ]
+}

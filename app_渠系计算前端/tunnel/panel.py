@@ -6,6 +6,8 @@
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import math
@@ -1378,39 +1380,6 @@ class TunnelPanel(QWidget):
     # ================================================================
     # 结果显示
     # ================================================================
-    def _display_all_results_legacy(self):
-        """显示所有工况的计算结果"""
-        all_text_parts = []
-        for case_idx, item in enumerate(self._all_results):
-            inp = item.get('input')
-            res = item.get('result')
-            case = item.get('case') or {}
-            stype = (inp or {}).get('section_type', case.get('section_type', '圆形'))
-            q_raw = (inp or {}).get('Q', case.get('Q', ''))
-            try:
-                q_text = f"{float(q_raw):.3f}"
-            except Exception:
-                q_text = (str(q_raw).strip() or '-')
-            q_part = f"{q_text} m³/s" if q_text != '-' else '-'
-            header = f"【工况 {case_idx + 1}｜{stype}断面｜Q = {q_part}】"
-            if not res:
-                continue
-            if not res.get('success'):
-                all_text_parts.append(
-                    f"{header}\n\n"
-                    f"计算失败：{res.get('error_message', '未知错误')}\n"
-                )
-                continue
-            self.input_params = inp
-            stype = inp.get('section_type', '圆形')
-            detail = inp.get('detail_checked', True)
-            type_label = TunnelPanel._resolve_result_type_label(self, stype, res)
-            txt = self._build_result_text(res, type_label, detail, inp)
-            all_text_parts.append(header + "\n\n" + txt)
-
-        combined = "\n".join(all_text_parts)
-        self._export_plain_text = combined
-        load_formula_page(self.result_text, plain_text_to_formula_html(combined))
 
     def _display_all_results_legacy(self):
         """显示所有工况的计算结果，并在多工况时生成顶部导航。"""
@@ -2720,7 +2689,7 @@ class TunnelPanel(QWidget):
             calc_content_desc=f'隧洞水力断面设计计算（{stype}断面）',
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n隧洞水力计算（{stype}断面 · {method}）',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n隧洞水力计算（{stype}断面 · {method}）',
         )
         doc.add_page_break()
 

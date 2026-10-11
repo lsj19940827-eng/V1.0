@@ -6,6 +6,8 @@
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import math
@@ -1358,50 +1360,6 @@ class CulvertPanel(QWidget):
     # ================================================================
     # 结果显示
     # ================================================================
-    def _display_all_results(self):
-        """显示所有工况计算结果"""
-        _multi = len(self._all_results) > 1
-        all_text_parts = []
-        all_plain_parts = []
-
-        for case_idx, params, result in self._all_results:
-            section_type = _normalize_culvert_section_type(
-                params.get('section_type', self._cases[case_idx].get('section_type', _CULVERT_RECT))
-            ) if case_idx < len(self._cases) else _normalize_culvert_section_type(params.get('section_type'))
-            family_name = _culvert_full_name(section_type)
-            if not result.get('success'):
-                q_raw = params.get('Q', '')
-                try:
-                    q_text = f"{float(q_raw):.3f} m³/s"
-                except Exception:
-                    q_text = '-'
-                part = (
-                    f"【工况 {case_idx + 1}｜{family_name}｜Q = {q_text}】\n\n"
-                    f"计算失败："
-                    f"{result.get('error_message', '未知错误')}\n"
-                )
-                all_text_parts.append(part)
-                all_plain_parts.append(part)
-                continue
-
-            detail = self._cases[case_idx].get('detail_checked', True) if case_idx < len(self._cases) else True
-            txt = self._build_culvert_result_text(params, result, detail, case_idx if _multi else None)
-
-            import re as _re
-            plain = _re.sub(
-                r'\{\{HTML\}\}.*?\{\{/HTML\}\}',
-                '{{NORM_TABLE_11_2_5}}',
-                txt, flags=_re.DOTALL
-            )
-            all_text_parts.append(txt)
-            all_plain_parts.append(plain)
-
-        self._export_plain_text = "\n\n".join(all_plain_parts)
-        full_html = plain_text_to_formula_html("\n\n".join(all_text_parts))
-        load_formula_page(self.result_text, full_html)
-
-        # 断面图：显示第一个成功结果（或当前工况）
-        self._update_section_plot_all()
 
     def _display_all_results_legacy(self):
         """显示所有工况计算结果，并为多工况提供快捷定位。"""
@@ -2484,7 +2442,7 @@ class CulvertPanel(QWidget):
             calc_content_desc=desc,
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n{desc}',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n{desc}',
         )
         doc.add_page_break()
 

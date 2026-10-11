@@ -10,6 +10,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT / "倒虹吸水力计算系统"))
 
 from dxf_parser import DxfParser  # noqa: E402
+from siphon_coefficients import CoefficientService  # noqa: E402
 from siphon_hydraulics import HydraulicCore  # noqa: E402
 from siphon_models import (  # noqa: E402
     GlobalParameters,
@@ -22,7 +23,7 @@ from siphon_models import (  # noqa: E402
 from spatial_merger import SpatialMerger  # noqa: E402
 
 
-_SAMPLE_PLAN_DXF = _PROJECT_ROOT / "蔡家沟倒虹吸测试_倒圆.dxf"
+_SAMPLE_PLAN_DXF = _PROJECT_ROOT / "data" / "蔡家沟倒虹吸测试_倒圆.dxf"
 
 
 def _sample_params():
@@ -149,6 +150,7 @@ def test_turn_node_tagging_uses_six_decimal_chainage_matching():
 
 
 def test_spatial_event_lines_display_three_decimals_while_using_precise_backend_values():
+    """历史空间合并诊断接口仍保留三位小数的逐事件展示。"""
     plan_points = _load_sample_plan_points()
     spatial_result = SpatialMerger.merge_and_compute(plan_points, [], verbose=True)
     counted_events = [
@@ -169,6 +171,24 @@ def test_spatial_event_lines_display_three_decimals_while_using_precise_backend_
     for line in expected_lines:
         assert line in spatial_result.computation_steps
 
+
+def test_independent_hydraulic_report_rounds_display_without_rounding_coefficients(monkeypatch):
+    """正式水损按平面转弯独立计算，展示三位小数但查表使用完整半径与角度。"""
+    radius, angle = 4.800123456, 16.951234567
+    plan_points = [
+        PlanFeaturePoint(chainage=0.0, x=0.0, y=0.0, azimuth_meas_deg=90.0, turn_type=TurnType.NONE),
+        PlanFeaturePoint(chainage=100.123456, x=100.123456, y=0.0, azimuth_meas_deg=90.0,
+                         turn_type=TurnType.ARC, turn_radius=radius, turn_angle=angle),
+        PlanFeaturePoint(chainage=200.246912, x=196.0, y=29.0, azimuth_meas_deg=73.0, turn_type=TurnType.NONE),
+    ]
+    received = []
+    original = CoefficientService.calculate_bend_coeff
+
+    def record_inputs(radius_value, diameter, angle_value, **kwargs):
+        received.append((radius_value, angle_value))
+        return original(radius_value, diameter, angle_value, **kwargs)
+
+    monkeypatch.setattr(CoefficientService, "calculate_bend_coeff", record_inputs)
     result = HydraulicCore.execute_calculation(
         _sample_params(),
         [],
@@ -177,14 +197,12 @@ def test_spatial_event_lines_display_three_decimals_while_using_precise_backend_
         longitudinal_nodes=[],
     )
     detail_text = HydraulicCore.format_result(result, show_steps=True)
-    expected_hydraulic_fragments = [
-        (
-            f"s=[{event.s_a:.3f},{event.s_b:.3f}] 空间弯管: "
-            f"R_eff={event.R_eff:.3f}m, θ_3D={math.degrees(event.theta_event):.3f}°"
-        )
-        for event in counted_events
-        if event.turn_style == TurnType.ARC and event.R_eff > 0
-    ]
+    expected = original(radius, result.diameter, angle, verbose=False)
+    rounded_input_result = original(round(radius, 3), result.diameter, round(angle, 3), verbose=False)
 
-    for fragment in expected_hydraulic_fragments:
-        assert fragment in detail_text
+    assert result.data_mode == "仅平面（独立计算）"
+    assert received == [(radius, angle)]
+    assert f"平面弯管1: R={radius:.3f}m, θ={angle:.3f}°" in detail_text
+    assert "空间弯管:" not in detail_text
+    assert result.xi_sum_middle == pytest.approx(expected, rel=1e-12, abs=1e-12)
+    assert abs(result.xi_sum_middle - rounded_input_result) > 1e-10

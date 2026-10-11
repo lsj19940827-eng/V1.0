@@ -1,0 +1,656 @@
+{
+  "date": "2026-10-11",
+  "original_failure_count": 8,
+  "original_failures_resolution": [
+    {
+      "count": 1,
+      "test_file": "tests/test_batch_qiyi_fill_channel_regression.py",
+      "cause": "旧断言要求完整名称加级别；生产既有规则与独立渠道级别测试均规定名称首字加级别缩写。",
+      "action": "不改生产规则，保留全名校验并精确检查七充0+000.00和七充IP0，继续生成/重读真实DXF。"
+    },
+    {
+      "count": 3,
+      "test_file": "tests/test_culvert_family_compatibility_unit.py",
+      "cause": "最小BatchPanel夹具缺少已存在的编辑历史状态，加载逻辑清理历史时失败。",
+      "action": "夹具显式设置旧撤销/重做/快照/分组；在旧别名归一化断言外新增全部历史清空断言。"
+    },
+    {
+      "count": 1,
+      "test_file": "tests/test_increase_input_mode_panels_unit.py",
+      "cause": "通用测试忽略泄水渠更多参数按需展开的当前契约。",
+      "action": "先检查首次进入折叠及四个控件隐藏，再实际展开并检查比例/流量输入互斥。"
+    },
+    {
+      "count": 1,
+      "test_file": "tests/test_open_channel_circular_case_unit.py",
+      "cause": "测试仍从已退役的渠系断面设计目录导入。",
+      "action": "使用app_渠系计算前端正式入口，保留manual_D参数断言并新增实际计算直径2.8断言。"
+    },
+    {
+      "count": 1,
+      "test_file": "tests/test_open_channel_compound_trapezoid_panel_unit.py",
+      "cause": "旧测试要求设计与加大各一个坐标轴，已被单图叠加契约替代。",
+      "action": "检查同图水体平台折点、设计实线/加大虚线的精确两端坐标与加大尺寸文字。"
+    },
+    {
+      "count": 1,
+      "test_file": "tests/test_open_channel_compound_trapezoid_panel_unit.py",
+      "cause": "真实绘图回归：共享绘图给复式断面左右各25%留白，再从视域外叠加加大尺寸造成重复扩宽。",
+      "action": "为复式尺寸提供明确锚点，按轮廓放置加大标注，平台宽标注移至平台下。原横向范围上限不放宽，并新增六项尺寸包围盒及互不遮挡检查。"
+    }
+  ],
+  "verification": {
+    "test_files": 7,
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "92",
+    "time": "14.723",
+    "timestamp": "2026-10-11T11:54:42.457479+08:00",
+    "hostname": "刘思杰",
+    "process_exit_code": 0,
+    "pytest_returned": 0,
+    "normal_exit": true,
+    "os_exit_used": false,
+    "physical_workspace_copy": true,
+    "qsettings_temporary_ini": true,
+    "strong_qapplication_reference": true,
+    "windows_wmi_guard_before_dependency_import": true,
+    "xml": "docs/qa/failure_cleanup_ui_20261011.xml"
+  },
+  "production_source_hashes": [
+    {
+      "path": "app_渠系计算前端/section_shapes.py",
+      "before_sha256": "73d391d7f07f4981ff075b10ed3312ebe7d65e142203a5618f2c7b5f39a6db15",
+      "after_sha256": "2e7121c666b2726402560472abd0c865c5d48944bea4a9cbddd00ed8431c9a8e"
+    },
+    {
+      "path": "app_渠系计算前端/section_plotting.py",
+      "before_sha256": "4386845ce168adfa2887fc0d9cea0a89fb6286f6eed1386f0d149df5a04b7c50",
+      "after_sha256": "bc0b9441c2ca053c82223442d58c30f6105c0fca863c80ac9824e6134d354e76"
+    },
+    {
+      "path": "app_渠系计算前端/open_channel/panel.py",
+      "before_sha256": "d4f8087972da82543d8d84595acacc796f715af2705e0e635dfc786b587aa94e",
+      "after_sha256": "b9f413ed33332e62215d70f2bb1cfad407dc252399a3dd39fc5dd8f7e8247b37"
+    }
+  ],
+  "render_comparison": {
+    "before": {
+      "input": {
+        "Q": 5.0,
+        "n": 0.014,
+        "slope_inv": 3000.0,
+        "v_min": 0.1,
+        "v_max": 100.0,
+        "section_type": "复式梯形",
+        "m1": 1.0,
+        "B1": 3.0,
+        "m2": 1.0,
+        "B2": 2.0,
+        "m3": 1.0,
+        "h1": 1.0,
+        "detail_checked": true,
+        "manual_increase": 20.0,
+        "use_increase": true,
+        "inc_mode": "percent",
+        "inc_pct_text": "20",
+        "inc_q_text": ""
+      },
+      "result": {
+        "success": true,
+        "error_message": "",
+        "design_method": "固定复式梯形断面",
+        "b_design": 2.0,
+        "h_design": 1.318,
+        "V_design": 0.939,
+        "A_design": 5.327,
+        "X_design": 8.728,
+        "R_design": 0.61,
+        "Beta_design": 1.517,
+        "Q_calc": 4.999,
+        "increase_percent": 20.0,
+        "Q_increased": 6.0,
+        "h_increased": 1.407,
+        "V_increased": 0.998,
+        "Fb": 0.552,
+        "h_prime": 1.959,
+        "constraint_warnings": [],
+        "m1": 1.0,
+        "B1": 3.0,
+        "m2": 1.0,
+        "B2": 2.0,
+        "m3": 1.0,
+        "h1": 1.0,
+        "A_increased": 6.015,
+        "X_increased": 8.98,
+        "R_increased": 0.67
+      },
+      "xlim": [
+        -8.1885,
+        7.529475
+      ],
+      "ylim": [
+        -0.68565,
+        2.64465
+      ],
+      "aspect": 1.0,
+      "axes_box": [
+        52.47222222222222,
+        180.0208914210217,
+        1185.0,
+        419.9791085789783
+      ],
+      "texts": [
+        {
+          "text": "B2=2.00m",
+          "position": [
+            0.0,
+            -0.15672
+          ],
+          "box": [
+            617.6034862818948,
+            198.7985690480697,
+            667.3534862818948,
+            209.7985690480697
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "H=1.96m",
+          "position": [
+            3.7839149999999995,
+            0.9795
+          ],
+          "box": [
+            915.1210401891251,
+            278.1875,
+            926.1210401891251,
+            321.8125
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "h=1.32m",
+          "position": [
+            -7.185224999999999,
+            0.659
+          ],
+          "box": [
+            113.7612293144208,
+            255.09450279280395,
+            124.7612293144208,
+            298.71950279280395
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "B1=3.00m",
+          "position": [
+            -3.5,
+            1.141048
+          ],
+          "box": [
+            365.41786935463654,
+            292.306690107628,
+            415.16786935463654,
+            303.306690107628
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "h1=1.00m",
+          "position": [
+            -7.0068649999999995,
+            0.5
+          ],
+          "box": [
+            126.6126083530338,
+            240.63807048096567,
+            137.6126083530338,
+            290.26307048096567
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "1:1",
+          "position": [
+            -5.4795,
+            1.52745
+          ],
+          "box": [
+            238.28888972392002,
+            333.9814596557975,
+            257.03888972392,
+            344.9814596557975
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "1:1",
+          "position": [
+            -1.5,
+            0.5
+          ],
+          "box": [
+            525.0239361702127,
+            259.95057048096567,
+            543.7739361702127,
+            270.95057048096567
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "1:1",
+          "position": [
+            1.9795,
+            1.07745
+          ],
+          "box": [
+            775.7324659126114,
+            301.55759462229287,
+            794.4824659126114,
+            312.55759462229287
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "加大水位 1.41m",
+          "position": [
+            2.407,
+            1.4569545
+          ],
+          "box": [
+            738.0351376944407,
+            334.4020450391988,
+            815.9101376944407,
+            344.7301700391988
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "h加大=1.41m",
+          "position": [
+            6.459314999999999,
+            0.7035
+          ],
+          "box": [
+            1107.8917257683215,
+            249.48836277945054,
+            1117.9854757683215,
+            310.73836277945054
+          ],
+          "inside_axes": true
+        }
+      ],
+      "lines": [
+        {
+          "color": "k",
+          "style": "-",
+          "x": [
+            -1.0,
+            1.0,
+            2.959,
+            -5.959,
+            -5.0,
+            -2.0,
+            -1.0
+          ],
+          "y": [
+            0.0,
+            0.0,
+            1.959,
+            1.959,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "color": "b",
+          "style": "-",
+          "x": [
+            -5.318,
+            2.318
+          ],
+          "y": [
+            1.318,
+            1.318
+          ]
+        },
+        {
+          "color": "brown",
+          "style": "-",
+          "x": [
+            0,
+            1
+          ],
+          "y": [
+            0,
+            0
+          ]
+        },
+        {
+          "color": "(0.0, 0.0, 1.0, 1)",
+          "style": "--",
+          "x": [
+            -5.407,
+            2.407
+          ],
+          "y": [
+            1.407,
+            1.407
+          ]
+        }
+      ]
+    },
+    "after": {
+      "input": {
+        "Q": 5.0,
+        "n": 0.014,
+        "slope_inv": 3000.0,
+        "v_min": 0.1,
+        "v_max": 100.0,
+        "section_type": "复式梯形",
+        "m1": 1.0,
+        "B1": 3.0,
+        "m2": 1.0,
+        "B2": 2.0,
+        "m3": 1.0,
+        "h1": 1.0,
+        "detail_checked": true,
+        "manual_increase": 20.0,
+        "use_increase": true,
+        "inc_mode": "percent",
+        "inc_pct_text": "20",
+        "inc_q_text": ""
+      },
+      "result": {
+        "success": true,
+        "error_message": "",
+        "design_method": "固定复式梯形断面",
+        "b_design": 2.0,
+        "h_design": 1.318,
+        "V_design": 0.939,
+        "A_design": 5.327,
+        "X_design": 8.728,
+        "R_design": 0.61,
+        "Beta_design": 1.517,
+        "Q_calc": 4.999,
+        "increase_percent": 20.0,
+        "Q_increased": 6.0,
+        "h_increased": 1.407,
+        "V_increased": 0.998,
+        "Fb": 0.552,
+        "h_prime": 1.959,
+        "constraint_warnings": [],
+        "m1": 1.0,
+        "B1": 3.0,
+        "m2": 1.0,
+        "B2": 2.0,
+        "m3": 1.0,
+        "h1": 1.0,
+        "A_increased": 6.015,
+        "X_increased": 8.98,
+        "R_increased": 0.67
+      },
+      "xlim": [
+        -7.920959999999999,
+        4.92096
+      ],
+      "ylim": [
+        -0.68565,
+        2.64465
+      ],
+      "aspect": 1.0,
+      "axes_box": [
+        52.47222222222222,
+        153.15057022885466,
+        1185.0,
+        446.84942977114537
+      ],
+      "texts": [
+        {
+          "text": "B2=2.00m",
+          "position": [
+            0.0,
+            -0.15672
+          ],
+          "box": [
+            726.145977133222,
+            180.4635263522381,
+            775.895977133222,
+            191.4635263522381
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "H=1.96m",
+          "position": [
+            3.971193,
+            0.9795
+          ],
+          "box": [
+            1101.2401331018518,
+            278.18750000000006,
+            1112.2401331018518,
+            321.81250000000006
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "h=1.32m",
+          "position": [
+            -7.595452999999999,
+            0.659
+          ],
+          "box": [
+            70.17865547839494,
+            249.922633626609,
+            81.17865547839494,
+            293.547633626609
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "B1=3.00m",
+          "position": [
+            -3.5,
+            0.8589519999999999
+          ],
+          "box": [
+            417.4812897482965,
+            270.0355493138444,
+            467.2312897482965,
+            281.0355493138444
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "h1=1.00m",
+          "position": [
+            -6.9711929999999995,
+            0.5
+          ],
+          "box": [
+            125.23208912037023,
+            232.90043782826524,
+            136.23208912037023,
+            282.52543782826524
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "1:1",
+          "position": [
+            -5.4795,
+            1.52745
+          ],
+          "box": [
+            258.40936155445075,
+            342.8236615578772,
+            277.15936155445075,
+            353.8236615578772
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "1:1",
+          "position": [
+            -1.5,
+            0.5
+          ],
+          "box": [
+            609.3611111111111,
+            252.21293782826524,
+            628.1111111111111,
+            263.21293782826524
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "1:1",
+          "position": [
+            1.9795,
+            1.07745
+          ],
+          "box": [
+            916.2179053270677,
+            303.1382017512439,
+            934.9679053270677,
+            314.1382017512439
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "加大水位 1.41m",
+          "position": [
+            2.407,
+            1.4569545
+          ],
+          "box": [
+            885.4190921433694,
+            342.106669709436,
+            963.2940921433694,
+            352.434794709436
+          ],
+          "inside_axes": true
+        },
+        {
+          "text": "h加大=1.41m",
+          "position": [
+            4.60883,
+            0.7035
+          ],
+          "box": [
+            1157.4732831790125,
+            245.03458465193165,
+            1167.5670331790125,
+            306.28458465193165
+          ],
+          "inside_axes": true
+        }
+      ],
+      "lines": [
+        {
+          "color": "k",
+          "style": "-",
+          "x": [
+            -1.0,
+            1.0,
+            2.959,
+            -5.959,
+            -5.0,
+            -2.0,
+            -1.0
+          ],
+          "y": [
+            0.0,
+            0.0,
+            1.959,
+            1.959,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "color": "b",
+          "style": "-",
+          "x": [
+            -5.318,
+            2.318
+          ],
+          "y": [
+            1.318,
+            1.318
+          ]
+        },
+        {
+          "color": "brown",
+          "style": "-",
+          "x": [
+            0,
+            1
+          ],
+          "y": [
+            0,
+            0
+          ]
+        },
+        {
+          "color": "(0.0, 0.0, 1.0, 1)",
+          "style": "--",
+          "x": [
+            -5.407,
+            2.407
+          ],
+          "y": [
+            1.407,
+            1.407
+          ]
+        }
+      ]
+    },
+    "images": {
+      "before": {
+        "file": "docs/qa/failure_cleanup_ui_20261011/compound_before.png",
+        "sha256": "587fdf4e6ae4460fa828cbf9baad7028a0af8ae9683fc95e73db544c0cfdba39"
+      },
+      "after": {
+        "file": "docs/qa/failure_cleanup_ui_20261011/compound_after.png",
+        "sha256": "c7e87e796aa591fb133e2139fc5d8bd11fff7ccd97ba6296bd34fe7086e11c1a"
+      }
+    },
+    "same_input": true,
+    "same_calculation_result_all_fields": true,
+    "same_outline_and_water_line_coordinates": true,
+    "before_horizontal_span": 15.717975,
+    "after_horizontal_span": 12.841919999999998,
+    "manual_view_image_reviewed": true,
+    "manual_review": "逐张查看前后PNG；新图设计/加大水位均清晰，六项尺寸完整可见且互不遮挡，平台宽箭头与文字位于平台下方，不再压平台边界。",
+    "all_annotation_boxes_inside_axes": true,
+    "native_packaged_desktop_reviewed": false
+  },
+  "unchanged_shared_default_rendering": [
+    {
+      "shape": "trapezoid",
+      "before_sha256": "134f83cd30110d3433e4aa1bea9449e84fd7001dc1e7bb776194351487e113fa",
+      "after_sha256": "134f83cd30110d3433e4aa1bea9449e84fd7001dc1e7bb776194351487e113fa",
+      "png_byte_identical": true
+    },
+    {
+      "shape": "circular",
+      "before_sha256": "f3206a0df4c6150455fbdc0fc7d6a4e4994762192ad9a8ab6821b233a9b7987d",
+      "after_sha256": "f3206a0df4c6150455fbdc0fc7d6a4e4994762192ad9a8ab6821b233a9b7987d",
+      "png_byte_identical": true
+    }
+  ],
+  "prd_updates": [
+    "docs/PRD_明渠水力计算.md",
+    "docs/PRD_合并批量计算与水面线面板.md",
+    "docs/PRD_推求水面线.md",
+    "docs/PRD_泄水渠与陡坡水力计算.md"
+  ]
+}

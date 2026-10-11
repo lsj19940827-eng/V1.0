@@ -147,6 +147,12 @@ def _make_batch_panel():
     panel.batch_results = []
     panel._detail_text_cache = ""
     panel._is_sample_data = False
+    # 打开项目必须撤销旧工程的编辑历史，夹具模拟一次已有编辑。
+    panel._table_undo_stack = [{"old_project": True}]
+    panel._table_redo_stack = [{"old_project": True}]
+    panel._pre_edit_snapshot = {"old_project": True}
+    panel._pre_edit_cell_value = "旧值"
+    panel._undo_group = 1
     return panel
 
 
@@ -186,6 +192,11 @@ def test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels(legacy_t
     )
 
     assert panel.input_table.item(0, 3).text() == "暗涵-矩形"
+    assert panel._table_undo_stack == []
+    assert panel._table_redo_stack == []
+    assert panel._pre_edit_snapshot is None
+    assert panel._pre_edit_cell_value is None
+    assert panel._undo_group == 0
 
 
 @pytest.mark.parametrize(

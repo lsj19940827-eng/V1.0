@@ -4,7 +4,7 @@
 """
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Property, Signal
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Property, Signal, QTimer
 from PySide6.QtGui import QFont
 
 
@@ -163,9 +163,37 @@ pre { margin:0; padding:0; white-space:pre-wrap; font-family:Consolas,'Courier N
 # ============================================================
 # 侧边导航栏样式
 # ============================================================
-def auto_resize_table(table):
+def schedule_table_resize(table):
+    """合并连续窗口缩放；计时器随表格销毁，避免关闭页面后访问失效控件。"""
+    timer = getattr(table, '_column_resize_timer', None)
+    if timer is None:
+        timer = QTimer(table)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: auto_resize_table(table, measure_contents=False))
+        table._column_resize_timer = timer
+    timer.start(80)
+
+
+def auto_resize_table(table, *, measure_contents=True):
     """根据内容自适应表格列宽，剩余空间按比例分配。
-    应在表格数据填充完毕后调用；窗口resize时也应调用。"""
+    数据刷新时测量内容；仅窗口变化时复用内容宽度，数据或字体变化后重新测量。"""
+    if not getattr(table, '_column_width_observed', False):
+        def invalidate(*_args):
+            table._column_content_widths = None
+        model = table.model()
+        for name in ('dataChanged', 'headerDataChanged', 'rowsInserted', 'rowsRemoved',
+                     'columnsInserted', 'columnsRemoved', 'modelReset', 'layoutChanged'):
+            getattr(model, name).connect(invalidate)
+        table._column_width_observed = True
+
+    key = (table.columnCount(), table.font().toString(),
+           table.horizontalHeader().font().toString(), table.styleSheet(),
+           tuple(table.isColumnHidden(c) for c in range(table.columnCount())))
+    cached = getattr(table, '_column_content_widths', None)
+    if not measure_contents and cached is not None and cached[0] == key:
+        _fit_table_columns(table, cached[1])
+        return
+
     table.resizeColumnsToContents()
     # 补偿 resizeColumnsToContents 在冻结列表格等场景下可能宽度不足的问题：
     # 用字体度量逐列校验，确保每列至少能完整显示表头和数据内容。
@@ -188,20 +216,25 @@ def auto_resize_table(table):
                         needed = w
         if needed > table.columnWidth(c):
             table.setColumnWidth(c, needed)
-    header = table.horizontalHeader()
-    col_count = header.count()
+    widths = tuple(table.columnWidth(c) for c in range(table.columnCount()))
+    table._column_content_widths = (key, widths)
+    _fit_table_columns(table, widths)
+
+
+def _fit_table_columns(table, widths):
+    """使用未拉伸的内容列宽重新分配空间，避免缩窗后列宽无法回落。"""
+    col_count = len(widths)
     if col_count == 0:
         return
-    total_content_w = sum(header.sectionSize(c) for c in range(col_count))
+    total_content_w = sum(widths)
     available_w = table.viewport().width()
     if available_w <= 0:
         available_w = table.width() - table.verticalHeader().width() - 4
-    if available_w > total_content_w and total_content_w > 0:
-        extra = available_w - total_content_w
-        for c in range(col_count):
-            cur = header.sectionSize(c)
-            ratio = cur / total_content_w
-            table.setColumnWidth(c, cur + int(extra * ratio))
+    extra = max(0, available_w - total_content_w)
+    for c, width in enumerate(widths):
+        target = width + int(extra * width / total_content_w) if total_content_w else width
+        if table.columnWidth(c) != target:
+            table.setColumnWidth(c, target)
 
 
 NAV_STYLE = f"""

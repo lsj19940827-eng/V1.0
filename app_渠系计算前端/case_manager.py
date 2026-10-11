@@ -363,6 +363,10 @@ class CaseTagNavigator(QWidget):
         self._chips = []
         self._sync_pending = False
         self._can_collapse = False
+        # 定时任务随导航控件销毁，避免关闭页面后访问已释放的子控件。
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._sync_view_state)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -492,7 +496,7 @@ class CaseTagNavigator(QWidget):
         if self._sync_pending:
             return
         self._sync_pending = True
-        QTimer.singleShot(0, self._sync_view_state)
+        self._sync_timer.start(0)
 
     def _sync_view_state(self):
         self._sync_pending = False

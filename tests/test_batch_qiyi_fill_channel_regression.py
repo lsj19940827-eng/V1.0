@@ -393,7 +393,12 @@ def test_qiyi_fill_channel_water_profile_and_combined_dxf(monkeypatch, tmp_path)
     assert len(modelspace) > 0
     text_values = [entity.dxf.text for entity in modelspace.query("TEXT")]
     joined_text = "\n".join(text_values)
-    assert "七一充" in joined_text
+    # 桩号使用渠道名称首字和级别缩写；Excel 中的完整渠道名称仍应保留。
+    assert settings.channel_name == "七一"
+    assert settings.channel_level == "充水渠"
+    assert settings.get_station_prefix() == "七充"
+    assert "七充0+000.00" in text_values
+    assert "七充IP0" in text_values
     assert "泄水渠与陡坡" in joined_text
     assert "-泄水渠与陡坡" not in joined_text
     assert "泄陡进" not in joined_text

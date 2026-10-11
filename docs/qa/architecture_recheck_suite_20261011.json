@@ -1,0 +1,2938 @@
+{
+  "date": "2026-10-11",
+  "mode": "266 test files in isolated source copy; five Qt files final rerun together with held QApplication",
+  "baseline": "original pre-architecture workspace archive, physically extracted production source; same current test fixtures",
+  "baseline_archive_sha256": "cbbd4be3a61dfced5a39f4a4e21c4bbefa7cb9f213ee83a7c5aea56278cf0c5e",
+  "excluded_prefixes": [
+    "test_release_",
+    "test_backfill_",
+    "test_updater_",
+    "test_update_",
+    "test_license_",
+    "test_build_"
+  ],
+  "excluded_scope_note": "No release, updater, activation or full packaging actions; native normal application shutdown verified separately",
+  "environment": [
+    "WMI guard before project imports",
+    "QT_QPA_PLATFORM=offscreen",
+    "CODEX_FORCE_QTEXTBROWSER=1",
+    "QSettings isolated in temporary directories",
+    "one file per process except final 38-test Qt group"
+  ],
+  "total_files": 266,
+  "counts": {
+    "tests": 3450,
+    "failures": 18,
+    "errors": 0,
+    "skipped": 1,
+    "passed": 3431
+  },
+  "all_tests_passed": false,
+  "unresolved_new_regression_failures": 0,
+  "baseline_failure_count": 18,
+  "qt_exit_note": "Five isolated file processes reported passed assertions but crashed during Qt cleanup. Final combined rerun held QApplication before collection, returned pytest 0 and normal interpreter exit 0; no os._exit in that rerun.",
+  "test_environment_repairs": [
+    "Preload canonical model before historical module stubs",
+    "Explicit legacy project fixtures remove table_state",
+    "Spatial DXF fixture uses existing data directory",
+    "Child import test uses bootstrap-equivalent WMI guard"
+  ],
+  "files": [
+    {
+      "file": "tests/test_algorithm_comparison.py",
+      "returncode": 0,
+      "seconds": 0.942,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_app_icon_unit.py",
+      "returncode": 0,
+      "seconds": 0.882,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_app_panel_registry_unit.py",
+      "returncode": 0,
+      "seconds": 1.77,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_aqueduct_comparison_unit.py",
+      "returncode": 0,
+      "seconds": 1.0,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_aqueduct_dxf_unit.py",
+      "returncode": 0,
+      "seconds": 0.915,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_aqueduct_kernel_unit.py",
+      "returncode": 0,
+      "seconds": 0.873,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_aqueduct_panel_plot_unit.py",
+      "returncode": 0,
+      "seconds": 3.951,
+      "tests": 32,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_architecture_checker_unit.py",
+      "returncode": 0,
+      "seconds": 3.131,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_calculation_service_unit.py",
+      "returncode": 0,
+      "seconds": 1.19,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_compound_trapezoid_unit.py",
+      "returncode": 0,
+      "seconds": 3.405,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "returncode": 0,
+      "seconds": 11.636,
+      "tests": 26,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_import_dimension_preserve_unit.py",
+      "returncode": 0,
+      "seconds": 17.066,
+      "tests": 43,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_manual_qmax_excel_unit.py",
+      "returncode": 0,
+      "seconds": 4.462,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_panel_dialog_parent_unit.py",
+      "returncode": 0,
+      "seconds": 4.828,
+      "tests": 20,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_qiyi_fill_channel_regression.py",
+      "returncode": 1,
+      "seconds": 5.09,
+      "tests": 5,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_batch_spillway_increase_chain_unit.py",
+      "returncode": 0,
+      "seconds": 5.934,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_batch_wupai_excel_regression.py",
+      "returncode": 0,
+      "seconds": 4.285,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_building_length_statistics_ui_unit.py",
+      "returncode": 0,
+      "seconds": 5.168,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_building_length_statistics_unit.py",
+      "returncode": 0,
+      "seconds": 1.863,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_case_detail_toggle_unit.py",
+      "returncode": 0,
+      "seconds": 2.179,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_case_manager.py",
+      "returncode": 0,
+      "seconds": 0.748,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_case_tag_navigator_ui_unit.py",
+      "returncode": 0,
+      "seconds": 3.324,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_channel_level_options_unit.py",
+      "returncode": 0,
+      "seconds": 0.891,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_clear_preserves_panel_inputs_unit.py",
+      "returncode": 0,
+      "seconds": 3.518,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_compound_trapezoid_shared_hydraulic_unit.py",
+      "returncode": 0,
+      "seconds": 1.777,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_compound_trapezoid_type_support_unit.py",
+      "returncode": 0,
+      "seconds": 0.763,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_connection_channel_automation_unit.py",
+      "returncode": 0,
+      "seconds": 2.343,
+      "tests": 15,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_arch_kernel_unit.py",
+      "returncode": 0,
+      "seconds": 0.789,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_arch_panel_batch_unit.py",
+      "returncode": 0,
+      "seconds": 3.075,
+      "tests": 28,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_arch_shared_hydraulic_unit.py",
+      "returncode": 0,
+      "seconds": 0.753,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_arch_table3_unit.py",
+      "returncode": 0,
+      "seconds": 3.055,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_arch_type_support_unit.py",
+      "returncode": 0,
+      "seconds": 0.785,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_comparison_unit.py",
+      "returncode": 0,
+      "seconds": 0.818,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_family_compatibility_unit.py",
+      "returncode": 1,
+      "seconds": 3.445,
+      "tests": 18,
+      "errors": 0,
+      "failures": 3,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_culvert_kernel.py",
+      "returncode": 0,
+      "seconds": 3.538,
+      "tests": 16,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_culvert_panel_plot_unit.py",
+      "returncode": 0,
+      "seconds": 2.861,
+      "tests": 20,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_domain_architecture_contracts_unit.py",
+      "returncode": 0,
+      "seconds": 4.215,
+      "tests": 12,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_explicit_zero_turn_radius_unit.py",
+      "returncode": 0,
+      "seconds": 1.801,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_external_head_loss_property.py",
+      "returncode": 0,
+      "seconds": 2.687,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_external_head_loss_unit.py",
+      "returncode": 0,
+      "seconds": 1.879,
+      "tests": 30,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_fixed_length_compression_unit.py",
+      "returncode": 0,
+      "seconds": 1.831,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_fluent_dialog.py",
+      "returncode": 5,
+      "seconds": 0.759,
+      "tests": 0,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "no_tests_collected"
+    },
+    {
+      "file": "tests/test_formula_cache_lifecycle_unit.py",
+      "returncode": 0,
+      "seconds": 1.46,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_formula_renderer_result_pages_unit.py",
+      "returncode": 0,
+      "seconds": 5.687,
+      "tests": 43,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_gate_penetration_property.py",
+      "returncode": 0,
+      "seconds": 2.452,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_gate_penetration_unit.py",
+      "returncode": 0,
+      "seconds": 1.773,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_gate_transition_extended_unit.py",
+      "returncode": 0,
+      "seconds": 1.768,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_geometry_station_regression_unit.py",
+      "returncode": 1,
+      "seconds": 9.959,
+      "tests": 6,
+      "errors": 0,
+      "failures": 3,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_hydraulic_skip_loss_unit.py",
+      "returncode": 1,
+      "seconds": 1.602,
+      "tests": 6,
+      "errors": 0,
+      "failures": 2,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_import_state_guard_unit.py",
+      "returncode": 0,
+      "seconds": 0.696,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_increase_input_helper_unit.py",
+      "returncode": 0,
+      "seconds": 0.707,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_increase_input_mode_panels_unit.py",
+      "returncode": 1,
+      "seconds": 9.735,
+      "tests": 21,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_longitudinal_dxf_reverse_import_unit.py",
+      "returncode": 0,
+      "seconds": 3.737,
+      "tests": 12,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_model_import_identity_unit.py",
+      "returncode": 0,
+      "seconds": 2.75,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_multi_case_dxf_export_unit.py",
+      "returncode": 0,
+      "seconds": 1.175,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_multi_case_dxf_panel_selection_unit.py",
+      "returncode": 0,
+      "seconds": 1.989,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_multi_case_panel_smoke_unit.py",
+      "returncode": 0,
+      "seconds": 14.351,
+      "tests": 63,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_multi_case_q_recalc_regression_unit.py",
+      "returncode": 0,
+      "seconds": 38.951,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_appendix_e_table_unit.py",
+      "returncode": 0,
+      "seconds": 3.167,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_circular_case_unit.py",
+      "returncode": 1,
+      "seconds": 0.619,
+      "tests": 1,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_open_channel_comparison_unit.py",
+      "returncode": 0,
+      "seconds": 0.759,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_compound_trapezoid_dxf_unit.py",
+      "returncode": 0,
+      "seconds": 1.119,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_compound_trapezoid_kernel_unit.py",
+      "returncode": 0,
+      "seconds": 0.731,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_compound_trapezoid_panel_unit.py",
+      "returncode": 1,
+      "seconds": 3.878,
+      "tests": 5,
+      "errors": 0,
+      "failures": 2,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_open_channel_increase_precision_unit.py",
+      "returncode": 0,
+      "seconds": 0.94,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_insertion_property.py",
+      "returncode": 0,
+      "seconds": 2.437,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_insertion_unit.py",
+      "returncode": 0,
+      "seconds": 1.691,
+      "tests": 12,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_kernel.py",
+      "returncode": 0,
+      "seconds": 0.732,
+      "tests": 25,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_multi_case_refresh_unit.py",
+      "returncode": 0,
+      "seconds": 21.64,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_open_channel_panel_plot_unit.py",
+      "returncode": 0,
+      "seconds": 3.025,
+      "tests": 35,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_other_section_sizing_accuracy_unit.py",
+      "returncode": 0,
+      "seconds": 3.729,
+      "tests": 67,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pe_pipe_catalog.py",
+      "returncode": 0,
+      "seconds": 0.742,
+      "tests": 36,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_persistence_atomic_services_unit.py",
+      "returncode": 0,
+      "seconds": 0.703,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pipe_product_catalog.py",
+      "returncode": 0,
+      "seconds": 0.725,
+      "tests": 40,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_plot_title_utils_unit.py",
+      "returncode": 0,
+      "seconds": 1.204,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_batch.py",
+      "returncode": 0,
+      "seconds": 14.708,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_canvas_viewer_gui_unit.py",
+      "returncode": 0,
+      "seconds": 3.403,
+      "tests": 29,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_chain_apply_unit.py",
+      "returncode": 0,
+      "seconds": 28.601,
+      "tests": 31,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_chain_extractor_unit.py",
+      "returncode": 0,
+      "seconds": 1.762,
+      "tests": 32,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_config_dialog_sizing_unit.py",
+      "returncode": 0,
+      "seconds": 2.051,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_data_extraction_property.py",
+      "returncode": 0,
+      "seconds": 3.519,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_data_extraction_unit.py",
+      "returncode": 0,
+      "seconds": 1.653,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_design_feedback_unit.py",
+      "returncode": 0,
+      "seconds": 1.741,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_diameter_explanation.py",
+      "returncode": 0,
+      "seconds": 3.907,
+      "tests": 22,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_export_longitudinal_nodes_unit.py",
+      "returncode": 0,
+      "seconds": 11.148,
+      "tests": 16,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_export_results_unit.py",
+      "returncode": 0,
+      "seconds": 4.259,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_extractor_fallback_unit.py",
+      "returncode": 0,
+      "seconds": 1.742,
+      "tests": 19,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_first_entry_unit.py",
+      "returncode": 0,
+      "seconds": 4.431,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_flow_comparison.py",
+      "returncode": 0,
+      "seconds": 2.672,
+      "tests": 28,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_identification_property.py",
+      "returncode": 0,
+      "seconds": 4.341,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_implicit_tunnel_boundary_unit.py",
+      "returncode": 0,
+      "seconds": 1.717,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_kernel.py",
+      "returncode": 0,
+      "seconds": 1.365,
+      "tests": 41,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_like_unit.py",
+      "returncode": 0,
+      "seconds": 1.806,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_longitudinal_utils_unit.py",
+      "returncode": 0,
+      "seconds": 1.521,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_loss_formula_dialog_unit.py",
+      "returncode": 0,
+      "seconds": 1.716,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_pe_integration.py",
+      "returncode": 0,
+      "seconds": 1.274,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_pe_panel_unit.py",
+      "returncode": 0,
+      "seconds": 3.291,
+      "tests": 11,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_persistence_with_long_unit.py",
+      "returncode": 0,
+      "seconds": 0.761,
+      "tests": 17,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_preprocessing_unit.py",
+      "returncode": 0,
+      "seconds": 1.693,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_product_catalog_integration.py",
+      "returncode": 0,
+      "seconds": 1.286,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_product_catalog_panel_unit.py",
+      "returncode": 0,
+      "seconds": 5.143,
+      "tests": 24,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_project_save_unit.py",
+      "returncode": 0,
+      "seconds": 1.789,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_result_details.py",
+      "returncode": 0,
+      "seconds": 1.347,
+      "tests": 13,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_result_identity_unit.py",
+      "returncode": 0,
+      "seconds": 1.514,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_result_persistence_unit.py",
+      "returncode": 0,
+      "seconds": 1.53,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_result_report_unit.py",
+      "returncode": 0,
+      "seconds": 1.629,
+      "tests": 12,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_spatial_calc_unit.py",
+      "returncode": 0,
+      "seconds": 1.772,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_standards_audit.py",
+      "returncode": 0,
+      "seconds": 1.172,
+      "tests": 31,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_steel_dimensions.py",
+      "returncode": 0,
+      "seconds": 5.398,
+      "tests": 48,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_summary_dialog_gui_unit.py",
+      "returncode": 0,
+      "seconds": 6.049,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_transition_coefficients_unit.py",
+      "returncode": 0,
+      "seconds": 1.753,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_transition_insertion_unit.py",
+      "returncode": 0,
+      "seconds": 1.804,
+      "tests": 11,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_transition_property.py",
+      "returncode": 0,
+      "seconds": 2.466,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_validation_property.py",
+      "returncode": 0,
+      "seconds": 2.913,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_validation_unit.py",
+      "returncode": 0,
+      "seconds": 1.785,
+      "tests": 19,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_water_hammer_core_unit.py",
+      "returncode": 0,
+      "seconds": 1.824,
+      "tests": 30,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_water_hammer_dialog_unit.py",
+      "returncode": 0,
+      "seconds": 11.089,
+      "tests": 31,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_water_hammer_velocity_unit.py",
+      "returncode": 0,
+      "seconds": 1.771,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_window_override_unit.py",
+      "returncode": 0,
+      "seconds": 1.82,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_pressurized_dxf_rules_unit.py",
+      "returncode": 0,
+      "seconds": 3.648,
+      "tests": 103,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_profile_state_architecture.py",
+      "returncode": 0,
+      "seconds": 3.47,
+      "tests": 38,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_project_atomic_save_unit.py",
+      "returncode": 0,
+      "seconds": 0.754,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_project_codec_unit.py",
+      "returncode": 0,
+      "seconds": 0.704,
+      "tests": 18,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_project_lazy_save_unit.py",
+      "returncode": 0,
+      "seconds": 7.349,
+      "tests": 24,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_project_transaction_async_unit.py",
+      "returncode": 0,
+      "seconds": 0.839,
+      "tests": 13,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_qfluentwidgets_compat.py",
+      "returncode": 0,
+      "seconds": 0.74,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_report_meta_pressure_pipe_unit.py",
+      "returncode": 0,
+      "seconds": 0.731,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_result_navigation_widget_unit.py",
+      "returncode": 0,
+      "seconds": 5.97,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_result_summary_unit.py",
+      "returncode": 0,
+      "seconds": 2.605,
+      "tests": 16,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_return_water_gate_unit.py",
+      "returncode": 0,
+      "seconds": 3.759,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_comparison_output_unit.py",
+      "returncode": 0,
+      "seconds": 1.396,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_comparison_panel_wiring_unit.py",
+      "returncode": 0,
+      "seconds": 2.884,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_dxf_native_arc_unit.py",
+      "returncode": 0,
+      "seconds": 1.296,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_dxf_text_script_unit.py",
+      "returncode": 0,
+      "seconds": 1.205,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_plot_layout_unit.py",
+      "returncode": 0,
+      "seconds": 1.985,
+      "tests": 32,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_plotting_unit.py",
+      "returncode": 0,
+      "seconds": 1.548,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_sizing_constraints_unit.py",
+      "returncode": 0,
+      "seconds": 5.839,
+      "tests": 39,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_section_summary_dxf_precision_unit.py",
+      "returncode": 0,
+      "seconds": 3.048,
+      "tests": 16,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_shared_data_manager_pressure_pipe_material_unit.py",
+      "returncode": 0,
+      "seconds": 1.879,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_shared_data_manager_vmax_alias_unit.py",
+      "returncode": 0,
+      "seconds": 0.864,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_arc_geometry_fidelity_unit.py",
+      "returncode": 0,
+      "seconds": 5.54,
+      "tests": 11,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_auto_confirm_scenario.py",
+      "returncode": 0,
+      "seconds": 5.499,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_auto_increase_execution_unit.py",
+      "returncode": 0,
+      "seconds": 1.762,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_batch_head_loss_export_unit.py",
+      "returncode": 0,
+      "seconds": 0.905,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_blank_startup_common_defaults_unit.py",
+      "returncode": 0,
+      "seconds": 3.427,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_canvas_footer_precision_unit.py",
+      "returncode": 0,
+      "seconds": 0.771,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_canvas_viewer_gui_unit.py",
+      "returncode": 0,
+      "seconds": 2.754,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_case_selector_gui_unit.py",
+      "returncode": 0,
+      "seconds": 2.192,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_common_segments_unit.py",
+      "returncode": 0,
+      "seconds": 2.035,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_d_display_override_unit.py",
+      "returncode": 0,
+      "seconds": 7.328,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_detail_text_language_unit.py",
+      "returncode": 0,
+      "seconds": 0.712,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_dialog_result_label_layout_unit.py",
+      "returncode": 0,
+      "seconds": 1.864,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_example_data_calc_mode_unit.py",
+      "returncode": 0,
+      "seconds": 2.225,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_example_segment_hide_unit.py",
+      "returncode": 0,
+      "seconds": 2.097,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_example_with_plan_data.py",
+      "returncode": 0,
+      "seconds": 2.262,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_increased_velocity_chain_unit.py",
+      "returncode": 0,
+      "seconds": 1.749,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_increased_velocity_extraction_unit.py",
+      "returncode": 0,
+      "seconds": 1.661,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_load_example_detect_unit.py",
+      "returncode": 0,
+      "seconds": 2.367,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_manual_xi_execution_regression_unit.py",
+      "returncode": 0,
+      "seconds": 2.605,
+      "tests": 26,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_multi_dialog_layout_unit.py",
+      "returncode": 0,
+      "seconds": 3.19,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_multi_dialog_longitudinal_reset_unit.py",
+      "returncode": 0,
+      "seconds": 8.842,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_num_pipes_confirmation_level_unit.py",
+      "returncode": 0,
+      "seconds": 12.081,
+      "tests": 20,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_panel_plan_length_precision_unit.py",
+      "returncode": 0,
+      "seconds": 2.154,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_panel_tabs_unit.py",
+      "returncode": 0,
+      "seconds": 2.122,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_plan_fold_coeff_regression_unit.py",
+      "returncode": 0,
+      "seconds": 2.304,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_plan_import_example_message_unit.py",
+      "returncode": 0,
+      "seconds": 2.123,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_plan_reverse_unit.py",
+      "returncode": 0,
+      "seconds": 2.754,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_profile_marker_semantics_unit.py",
+      "returncode": 0,
+      "seconds": 0.732,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_runtime_confirm_unit.py",
+      "returncode": 0,
+      "seconds": 2.643,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_set_params_gui_unit.py",
+      "returncode": 0,
+      "seconds": 2.516,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_siphon_starter_case_defaults_unit.py",
+      "returncode": 1,
+      "seconds": 0.558,
+      "tests": 1,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_siphon_unified_auto_confirm.py",
+      "returncode": 0,
+      "seconds": 3.131,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spatial_bend_event_regression.py",
+      "returncode": 1,
+      "seconds": 1.133,
+      "tests": 5,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_spatial_merger.py",
+      "returncode": 0,
+      "seconds": 0.745,
+      "tests": 17,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spatial_merger_rigorous.py",
+      "returncode": 0,
+      "seconds": 0.805,
+      "tests": 429,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spatial_precision_regression_unit.py",
+      "returncode": 1,
+      "seconds": 1.271,
+      "tests": 3,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_app_wiring_unit.py",
+      "returncode": 0,
+      "seconds": 0.695,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_basic_hydraulic_unit.py",
+      "returncode": 0,
+      "seconds": 0.746,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_dissipation_audit_unit.py",
+      "returncode": 0,
+      "seconds": 0.777,
+      "tests": 18,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_energy_audit_unit.py",
+      "returncode": 0,
+      "seconds": 2.766,
+      "tests": 13,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_export_unit.py",
+      "returncode": 0,
+      "seconds": 4.696,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_panel_unit.py",
+      "returncode": 0,
+      "seconds": 17.112,
+      "tests": 32,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_plotting_unit.py",
+      "returncode": 0,
+      "seconds": 4.415,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_profile_unit.py",
+      "returncode": 0,
+      "seconds": 0.912,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_v2_unit.py",
+      "returncode": 0,
+      "seconds": 3.561,
+      "tests": 20,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_validation_unit.py",
+      "returncode": 0,
+      "seconds": 1.295,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_workflow_ui_unit.py",
+      "returncode": 0,
+      "seconds": 6.059,
+      "tests": 16,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_steep_chute_xiong_example_unit.py",
+      "returncode": 0,
+      "seconds": 0.886,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_spillway_table3_energy_interface_unit.py",
+      "returncode": 0,
+      "seconds": 2.308,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_table_interaction_performance_unit.py",
+      "returncode": 0,
+      "seconds": 4.51,
+      "tests": 12,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_task4_skip_loss_marking.py",
+      "returncode": 1,
+      "seconds": 1.745,
+      "tests": 9,
+      "errors": 0,
+      "failures": 2,
+      "skipped": 0,
+      "classification": "baseline_existing_failure"
+    },
+    {
+      "file": "tests/test_task_runner_and_batch_async_unit.py",
+      "returncode": 0,
+      "seconds": 2.436,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_text_export_settings_dialog_ui_unit.py",
+      "returncode": 0,
+      "seconds": 13.568,
+      "tests": 36,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_dialog_modes_unit.py",
+      "returncode": 0,
+      "seconds": 2.108,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_length_compression_unit.py",
+      "returncode": 0,
+      "seconds": 1.765,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_length_formula_dialog_unit.py",
+      "returncode": 0,
+      "seconds": 1.548,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_length_pressure_pipe_alignment_unit.py",
+      "returncode": 0,
+      "seconds": 2.291,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_length_property.py",
+      "returncode": 0,
+      "seconds": 2.215,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_length_rule_resolution_unit.py",
+      "returncode": 0,
+      "seconds": 1.676,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_length_unit.py",
+      "returncode": 0,
+      "seconds": 1.688,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_loss_details_unit.py",
+      "returncode": 0,
+      "seconds": 1.695,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_loss_formula_dialog_unit.py",
+      "returncode": 0,
+      "seconds": 1.546,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_transition_reference_culvert_unit.py",
+      "returncode": 0,
+      "seconds": 1.719,
+      "tests": 29,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_arch_manual_wall_height_unit.py",
+      "returncode": 0,
+      "seconds": 0.705,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_arch_wall_height_panel_batch_unit.py",
+      "returncode": 0,
+      "seconds": 2.755,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_clearance_sizing_dialog_unit.py",
+      "returncode": 0,
+      "seconds": 1.672,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_clearance_sizing_panel_unit.py",
+      "returncode": 0,
+      "seconds": 2.353,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_clearance_sizing_unit.py",
+      "returncode": 0,
+      "seconds": 0.744,
+      "tests": 11,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_comparison_unit.py",
+      "returncode": 0,
+      "seconds": 1.847,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_dxf_export_unit.py",
+      "returncode": 0,
+      "seconds": 1.416,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circle_section_summary_unit.py",
+      "returncode": 0,
+      "seconds": 2.396,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_dxf_unit.py",
+      "returncode": 0,
+      "seconds": 1.265,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_kernel_unit.py",
+      "returncode": 0,
+      "seconds": 0.724,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py",
+      "returncode": 0,
+      "seconds": 3.163,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py",
+      "returncode": 0,
+      "seconds": 1.803,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py",
+      "returncode": 0,
+      "seconds": 3.066,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_kernel.py",
+      "returncode": 0,
+      "seconds": 1.135,
+      "tests": 15,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_tunnel_panel_plot_unit.py",
+      "returncode": 0,
+      "seconds": 2.579,
+      "tests": 23,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_turn_radius_management_property.py",
+      "returncode": 0,
+      "seconds": 1.764,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_turn_radius_management_unit.py",
+      "returncode": 0,
+      "seconds": 0.773,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_unpressurized_comparison.py",
+      "returncode": 0,
+      "seconds": 5.786,
+      "tests": 22,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_unpressurized_controls.py",
+      "returncode": 0,
+      "seconds": 3.437,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_unpressurized_plot_layout.py",
+      "returncode": 0,
+      "seconds": 4.413,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_unpressurized_selection.py",
+      "returncode": 0,
+      "seconds": 0.737,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_batch_sync_unit.py",
+      "returncode": 0,
+      "seconds": 6.835,
+      "tests": 11,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_building_plan_unit.py",
+      "returncode": 0,
+      "seconds": 0.909,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_bzzh2_export_unit.py",
+      "returncode": 0,
+      "seconds": 2.107,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_channel_name_width_unit.py",
+      "returncode": 0,
+      "seconds": 3.624,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_collapsible_layout_regression_unit.py",
+      "returncode": 0,
+      "seconds": 18.838,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_combined_dxf_unit.py",
+      "returncode": 0,
+      "seconds": 5.929,
+      "tests": 27,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_coord_precision_unit.py",
+      "returncode": 0,
+      "seconds": 41.953,
+      "tests": 64,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_core_engine_diagnostics_unit.py",
+      "returncode": 0,
+      "seconds": 0.576,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_flow_selector_unit.py",
+      "returncode": 0,
+      "seconds": 21.45,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "earlier_isolated_returncode": 3221226505,
+      "rerun_evidence": "architecture_qt_exit_recheck_20261011.xml",
+      "verified_normal_process_exit": true,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_gate_loss_edit_unit.py",
+      "returncode": 0,
+      "seconds": 3.431,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_init_shared_batch_results_unit.py",
+      "returncode": 0,
+      "seconds": 34.593,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "earlier_isolated_returncode": 3221225477,
+      "rerun_evidence": "architecture_qt_exit_recheck_20261011.xml",
+      "verified_normal_process_exit": true,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_ip_table_export_unit.py",
+      "returncode": 0,
+      "seconds": 1.706,
+      "tests": 8,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_longitudinal_dedup_unit.py",
+      "returncode": 0,
+      "seconds": 1.797,
+      "tests": 16,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_longitudinal_scale_unit.py",
+      "returncode": 0,
+      "seconds": 2.082,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_loss_dialog_alignment_unit.py",
+      "returncode": 0,
+      "seconds": 12.678,
+      "tests": 21,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_optional_name_export_notice_unit.py",
+      "returncode": 0,
+      "seconds": 2.081,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_optional_name_notice_unit.py",
+      "returncode": 0,
+      "seconds": 3.779,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_optional_name_validation_unit.py",
+      "returncode": 0,
+      "seconds": 1.485,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_package_imports_unit.py",
+      "returncode": 0,
+      "seconds": 2.602,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_profile_rows_unit.py",
+      "returncode": 0,
+      "seconds": 1.955,
+      "tests": 24,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_recalc_downstream_unit.py",
+      "returncode": 0,
+      "seconds": 2.719,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_spillway_chain_audit_unit.py",
+      "returncode": 0,
+      "seconds": 1.936,
+      "tests": 27,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_spillway_steep_chute_unit.py",
+      "returncode": 0,
+      "seconds": 1.623,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_spillway_workflow_ui_unit.py",
+      "returncode": 0,
+      "seconds": 5.445,
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_start_station_regression_unit.py",
+      "returncode": 0,
+      "seconds": 21.618,
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "earlier_isolated_returncode": 3221225477,
+      "rerun_evidence": "architecture_qt_exit_recheck_20261011.xml",
+      "verified_normal_process_exit": true,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_state_async_unit.py",
+      "returncode": 0,
+      "seconds": 6.529,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_station_conflict_unit.py",
+      "returncode": 0,
+      "seconds": 1.608,
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_terminal_gate_backfill_unit.py",
+      "returncode": 0,
+      "seconds": 1.512,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_transition_length_details_regression_unit.py",
+      "returncode": 0,
+      "seconds": 31.416,
+      "tests": 20,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "earlier_isolated_returncode": 3221226505,
+      "rerun_evidence": "architecture_qt_exit_recheck_20261011.xml",
+      "verified_normal_process_exit": true,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_transition_loss_details_regression_unit.py",
+      "returncode": 0,
+      "seconds": 5.63,
+      "tests": 4,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_transition_qxproj_roundtrip_unit.py",
+      "returncode": 0,
+      "seconds": 22.788,
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "earlier_isolated_returncode": 3221226505,
+      "rerun_evidence": "architecture_qt_exit_recheck_20261011.xml",
+      "verified_normal_process_exit": true,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_transition_ready_unit.py",
+      "returncode": 0,
+      "seconds": 54.585,
+      "tests": 40,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_water_profile_utils_alias_unit.py",
+      "returncode": 0,
+      "seconds": 1.638,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_webengine_diagnostics_unit.py",
+      "returncode": 0,
+      "seconds": 0.661,
+      "tests": 17,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_webview_compat_unit.py",
+      "returncode": 0,
+      "seconds": 0.697,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_word_export_common_unit.py",
+      "returncode": 0,
+      "seconds": 2.347,
+      "tests": 20,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 1,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_xxpipe_axis_elevation_unit.py",
+      "returncode": 0,
+      "seconds": 1.788,
+      "tests": 9,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_xxpipe_export_context_unit.py",
+      "returncode": 0,
+      "seconds": 2.034,
+      "tests": 14,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_xxpipe_longitudinal_export_unit.py",
+      "returncode": 0,
+      "seconds": 3.202,
+      "tests": 81,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_xxpipe_mode_rules_unit.py",
+      "returncode": 0,
+      "seconds": 1.936,
+      "tests": 7,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_xxpipe_profile_rows_unit.py",
+      "returncode": 0,
+      "seconds": 1.911,
+      "tests": 5,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    },
+    {
+      "file": "tests/test_xxpipe_real_sample_unit.py",
+      "returncode": 0,
+      "seconds": 2.952,
+      "tests": 1,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "classification": "passed"
+    }
+  ],
+  "baseline_comparisons": [
+    {
+      "file": "tests/test_batch_qiyi_fill_channel_regression.py",
+      "failure_count": 1,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_qiyi_fill_channel_water_profile_and_combined_dxf",
+          "current": "AssertionError: assert '七一充' in '大垭口隧洞\\n暗涵-矩形\\n蓬莱隧洞\\n高新桥倒虹吸\\n张家坡隧洞\\n滴水岩倒虹吸\\n茅草沟隧洞\\n泄水渠与陡坡\\n1/4000\\n1/4000\\n1/4000\\n-\\n1/4000\\n-\\n1/4000\\n1/100\\n1/10\\n...充IP5\\n655160.487385\\n3401164.120618\\n七充4+644.42\\n七充4+644.42\\n七充4+644.42\\n0.000\\n10.000\\n0.000\\n0.000\\n388.045\\n388.197'",
+          "baseline": "AssertionError: assert '七一充' in '大垭口隧洞\\n暗涵-矩形\\n蓬莱隧洞\\n高新桥倒虹吸\\n张家坡隧洞\\n滴水岩倒虹吸\\n茅草沟隧洞\\n泄水渠与陡坡\\n1/4000\\n1/4000\\n1/4000\\n-\\n1/4000\\n-\\n1/4000\\n1/100\\n1/10\\n...充IP5\\n655160.487385\\n3401164.120618\\n七充4+644.42\\n七充4+644.42\\n七充4+644.42\\n0.000\\n10.000\\n0.000\\n0.000\\n388.045\\n388.197'",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_culvert_family_compatibility_unit.py",
+      "failure_count": 3,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels[\\u6697\\u6e20]",
+          "current": "AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'",
+          "baseline": "AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'",
+          "message_byte_equal": true
+        },
+        {
+          "name": "test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels[\\u77e9\\u5f62\\u6697\\u6e20]",
+          "current": "AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'",
+          "baseline": "AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'",
+          "message_byte_equal": true
+        },
+        {
+          "name": "test_batch_panel_project_load_normalizes_legacy_rect_culvert_labels[\\u77e9\\u5f62\\u6697\\u6db5]",
+          "current": "AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'",
+          "baseline": "AttributeError: 'BatchPanel' object has no attribute '_table_undo_stack'",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_geometry_station_regression_unit.py",
+      "failure_count": 3,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_sample5_jinhuazhai_station_stays_stable_after_table_roundtrip_and_calculation",
+          "current": "AssertionError: assert <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> == <StructureType.RECT_CULVERT: '暗涵-矩形'>\n +  where <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> = ChannelNode(flow_section='1', name='-', structure_type=<StructureType.MINGQU_RECTANGULAR: '明渠-矩形'>, x=645621.441000000...=0.0, transition_calc_details={}, transition_length_calc_details={}, profile_row_id='b13a52764d4046818b383a31867e5d9d').structure_type\n +  and   <StructureType.RECT_CULVERT: '暗涵-矩形'> = StructureType.RECT_CULVERT",
+          "baseline": "AssertionError: assert <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> == <StructureType.RECT_CULVERT: '暗涵-矩形'>\n +  where <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> = ChannelNode(flow_section='1', name='-', structure_type=<StructureType.MINGQU_RECTANGULAR: '明渠-矩形'>, x=645621.441000000...sition_head_loss_friction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}).structure_type\n +  and   <StructureType.RECT_CULVERT: '暗涵-矩形'> = StructureType.RECT_CULVERT",
+          "message_byte_equal": false
+        },
+        {
+          "name": "test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition",
+          "current": "ValueError: 已存断面无法满足当前流量，请调整断面参数。",
+          "baseline": "ValueError: 已存断面无法满足当前流量，请调整断面参数。",
+          "message_byte_equal": true
+        },
+        {
+          "name": "test_sample5_legacy_auto_channel_payload_still_keeps_jinhuazhai_station_stable",
+          "current": "AssertionError: assert <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> == <StructureType.RECT_CULVERT: '暗涵-矩形'>\n +  where <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> = ChannelNode(flow_section='1', name='-', structure_type=<StructureType.MINGQU_RECTANGULAR: '明渠-矩形'>, x=645621.441000000...=0.0, transition_calc_details={}, transition_length_calc_details={}, profile_row_id='4e7f311c43d14b4a89e898be156b410f').structure_type\n +  and   <StructureType.RECT_CULVERT: '暗涵-矩形'> = StructureType.RECT_CULVERT",
+          "baseline": "AssertionError: assert <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> == <StructureType.RECT_CULVERT: '暗涵-矩形'>\n +  where <StructureType.MINGQU_RECTANGULAR: '明渠-矩形'> = ChannelNode(flow_section='1', name='-', structure_type=<StructureType.MINGQU_RECTANGULAR: '明渠-矩形'>, x=645621.441000000...sition_head_loss_friction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}).structure_type\n +  and   <StructureType.RECT_CULVERT: '暗涵-矩形'> = StructureType.RECT_CULVERT",
+          "message_byte_equal": false
+        }
+      ]
+    },
+    {
+      "file": "tests/test_hydraulic_skip_loss_unit.py",
+      "failure_count": 2,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_skip_loss_existing_length_still_builds_length_details",
+          "current": "AssertionError: 已有长度应保留为当前采用长度\nassert 7.0 == 7.5\n +  where 7.0 = ChannelNode(flow_section='渠道3', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=<InOutType.NORMAL:...ream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}, profile_row_id='').transition_length",
+          "baseline": "AssertionError: 已有长度应保留为当前采用长度\nassert 7.0 == 7.5\n +  where 7.0 = ChannelNode(flow_section='渠道3', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=<InOutType.NORMAL:...': '明渠-梯形', 'downstream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}).transition_length",
+          "message_byte_equal": false
+        },
+        {
+          "name": "test_main_calculator_preserves_existing_skip_loss_length_details",
+          "current": "AssertionError: 主计算入口不应覆盖当前采用长度\nassert 7.0 == 7.5\n +  where 7.0 = ChannelNode(flow_section='渠道4', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=<InOutType.NORMAL:...ream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}, profile_row_id='').transition_length",
+          "baseline": "AssertionError: 主计算入口不应覆盖当前采用长度\nassert 7.0 == 7.5\n +  where 7.0 = ChannelNode(flow_section='渠道4', name='', structure_type=None, x=0.0, y=0.0, turn_radius=0.0, in_out=<InOutType.NORMAL:...': '明渠-梯形', 'downstream_structure_type': '倒虹吸', 'requested_length': 7.0, 'physical_limit': None, 'matched_rule': None}).transition_length",
+          "message_byte_equal": false
+        }
+      ]
+    },
+    {
+      "file": "tests/test_increase_input_mode_panels_unit.py",
+      "failure_count": 1,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_panels_only_show_default_percent_increase_input_on_first_open[spillway_steep_chute-SpillwaySteepChutePanel]",
+          "current": "assert False is True\n +  where False = <built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000202DA4F1E40>()\n +    where <built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000202DA4F1E40> = <PySide6.QtWidgets.QLabel(0x202d9706320) at 0x00000202DA4F1E40>.isVisible\n +      where <PySide6.QtWidgets.QLabel(0x202d9706320) at 0x00000202DA4F1E40> = <app_渠系计算前端.spillway_steep_chute.panel.SpillwaySteepChutePanel(0x202d8af0f90) at 0x00000202D7CE0740>.inc_lbl",
+          "baseline": "assert False is True\n +  where False = <built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000191FA465200>()\n +    where <built-in method isVisible of PySide6.QtWidgets.QLabel object at 0x00000191FA465200> = <PySide6.QtWidgets.QLabel(0x191f8e69be0) at 0x00000191FA465200>.isVisible\n +      where <PySide6.QtWidgets.QLabel(0x191f8e69be0) at 0x00000191FA465200> = <app_渠系计算前端.spillway_steep_chute.panel.SpillwaySteepChutePanel(0x191f8e63340) at 0x00000191F7D7AB80>.inc_lbl",
+          "message_byte_equal": false
+        }
+      ]
+    },
+    {
+      "file": "tests/test_open_channel_circular_case_unit.py",
+      "failure_count": 1,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_parse_circular_case_uses_manual_d_key",
+          "current": "ModuleNotFoundError: No module named '渠系断面设计'",
+          "baseline": "ModuleNotFoundError: No module named '渠系断面设计'",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_open_channel_compound_trapezoid_panel_unit.py",
+      "failure_count": 2,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_compound_trapezoid_water_patch_keeps_platform_breakpoints_after_overtopping",
+          "current": "AssertionError: assert 1 == 2\n +  where 1 = len([<Axes: title={'center': '设计流量\\nQ=5.00 $\\\\mathregular{m^{3}/s}$, V=0.94 $\\\\mathregular{m/s}$'}>])",
+          "baseline": "AssertionError: assert 1 == 2\n +  where 1 = len([<Axes: title={'center': '设计流量\\nQ=5.00 $\\\\mathregular{m^{3}/s}$, V=0.94 $\\\\mathregular{m/s}$'}>])",
+          "message_byte_equal": true
+        },
+        {
+          "name": "test_compound_trapezoid_default_view_keeps_true_aspect_and_tighter_xlim",
+          "current": "assert (np.float64(7.529475) - np.float64(-8.1885)) < 12.918",
+          "baseline": "assert (np.float64(7.529475) - np.float64(-8.1885)) < 12.918",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_siphon_starter_case_defaults_unit.py",
+      "failure_count": 1,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_starter_case_is_blank_and_keeps_transition_defaults",
+          "current": "assert 0.5 == 0.2",
+          "baseline": "assert 0.5 == 0.2",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_spatial_bend_event_regression.py",
+      "failure_count": 1,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_independent_plan_bend_loss_uses_feature_points_once_per_turn",
+          "current": "AssertionError: assert 6 == 3\n +  where 6 = len(['  平面弯管1: R=4.800m, θ=42.783°', '  平面弯管2: R=4.800m, θ=21.504°', '  平面弯管3: R=4.800m, θ=16.951°', '    平面弯管1（自动计算）: ξ=0.2440', '    平面弯管2（自动计算）: ξ=0.1521', '    平面弯管3（自动计算）: ξ=0.1253'])\n +  and   3 = len([PlanFeaturePoint(chainage=69.109458, x=np.float64(645812.8968978922), y=np.float64(3455956.717782864), azimuth_meas_d...40913, 'end_chainage': 212.62186328945606}, turn_radius_is_explicit=False, turn_radius_text='', turn_radius_source='')])",
+          "baseline": "AssertionError: assert 6 == 3\n +  where 6 = len(['  平面弯管1: R=4.800m, θ=42.783°', '  平面弯管2: R=4.800m, θ=21.504°', '  平面弯管3: R=4.800m, θ=16.951°', '    平面弯管1（自动计算）: ξ=0.2440', '    平面弯管2（自动计算）: ξ=0.1521', '    平面弯管3（自动计算）: ξ=0.1253'])\n +  and   3 = len([PlanFeaturePoint(chainage=69.109458, x=np.float64(645812.8968978922), y=np.float64(3455956.717782864), azimuth_meas_d...40913, 'end_chainage': 212.62186328945606}, turn_radius_is_explicit=False, turn_radius_text='', turn_radius_source='')])",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_spatial_precision_regression_unit.py",
+      "failure_count": 1,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_spatial_event_lines_display_three_decimals_while_using_precise_backend_values",
+          "current": "AssertionError: assert 's=[69.109,72.694] 空间弯管: R_eff=4.800m, θ_3D=42.783°' in '============================================================\\n                    计算结果汇总\\n===========================...      = 0.1694 m\\n\\n【3.4 总水面落差 ΔZ】\\n  公式 L.1.6: ΔZ = ΔZ1 + ΔZ2 - ΔZ3\\n  ΔZ = 0.2320 + 0.9238 - 0.1694\\n     = 0.9864 m'",
+          "baseline": "AssertionError: assert 's=[69.109,72.694] 空间弯管: R_eff=4.800m, θ_3D=42.783°' in '============================================================\\n                    计算结果汇总\\n===========================...      = 0.1694 m\\n\\n【3.4 总水面落差 ΔZ】\\n  公式 L.1.6: ΔZ = ΔZ1 + ΔZ2 - ΔZ3\\n  ΔZ = 0.2320 + 0.9238 - 0.1694\\n     = 0.9864 m'",
+          "message_byte_equal": true
+        }
+      ]
+    },
+    {
+      "file": "tests/test_task4_skip_loss_marking.py",
+      "failure_count": 2,
+      "same_failed_test_names": true,
+      "failures": [
+        {
+          "name": "test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess",
+          "current": "AssertionError: 空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段\nassert 0 >= 2\n +  where 0 = len([])",
+          "baseline": "AssertionError: 空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段\nassert 0 >= 2\n +  where 0 = len([])",
+          "message_byte_equal": true
+        },
+        {
+          "name": "test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps",
+          "current": "AssertionError: xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧\nassert 0 == 2\n +  where 0 = len([])",
+          "baseline": "AssertionError: xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧\nassert 0 == 2\n +  where 0 = len([])",
+          "message_byte_equal": true
+        }
+      ]
+    }
+  ],
+  "protected_data": {
+    "unchanged": true,
+    "files": {
+      "data/default_project.siphon.json": true,
+      "data/hardcopy.log": true,
+      "data/siphon_autosave.json": true,
+      "data/siphon_cases/工况1.siphon.json": true,
+      "data/xxxxx计算稿（计算产品运行卡）.docx": true,
+      "data/单线-画图用26.04.18.dwg": true,
+      "data/南峰寺文家梁有压管道纵断面dxf_recover.dwg": true,
+      "data/多流量段批量计算_导入Excel（模板）.xlsx": true,
+      "data/总干渠线路表20260130.xlsm": true,
+      "data/毗河二期总干渠test.xlsm": true,
+      "data/龙塘水库马坝河分干渠水面线计算-TQ-调整进出口位置-调整倒虹管水头损失-调整避开铁塔-20200210.xlsm": true,
+      "data/龙塘马坝河分干渠10+862.622-test.xlsx": true
+    }
+  },
+  "scoped_diff_check": {
+    "exit_code": 0,
+    "stdout": ""
+  },
+  "evidence": [
+    "architecture_recheck_suite_20261011.xml",
+    "architecture_recheck_baseline_failures_20261011.xml",
+    "architecture_qt_exit_recheck_20261011.json",
+    "architecture_state_recheck_20261011.json",
+    "architecture_independent_domain_export_recheck_20261011.json",
+    "architecture_native_recheck_20261011.json"
+  ],
+  "temporary_files_cleaned": true,
+  "architecture_production_files_match_tested_copy": true,
+  "qt_isolated_exit_instability_root_cause_confirmed": false,
+  "unresolved_new_regression_failures_scope": "业务用例失败；五文件Qt独立退出不稳定未确定根因，正常退出组合复验通过",
+  "retained_baseline": ".tmp/architecture_upgrade_20261011/before.zip plus baseline hashes and initial status"
+}

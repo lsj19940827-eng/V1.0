@@ -10,7 +10,10 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 
-from arc_geometry import clone_arc_geometry
+if __package__:
+    from .arc_geometry import clone_arc_geometry
+else:
+    from arc_geometry import clone_arc_geometry
 
 
 class SegmentDirection(Enum):

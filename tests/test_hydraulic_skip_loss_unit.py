@@ -8,6 +8,8 @@ Task 13.1 单元测试：水力计算跳过渐变段损失逻辑
 import sys
 import os
 
+import pytest
+
 # 添加父目录到路径以支持相对导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
 
@@ -252,12 +254,20 @@ def test_skip_loss_still_calculates_length():
         f"渐变段长度应为非负值，实际长度 {transition.transition_length}"
 
 
-def test_skip_loss_existing_length_still_builds_length_details():
+@pytest.mark.parametrize("length_source, stored_length, expected_length, preserves_value", [
+    ("legacy", 7.5, 7.0, False),
+    ("compressed", 6.5, 6.5, True),
+    ("merged", 7.5, 7.5, True),
+    ("override", 7.5, 7.5, True),
+])
+def test_skip_loss_existing_length_still_builds_length_details(
+    length_source, stored_length, expected_length, preserves_value
+):
     """
     测试 skip_loss=True 且已有长度时仍能补建双击详情
 
-    场景：旧结果或表格回填已经给了 transition_length，
-    当前重新计算只需补详情，不应覆盖当前采用长度。
+    场景：已有长度可能是旧缓存、压缩值、合并缺口或明确单条覆盖。
+    重新计算时旧缓存服从当前公式；压缩、合并和覆盖保留其采用依据。
     """
     prev_node = ChannelNode()
     prev_node.structure_type = StructureType.from_string("明渠-梯形")
@@ -272,7 +282,11 @@ def test_skip_loss_existing_length_still_builds_length_details():
     transition.transition_skip_loss = True
     transition.transition_type = "进口"
     transition.transition_form = "曲线形反弯扭曲面"
-    transition.transition_length = 7.5
+    transition.transition_length = stored_length
+    if length_source == "merged":
+        transition.connection_source_details = {"merged_gap_length": stored_length}
+    elif length_source == "override":
+        transition.transition_length_override_m = stored_length
     transition.flow_section = "渠道3"
 
     next_node = ChannelNode()
@@ -291,20 +305,33 @@ def test_skip_loss_existing_length_still_builds_length_details():
     )
 
     assert loss == 0.0, "skip_loss=True 时损失应保持为 0"
-    assert transition.transition_length == 7.5, "已有长度应保留为当前采用长度"
+    assert transition.transition_length == pytest.approx(expected_length)
     assert transition.transition_length_calc_details, \
         "skip_loss=True 且已有长度时仍应补建长度详情"
-    assert transition.transition_length_calc_details.get("actual_length") == 7.5
-    assert transition.transition_length_calc_details.get("L_result") == 7.5
-    assert transition.transition_length_calc_details.get("uses_existing_length") is True
+    details = transition.transition_length_calc_details
+    assert details["formula_length"] == pytest.approx(5.0 * prev_node.water_depth)
+    assert details["actual_length"] == pytest.approx(expected_length)
+    assert details["L_result"] == pytest.approx(expected_length)
+    assert details["uses_existing_length"] is preserves_value
+    assert details["source"] == ("override" if length_source == "override" else "formula")
+    assert transition.transition_head_loss_local == 0.0
+    assert transition.transition_head_loss_friction == 0.0
 
 
-def test_main_calculator_preserves_existing_skip_loss_length_details():
+@pytest.mark.parametrize("length_source, stored_length, expected_length, preserves_value", [
+    ("legacy", 7.5, 7.0, False),
+    ("compressed", 6.5, 6.5, True),
+    ("merged", 7.5, 7.5, True),
+    ("override", 7.5, 7.5, True),
+])
+def test_main_calculator_preserves_existing_skip_loss_length_details(
+    length_source, stored_length, expected_length, preserves_value
+):
     """
     测试主计算入口 calculate_transition_losses() 也走兼容逻辑
 
-    场景：生产流程中 skip_loss 渐变段已有采用长度（可能来自压缩/合并）。
-    期望：主计算入口不覆盖当前长度，并补建双击详情。
+    场景：生产流程中 skip_loss 渐变段已有长度及不同来源。
+    期望：主计算入口与水力入口使用相同来源规则，并补建双击详情。
     """
     prev_node = ChannelNode()
     prev_node.structure_type = StructureType.from_string("明渠-梯形")
@@ -319,7 +346,11 @@ def test_main_calculator_preserves_existing_skip_loss_length_details():
     transition.transition_skip_loss = True
     transition.transition_type = "进口"
     transition.transition_form = "曲线形反弯扭曲面"
-    transition.transition_length = 7.5
+    transition.transition_length = stored_length
+    if length_source == "merged":
+        transition.connection_source_details = {"merged_gap_length": stored_length}
+    elif length_source == "override":
+        transition.transition_length_override_m = stored_length
     transition.flow_section = "渠道4"
 
     next_node = ChannelNode()
@@ -338,11 +369,16 @@ def test_main_calculator_preserves_existing_skip_loss_length_details():
     calc.calculate_transition_losses(nodes)
 
     assert transition.head_loss_transition == 0.0, "skip_loss=True 时主入口也应保持损失为 0"
-    assert transition.transition_length == 7.5, "主计算入口不应覆盖当前采用长度"
+    assert transition.transition_length == pytest.approx(expected_length)
     assert transition.transition_length_calc_details, "主计算入口应补建长度详情"
-    assert transition.transition_length_calc_details.get("actual_length") == 7.5
-    assert transition.transition_length_calc_details.get("L_result") == 7.5
-    assert transition.transition_length_calc_details.get("uses_existing_length") is True
+    details = transition.transition_length_calc_details
+    assert details["formula_length"] == pytest.approx(5.0 * prev_node.water_depth)
+    assert details["actual_length"] == pytest.approx(expected_length)
+    assert details["L_result"] == pytest.approx(expected_length)
+    assert details["uses_existing_length"] is preserves_value
+    assert details["source"] == ("override" if length_source == "override" else "formula")
+    assert transition.transition_head_loss_local == 0.0
+    assert transition.transition_head_loss_friction == 0.0
 
 
 if __name__ == "__main__":
@@ -359,10 +395,10 @@ if __name__ == "__main__":
     test_skip_loss_still_calculates_length()
     print("✓ test_skip_loss_still_calculates_length passed")
 
-    test_skip_loss_existing_length_still_builds_length_details()
+    test_skip_loss_existing_length_still_builds_length_details("merged", 7.5, 7.5, True)
     print("✓ test_skip_loss_existing_length_still_builds_length_details passed")
 
-    test_main_calculator_preserves_existing_skip_loss_length_details()
+    test_main_calculator_preserves_existing_skip_loss_length_details("merged", 7.5, 7.5, True)
     print("✓ test_main_calculator_preserves_existing_skip_loss_length_details passed")
     
     print("\n所有测试通过！")

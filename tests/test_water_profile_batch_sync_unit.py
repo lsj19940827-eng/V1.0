@@ -2,12 +2,15 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -90,6 +93,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -127,6 +131,7 @@ def _install_panel_import_stubs():
     sys.modules["shared.shared_data_manager"] = shared_mod
 
 
+@isolated_imports
 def _load_panel_class():
     patched_names = [
         "PySide6",
@@ -193,6 +198,7 @@ class _FakeComboBox:
         self._current = self._items[index]
 
 
+@isolated_imports
 def test_sync_batch_settings_updates_global_and_flow_fields():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -237,6 +243,7 @@ def test_sync_batch_settings_updates_global_and_flow_fields():
     assert panel.max_flow_edit.text() == "6, 5, 3.75"
 
 
+@isolated_imports
 def test_sync_batch_settings_uses_manual_qmax_values_when_available():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -277,6 +284,7 @@ def test_sync_batch_settings_uses_manual_qmax_values_when_available():
     assert panel.max_flow_edit.text() == "6.6, 5, 3.75"
 
 
+@isolated_imports
 def test_sync_batch_settings_only_overrides_segments_with_manual_qmax():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -311,6 +319,7 @@ def test_sync_batch_settings_only_overrides_segments_with_manual_qmax():
     assert panel.max_flow_edit.text() == "6, 4.8, 3.75"
 
 
+@isolated_imports
 def test_load_section_sample_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -341,6 +350,7 @@ def test_load_section_sample_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_4_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -371,6 +381,7 @@ def test_load_section_sample_4_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_5_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -401,6 +412,7 @@ def test_load_section_sample_5_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_6_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -431,6 +443,7 @@ def test_load_section_sample_6_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_7_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -461,6 +474,7 @@ def test_load_section_sample_7_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_8_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -491,6 +505,7 @@ def test_load_section_sample_8_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_9_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -521,6 +536,7 @@ def test_load_section_sample_9_triggers_sync_after_loading():
     assert state["marked"] is True
 
 
+@isolated_imports
 def test_load_section_sample_10_triggers_sync_after_loading():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

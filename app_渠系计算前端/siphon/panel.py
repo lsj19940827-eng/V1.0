@@ -15,6 +15,8 @@
 依赖：倒虹吸水力计算系统/ 目录下的计算引擎
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import math
@@ -339,7 +341,7 @@ class SiphonPanel(QWidget):
             from .case_manager import CaseManager
             cases_dir = os.path.join(_pkg_root, 'data', 'siphon_cases')
             self.case_manager = CaseManager(cases_dir)
-            self._autosave_timer = QTimer()
+            self._autosave_timer = QTimer(self)
             self._autosave_timer.setSingleShot(True)
             self._autosave_timer.timeout.connect(self._do_autosave)
 
@@ -429,10 +431,10 @@ class SiphonPanel(QWidget):
             if not self._show_case_management:
                 # 优先使用 SiphonManager 加载（支持自动确认）
                 if self.siphon_manager:
-                    QTimer.singleShot(100, self._load_from_manager)
+                    QTimer.singleShot(100, self, self._load_from_manager)
                 else:
                     # 降级到旧的 autosave 机制（不支持自动确认）
-                    QTimer.singleShot(100, self._load_autosave)
+                    QTimer.singleShot(100, self, self._load_autosave)
 
     # ================================================================
     # UI 构建
@@ -3137,7 +3139,20 @@ document.addEventListener("DOMContentLoaded", function(){
     def from_project_dict(self, data):
         """项目加载接口：复用原有 from_dict。"""
         if isinstance(data, dict):
+            # 工程显式保存的空输入必须清空；参数导入接口仍保持原有的增量兼容行为。
+            self._clear_results()
+            self.calculation_result_increased = None
             self.from_dict(data)
+            for key, edit in (
+                ('threshold', self.edit_threshold), ('v1', self.edit_v1),
+                ('v2', self.edit_v2), ('v_out', self.edit_v_out), ('v3', self.edit_v3),
+                ('inc_percent', self.edit_inc), ('inc_q_text', self.inc_q_edit),
+                ('v1_inc', self.edit_v1_inc), ('v2_inc', self.edit_v2_inc),
+                ('v3_inc', self.edit_v3_inc), ('twist_angle_inlet', self.edit_twist_angle_inlet),
+                ('twist_angle_outlet', self.edit_twist_angle_outlet),
+            ):
+                if key in data:
+                    edit.setText(str(data[key]) if data[key] is not None else '')
 
     def _seg_to_dict(self, seg):
         d = {
@@ -6329,7 +6344,7 @@ document.addEventListener("DOMContentLoaded", function(){
             calc_content_desc=f'{name}倒虹吸水力计算',
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n倒虹吸水力计算',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n倒虹吸水力计算',
         )
         doc.add_page_break()
 
@@ -6654,8 +6669,15 @@ document.addEventListener("DOMContentLoaded", function(){
             data = self.to_dict()
             self.case_manager.save_case_data(current_case, data)
             self._data_dirty = False
-        except:
-            pass
+            self._last_autosave_error = ""
+        except Exception as exc:
+            # 自动保存失败保留未保存状态，相同错误只提示一次，避免定时器反复打扰。
+            self._data_dirty = True
+            message = f"工况自动保存失败，修改仍保留在当前窗口：{exc}"
+            if message != getattr(self, "_last_autosave_error", ""):
+                self._last_autosave_error = message
+                InfoBar.warning("自动保存未完成", message, parent=self,
+                                duration=6000, position=InfoBarPosition.TOP)
 
     def _get_current_case(self):
         """获取当前工况，兼容紧凑选择器和旧侧栏。"""

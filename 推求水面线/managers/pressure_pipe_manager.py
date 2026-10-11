@@ -7,6 +7,7 @@
 
 import copy
 import json
+from atomic_json import atomic_write_json
 import math
 import os
 from datetime import datetime
@@ -104,7 +105,7 @@ class PressurePipeManager:
     管理多个有压管道的参数配置和计算结果的持久化存储。
     """
     
-    def __init__(self, project_path: str = None):
+    def __init__(self, project_path: str = None, *, load_existing: bool = True):
         """
         初始化管理器
         
@@ -122,7 +123,7 @@ class PressurePipeManager:
         }
         
         # 尝试加载现有配置
-        if self._config_path and os.path.exists(self._config_path):
+        if load_existing and self._config_path and os.path.exists(self._config_path):
             self.load_config()
     
     def _get_config_path(self, project_path: str) -> str:
@@ -151,63 +152,34 @@ class PressurePipeManager:
         if "segments" not in self._config or not isinstance(self._config.get("segments"), dict):
             self._config["segments"] = {}
     
-    def set_project_path(self, project_path: str):
-        """设置项目路径并重新加载配置"""
+    def bind_project_path(self, project_path: str):
+        """只绑定持久化路径，不读取或改变当前工程数据。"""
         self._project_path = project_path
-        self._config_path = self._get_config_path(project_path)
-        if os.path.exists(self._config_path):
+        self._config_path = self._get_config_path(project_path) if project_path else None
+
+    def set_project_path(self, project_path: str):
+        """旧独立调用兼容入口：显式绑定并载入历史旁文件。"""
+        self.bind_project_path(project_path)
+        if self._config_path and os.path.exists(self._config_path):
             self.load_config()
         else:
-            self._config = {
-                "version": "1.0",
-                "last_modified": "",
-                "pipes": {},
-                "routes": {},
-                "segments": {},
-            }
-    
+            self._config = {'version': '1.0', 'last_modified': '', 'pipes': {}, 'routes': {}, 'segments': {}}
+
     def load_config(self) -> Dict[str, Any]:
-        """
-        加载配置文件
-        
-        Returns:
-            配置字典
-        """
+        """完整读取并校验后提交；失败抛出，保留内存中的当前数据。"""
         if not self._config_path or not os.path.exists(self._config_path):
             return self._config
-        
-        try:
-            with open(self._config_path, 'r', encoding='utf-8') as f:
-                self._config = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"加载有压管道配置失败: {e}")
-            self._config = {
-                "version": "1.0",
-                "last_modified": "",
-                "pipes": {},
-                "routes": {},
-                "segments": {},
-            }
-        self._ensure_config_sections()
+        with open(self._config_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.from_dict(payload)
         return self._config
-    
+
     def save_config(self):
-        """保存配置到文件"""
+        """统一原子保存；失败交由界面显示，不吞掉持久化错误。"""
         if not self._config_path:
             return
-        
         self._config["last_modified"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        try:
-            # 确保目录存在
-            config_dir = os.path.dirname(self._config_path)
-            if config_dir and not os.path.exists(config_dir):
-                os.makedirs(config_dir)
-            
-            with open(self._config_path, 'w', encoding='utf-8') as f:
-                json.dump(self._config, f, ensure_ascii=False, indent=2)
-        except IOError as e:
-            print(f"保存有压管道配置失败: {e}")
+        atomic_write_json(self._config_path, self._config)
 
     @staticmethod
     def _as_dict(value: Any) -> Dict[str, Any]:
@@ -1319,17 +1291,17 @@ class PressurePipeManager:
         return copy.deepcopy(self._config)
 
     def from_dict(self, data: Dict[str, Any]):
-        """从字典恢复 manager 内部数据（用于从 .qxproj 加载）"""
-        if not data or not isinstance(data, dict):
-            return
-        self._config = copy.deepcopy(data)
-        if "pipes" not in self._config or not isinstance(self._config.get("pipes"), dict):
-            self._config["pipes"] = {}
-        if "routes" not in self._config or not isinstance(self._config.get("routes"), dict):
-            self._config["routes"] = {}
-        if "segments" not in self._config or not isinstance(self._config.get("segments"), dict):
-            self._config["segments"] = {}
-
+        """先校验再替换，避免坏数据局部覆盖当前工程。"""
+        import copy
+        if not isinstance(data, dict):
+            raise ValueError("有压管道管理数据必须是 JSON 对象。")
+        payload = copy.deepcopy(data)
+        for key in ('pipes', 'routes', 'segments'):
+            bucket = payload.setdefault(key, {})
+            if not isinstance(bucket, dict) or any(not isinstance(item, dict) for item in bucket.values()):
+                raise ValueError(f"有压管道管理数据 {key} 必须由 JSON 对象组成。")
+        payload.setdefault("version", "1.0")
+        self._config = payload
 
 # ============================================================
 # 测试代码

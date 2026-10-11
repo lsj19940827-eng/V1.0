@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-11",
+  "scope": "3 original siphon failures",
+  "test_counts": {
+    "tests": 50,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "normal_process_exit_code": 0,
+  "production_hydraulic_code_changed": false,
+  "test_fixes": [
+    {
+      "test": "test_starter_case_is_blank_and_keeps_transition_defaults",
+      "cause": "Read mutable user case as factory fixture; case values are allowed to change during use",
+      "contract": [
+        "PRD_倒虹吸水力计算 4.2/4.5/5.1/5.4",
+        "Frontend SRS 首次打开"
+      ],
+      "repair": "Create real panel against empty isolated case directory, retain exact 0.2/0.4 and seven-type/blank geometry assertions for initial UI, saved file and reopened UI"
+    },
+    {
+      "test": "test_independent_plan_bend_loss_uses_feature_points_once_per_turn",
+      "cause": "Substring counted geometry details plus intended coefficient contribution lines as duplicate hydraulic calculations",
+      "contract": "PRD_倒虹吸水力计算 6.1 and independent contribution expansion",
+      "repair": "Assert solver lookup receives each real arc once, separate exact geometry headers and contribution lines, require consecutive identifiers and exact item counts, retain numerical coefficient sum tolerance"
+    },
+    {
+      "test": "test_spatial_event_lines_display_three_decimals_while_using_precise_backend_values",
+      "cause": "Expected deprecated spatial-merge hydraulic report despite current independent calculation contract",
+      "contract": "PRD_倒虹吸水力计算 6.1 explicitly excludes SpatialMerger from formal hydraulic computation",
+      "repair": "Retain historical diagnostic precision assertions; add formal independent report test that spies exact radius/angle, enforces three-decimal display and 1e-12 numeric agreement, and proves rounded-input coefficient differs"
+    }
+  ],
+  "source_sha256": {
+    "tests/test_siphon_starter_case_defaults_unit.py": "7368c5f62e3aa089012fe45be1663f4a7f7cfb0ccaf9b766dac3bbbc658f821d",
+    "tests/test_spatial_bend_event_regression.py": "b25652747daed96c347325abc1f1bacf769c536990af435571e90d48ed14d6fe",
+    "tests/test_spatial_precision_regression_unit.py": "fd7cec37deb73acd5ef78194b6762ec596283675c97265d07e4337c693c58e3c",
+    "docs/PRD_倒虹吸水力计算.md": "d963c85f1c35af00830638bc6e71129f4c5577a2352df9f191f5e5eefb3887cf",
+    "倒虹吸水力计算系统/siphon_hydraulics.py": "7cbf88fcdc6dbcf966e41a3f186ef94f6a158bee91a4c73d44086574a94a4daa",
+    "倒虹吸水力计算系统/siphon_coefficients.py": "506e21eeb0af41225c258a550963808bd421b2a792a749dfaff89ad99245bbea"
+  },
+  "verification": "isolated source/data copy, temporary QSettings, WMI guard before imports, offscreen QTextBrowser, retained QApplication, normal interpreter exit; no os._exit",
+  "evidence": "failure_cleanup_siphon_20261011.xml"
+}

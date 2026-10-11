@@ -305,7 +305,7 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     if startup_context.update_checks_enabled:
         window.start_silent_update_check()
     if open_update_dialog:
-        QTimer.singleShot(300, lambda: window._open_update_dialog())
+        QTimer.singleShot(300, window, window._open_update_dialog)
     if trace_enabled:
         print("[StartupTrace] event_loop_enter", flush=True)
         app.aboutToQuit.connect(

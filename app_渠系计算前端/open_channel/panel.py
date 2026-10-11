@@ -6,6 +6,8 @@
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import math
@@ -1716,12 +1718,19 @@ class OpenChannelPanel(QWidget):
         """在多工况同图上叠加加大水位线。"""
         if h_w <= 0:
             return
+        compound_geometry = None
         if stype == '圆形':
             span = OpenChannelPanel._draw_circular_water_line(
                 self, ax, result.get('D_design', 0.0), h_w, '--'
             )
         elif stype == '复式梯形':
             h_ch = result.get('h_prime', 0.0) if result.get('h_prime', 0.0) > 0 else h_w * 1.35
+            compound_geometry = self._compound_trapezoid_geometry(
+                result.get('b_design', params.get('B2', 0.0)),
+                params.get('m1', 0.0), params.get('B1', 0.0),
+                params.get('m2', 0.0), params.get('m3', 0.0),
+                params.get('h1', 0.0), h_ch,
+            )
             span = OpenChannelPanel._draw_compound_trapezoid_water_line(
                 self,
                 ax,
@@ -1756,7 +1765,9 @@ class OpenChannelPanel(QWidget):
             )
         if span:
             OpenChannelPanel._draw_increase_water_label(self, ax, span[1], h_w)
-            OpenChannelPanel._draw_increase_depth_dimension(self, ax, span[1], h_w)
+            OpenChannelPanel._draw_increase_depth_dimension(
+                self, ax, span[1], h_w, compound_geometry=compound_geometry
+            )
 
     def _draw_increase_water_label(self, ax, right_x, h_w):
         """在加大水位线旁标注加大水深。"""
@@ -1777,7 +1788,7 @@ class OpenChannelPanel(QWidget):
             color='blue',
         )
 
-    def _draw_increase_depth_dimension(self, ax, right_x, h_w):
+    def _draw_increase_depth_dimension(self, ax, right_x, h_w, *, compound_geometry=None):
         """绘制加大水深竖向尺寸箭头，并避开既有断面尺寸标注。"""
         if h_w <= 0:
             return
@@ -1787,6 +1798,14 @@ class OpenChannelPanel(QWidget):
         y_span = max(y_max - y_min, 1.0)
         arrow_x = max(right_x, x_max) + x_span * 0.06
         text_x = arrow_x + x_span * 0.035
+        right_limit = text_x + x_span * 0.08
+        if compound_geometry is not None:
+            # 加大尺寸以实际轮廓为基准排在总高外侧，不能从既有留白边界继续外扩。
+            outline_right = compound_geometry['right_top'][0]
+            width = compound_geometry['width_ref']
+            arrow_x = outline_right + width * 0.16
+            text_x = outline_right + width * 0.185
+            right_limit = outline_right + max(width * 0.22, 0.3)
         ax.annotate(
             '',
             xy=(arrow_x, h_w),
@@ -1803,7 +1822,7 @@ class OpenChannelPanel(QWidget):
             va='center',
             ha='left',
         )
-        ax.set_xlim(x_min, max(x_max, text_x + x_span * 0.08))
+        ax.set_xlim(x_min, max(x_max, right_limit))
         ax.set_ylim(min(y_min, -y_span * 0.02), max(y_max, h_w + y_span * 0.04))
 
     def _draw_trapezoid_water_line(self, ax, b, m, h_w, linestyle='-'):
@@ -3690,7 +3709,7 @@ class OpenChannelPanel(QWidget):
             calc_content_desc=content_desc,
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n{content_desc}',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n{content_desc}',
         )
         doc.add_page_break()
 

@@ -4,6 +4,7 @@
 import importlib.util
 import math
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,8 @@ def _load_module(module_name: str, file_path: Path):
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -113,6 +116,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -160,6 +164,7 @@ def _install_panel_import_stubs():
     sys.modules["shared.shared_data_manager"] = shared_mod
 
 
+@isolated_imports
 def _load_panel_class():
     patched_names = [
         "PySide6",
@@ -215,6 +220,7 @@ def _fake_fold_local_loss(turn_angle_deg: float, velocity: float):
     }
 
 
+@isolated_imports
 def test_apply_pressure_pipe_member_result_skips_anchor_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -250,6 +256,7 @@ def test_apply_pressure_pipe_member_result_skips_anchor_row():
     assert panel._pressure_pipe_calc_done == {}
 
 
+@isolated_imports
 def test_build_pressure_pipe_chain_anchor_record_preserves_zero_indices_and_uses_blank_losses():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -279,6 +286,7 @@ def test_build_pressure_pipe_chain_anchor_record_preserves_zero_indices_and_uses
     assert record["total_length"] is None
 
 
+@isolated_imports
 def test_build_pressure_pipe_window_override_payload_keeps_route_context_for_chain_member():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -324,6 +332,7 @@ def test_build_pressure_pipe_window_override_payload_keeps_route_context_for_cha
     assert payload["route_display_name"] == "赛金连续整线"
 
 
+@isolated_imports
 def test_normalize_pressure_pipe_window_override_preserves_manual_override_fields():
     WaterProfilePanel = _load_panel_class()
 
@@ -347,6 +356,7 @@ def test_normalize_pressure_pipe_window_override_preserves_manual_override_field
     assert normalized["manual_override_updated_at"] == "2026-04-13 18:30:00"
 
 
+@isolated_imports
 def test_set_pressure_pipe_row_manual_override_updates_and_clears_override_payload():
     WaterProfilePanel = _load_panel_class()
 
@@ -381,9 +391,10 @@ def test_set_pressure_pipe_row_manual_override_updates_and_clears_override_paylo
     )
 
     assert changed is True
-    assert node.section_params["pressure_pipe_window_override"]["manual_total_head_loss"] == pytest.approx(0.41)
-    assert node.section_params["pressure_pipe_window_override"]["manual_override_source"] == "pressure_pipe_loss_dialog"
-    assert node.section_params["pressure_pipe_window_override"]["manual_override_updated_at"] == "2026-04-13 18:35:00"
+    assert "pressure_pipe_window_override" not in node.section_params
+    assert node.pressure_pipe_window_override["manual_total_head_loss"] == pytest.approx(0.41)
+    assert node.pressure_pipe_window_override["manual_override_source"] == "pressure_pipe_loss_dialog"
+    assert node.pressure_pipe_window_override["manual_override_updated_at"] == "2026-04-13 18:35:00"
 
     cleared = WaterProfilePanel._set_pressure_pipe_row_manual_override(
         node,
@@ -392,11 +403,12 @@ def test_set_pressure_pipe_row_manual_override_updates_and_clears_override_paylo
     )
 
     assert cleared is True
-    assert "manual_total_head_loss" not in node.section_params["pressure_pipe_window_override"]
-    assert "manual_override_source" not in node.section_params["pressure_pipe_window_override"]
-    assert "manual_override_updated_at" not in node.section_params["pressure_pipe_window_override"]
+    assert "manual_total_head_loss" not in node.pressure_pipe_window_override
+    assert "manual_override_source" not in node.pressure_pipe_window_override
+    assert "manual_override_updated_at" not in node.pressure_pipe_window_override
 
 
+@isolated_imports
 def test_build_pressure_pipe_route_anchor_record_marks_xxpipe_start_row_as_skip():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -424,6 +436,7 @@ def test_build_pressure_pipe_route_anchor_record_marks_xxpipe_start_row_as_skip(
     assert record["note"] == "整线起点，不计算本行水头损失"
 
 
+@isolated_imports
 def test_apply_pressure_pipe_member_result_writes_chain_row_override():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -472,8 +485,9 @@ def test_apply_pressure_pipe_member_result_writes_chain_row_override():
     changed = WaterProfilePanel._apply_pressure_pipe_member_result(panel, node, group, record)
 
     assert changed is True
-    assert node.section_params["pressure_pipe_window_override"]["identity"] == "flow2-row4"
-    assert node.section_params["pressure_pipe_window_override"]["group_mode"] == "chain_tunnel_member"
+    assert "pressure_pipe_window_override" not in node.section_params
+    assert node.pressure_pipe_window_override["identity"] == "flow2-row4"
+    assert node.pressure_pipe_window_override["group_mode"] == "chain_tunnel_member"
     assert abs(node.head_loss_friction - 0.2101) < 1e-9
     assert abs(node.head_loss_bend - 0.0123) < 1e-9
     assert abs(node.head_loss_local - 0.0088) < 1e-9
@@ -483,6 +497,7 @@ def test_apply_pressure_pipe_member_result_writes_chain_row_override():
 
 
 @pytest.mark.parametrize("channel_level", ["支管", "干管"])
+@isolated_imports
 def test_apply_pressure_pipe_loss_cell_syncs_row_override_total_loss_fields(channel_level):
     WaterProfilePanel = _load_panel_class()
 
@@ -534,6 +549,7 @@ def test_apply_pressure_pipe_loss_cell_syncs_row_override_total_loss_fields(chan
     assert abs(node.head_loss_total - 0.32) < 1e-9
 
 
+@isolated_imports
 def test_apply_pressure_pipe_loss_cell_to_node_prefers_manual_override_for_locked_row():
     WaterProfilePanel = _load_panel_class()
 
@@ -587,6 +603,7 @@ def test_apply_pressure_pipe_loss_cell_to_node_prefers_manual_override_for_locke
     assert abs(node.head_loss_total - 0.44) < 1e-9
 
 
+@isolated_imports
 def test_show_pressure_pipe_loss_details_passes_manual_override_callbacks_for_locked_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -655,6 +672,7 @@ def test_show_pressure_pipe_loss_details_passes_manual_override_callbacks_for_lo
     assert callable(captured["kwargs"]["on_clear_override"])
 
 
+@isolated_imports
 def test_apply_pressure_pipe_member_result_for_named_group_keeps_row_loss_and_stores_hidden_meta():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -712,6 +730,7 @@ def test_apply_pressure_pipe_member_result_for_named_group_keeps_row_loss_and_st
     assert panel._pressure_pipe_calc_done["1::洞梁村"] is True
 
 
+@isolated_imports
 def test_apply_pressure_pipe_member_result_for_named_group_keeps_display_only_row_loss_in_total():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -764,6 +783,7 @@ def test_apply_pressure_pipe_member_result_for_named_group_keeps_display_only_ro
     assert panel._pressure_pipe_calc_done["1::洞梁村"] is True
 
 
+@isolated_imports
 def test_apply_pressure_pipe_member_result_writes_chain_prefix_override_to_special_inlet_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -836,6 +856,7 @@ def test_apply_pressure_pipe_member_result_writes_chain_prefix_override_to_speci
     assert panel._pressure_pipe_calc_done["1::苟家湾::rows83"] is True
 
 
+@isolated_imports
 def test_get_pressure_pipe_display_context_uses_prefix_override_on_special_inlet_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -885,6 +906,7 @@ def test_get_pressure_pipe_display_context_uses_prefix_override_on_special_inlet
     assert WaterProfilePanel._is_pressure_pipe_display_locked_node(node, "支渠") is True
 
 
+@isolated_imports
 def test_pressure_pipe_loss_override_takes_priority_over_row_override_display():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -948,6 +970,7 @@ def test_pressure_pipe_loss_override_takes_priority_over_row_override_display():
     assert node.head_loss_total == pytest.approx(0.80)
 
 
+@isolated_imports
 def test_pressure_pipe_loss_override_clear_restores_named_group_outlet_display_rule():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -996,6 +1019,7 @@ def test_pressure_pipe_loss_override_clear_restores_named_group_outlet_display_r
     assert restored_context["formula_term_loss"] == pytest.approx(0.0)
 
 
+@isolated_imports
 def test_calculate_pressure_chain_prefix_member_result_writes_to_special_inlet_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1126,6 +1150,7 @@ def test_calculate_pressure_chain_prefix_member_result_writes_to_special_inlet_r
     }
 
 
+@isolated_imports
 def test_apply_pressure_pipe_results_falls_back_to_batch_chain_records():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1238,6 +1263,7 @@ def test_apply_pressure_pipe_results_falls_back_to_batch_chain_records():
     assert panel._pressure_pipe_calc_done["flow2-row4"] is True
 
 
+@isolated_imports
 def test_apply_pressure_pipe_results_keeps_split_parent_summary_record_from_overwriting_row_member():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1367,6 +1393,7 @@ def test_apply_pressure_pipe_results_keeps_split_parent_summary_record_from_over
     assert "1::洞梁村::rows2-18" not in panel._pressure_pipe_calc_done
 
 
+@isolated_imports
 def test_apply_pressure_pipe_results_applies_chain_member_outside_pipe_groups():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1451,6 +1478,7 @@ def test_apply_pressure_pipe_results_applies_chain_member_outside_pipe_groups():
     assert getattr(panel, "_silent_recalc_called", False) is True
 
 
+@isolated_imports
 def test_apply_pressure_pipe_results_clears_stale_failed_row_member_state():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1586,6 +1614,7 @@ def test_apply_pressure_pipe_results_clears_stale_failed_row_member_state():
     assert panel._pressure_pipe_manager.removed == ["flow2-row4"]
 
 
+@isolated_imports
 def test_build_pressure_pipe_chain_descriptors_uses_global_chain_name_for_cross_section_chain():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1610,6 +1639,7 @@ def test_build_pressure_pipe_chain_descriptors_uses_global_chain_name_for_cross_
     assert descriptor["chain_id"].startswith("chain1-")
 
 
+@isolated_imports
 def test_build_pressure_pipe_chain_summary_hides_total_for_incomplete_chain():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1669,6 +1699,7 @@ def test_build_pressure_pipe_chain_summary_hides_total_for_incomplete_chain():
     assert summary["member_results"][2]["error"] == "缺少有效纵断面"
 
 
+@isolated_imports
 def test_is_pressure_pipe_row_segment_group_accepts_named_row_segment():
     WaterProfilePanel = _load_panel_class()
 
@@ -1677,6 +1708,7 @@ def test_is_pressure_pipe_row_segment_group_accepts_named_row_segment():
     ) is True
 
 
+@isolated_imports
 def test_named_row_segment_failure_error_header_uses_current_chain_member_name():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1723,6 +1755,7 @@ def test_named_row_segment_failure_error_header_uses_current_chain_member_name()
     assert "苟家湾（前缀段）" not in record["error"]
 
 
+@isolated_imports
 def test_unnamed_pressure_pipe_group_result_labels_longitudinal_profile_length():
     """匿名有压段成功汇总时，应使用纵断面实长文案且不引用旧变量。"""
     WaterProfilePanel = _load_panel_class()
@@ -1812,6 +1845,7 @@ def test_unnamed_pressure_pipe_group_result_labels_longitudinal_profile_length()
     assert "空间长度" not in record["calc_steps"]
 
 
+@isolated_imports
 def test_pressure_pipe_effective_length_keeps_bend_arcs():
     """承压链平面长度备用路径应保留MC区间内弧段，只扣除渐变段。"""
     WaterProfilePanel = _load_panel_class()
@@ -1835,6 +1869,7 @@ def test_pressure_pipe_effective_length_keeps_bend_arcs():
     assert context["effective_length"] == pytest.approx(85.0)
 
 
+@isolated_imports
 def test_unnamed_pressure_pipe_group_result_uses_fold_loss_when_radius_is_zero():
     """逐行承压段有转角但半径为 0 时，应按折管计算弯头损失。"""
     WaterProfilePanel = _load_panel_class()
@@ -1924,6 +1959,7 @@ def test_unnamed_pressure_pipe_group_result_uses_fold_loss_when_radius_is_zero()
     assert "未设置转弯半径，按折管计算" in record["calc_steps"]
 
 
+@isolated_imports
 def test_build_pressure_pipe_chain_summary_keeps_anchor_success_when_record_missing():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1955,6 +1991,7 @@ def test_build_pressure_pipe_chain_summary_keeps_anchor_success_when_record_miss
     assert summary["member_results"][0]["note"] == "链起点锚点，本行不写回"
 
 
+@isolated_imports
 def test_build_pressure_pipe_chain_summary_marks_missing_member_record_with_own_diagnostic():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

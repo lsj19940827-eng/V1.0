@@ -1,0 +1,118 @@
+{
+  "environment": "真实Qt控件，离屏QTextBrowser；包含报告生成及表格写回，非安装包验收",
+  "rows": 400,
+  "runs": 3,
+  "samples": {
+    "before": [
+      {
+        "rows": 400,
+        "columns": 44,
+        "construction_ms": 598.4132000012323,
+        "button_return_ms": 1295.682800002396,
+        "calculation_and_render_ms": 1295.698000001721,
+        "ui_timer_ticks_before_completion": 0,
+        "selection_100_ms": 0.4794000124093145,
+        "delete_80_cells_ms": 256.25559999025427,
+        "delete_undo_steps": 1,
+        "collect_project_ms": 255.38630000664853,
+        "serialized_bytes": 1743518
+      },
+      {
+        "rows": 400,
+        "columns": 44,
+        "construction_ms": 713.7060000095516,
+        "button_return_ms": 1454.919300012989,
+        "calculation_and_render_ms": 1454.9353000184055,
+        "ui_timer_ticks_before_completion": 0,
+        "selection_100_ms": 0.6135999865364283,
+        "delete_80_cells_ms": 309.61569998180494,
+        "delete_undo_steps": 1,
+        "collect_project_ms": 399.645600002259,
+        "serialized_bytes": 1743518
+      },
+      {
+        "rows": 400,
+        "columns": 44,
+        "construction_ms": 539.218299993081,
+        "button_return_ms": 1083.6312999890652,
+        "calculation_and_render_ms": 1083.6459999845829,
+        "ui_timer_ticks_before_completion": 0,
+        "selection_100_ms": 0.7184999994933605,
+        "delete_80_cells_ms": 260.5578000075184,
+        "delete_undo_steps": 1,
+        "collect_project_ms": 286.7019000113942,
+        "serialized_bytes": 1743518
+      }
+    ],
+    "after": [
+      {
+        "rows": 400,
+        "columns": 44,
+        "construction_ms": 387.2519000142347,
+        "button_return_ms": 174.52910001156852,
+        "calculation_and_render_ms": 925.0762000156101,
+        "ui_timer_ticks_before_completion": 1,
+        "selection_100_ms": 0.5202999745961279,
+        "delete_80_cells_ms": 243.53040001005866,
+        "delete_undo_steps": 1,
+        "collect_project_ms": 165.85599997779354,
+        "serialized_bytes": 3616268
+      },
+      {
+        "rows": 400,
+        "columns": 44,
+        "construction_ms": 301.5190000005532,
+        "button_return_ms": 163.69409998878837,
+        "calculation_and_render_ms": 909.6569000103045,
+        "ui_timer_ticks_before_completion": 1,
+        "selection_100_ms": 0.4842999915126711,
+        "delete_80_cells_ms": 242.70129998330958,
+        "delete_undo_steps": 1,
+        "collect_project_ms": 163.9908000070136,
+        "serialized_bytes": 3616268
+      },
+      {
+        "rows": 400,
+        "columns": 44,
+        "construction_ms": 306.21909999172203,
+        "button_return_ms": 175.44389999238774,
+        "calculation_and_render_ms": 949.2980999930296,
+        "ui_timer_ticks_before_completion": 1,
+        "selection_100_ms": 0.5885999999009073,
+        "delete_80_cells_ms": 263.8472999969963,
+        "delete_undo_steps": 1,
+        "collect_project_ms": 188.92370001412928,
+        "serialized_bytes": 3616268
+      }
+    ]
+  },
+  "medians": {
+    "before": {
+      "rows": 400,
+      "columns": 44,
+      "construction_ms": 598.4132000012323,
+      "button_return_ms": 1295.682800002396,
+      "calculation_and_render_ms": 1295.698000001721,
+      "ui_timer_ticks_before_completion": 0,
+      "selection_100_ms": 0.6135999865364283,
+      "delete_80_cells_ms": 260.5578000075184,
+      "delete_undo_steps": 1,
+      "collect_project_ms": 286.7019000113942,
+      "serialized_bytes": 1743518
+    },
+    "after": {
+      "rows": 400,
+      "columns": 44,
+      "construction_ms": 306.21909999172203,
+      "button_return_ms": 174.52910001156852,
+      "calculation_and_render_ms": 925.0762000156101,
+      "ui_timer_ticks_before_completion": 1,
+      "selection_100_ms": 0.5202999745961279,
+      "delete_80_cells_ms": 243.53040001005866,
+      "delete_undo_steps": 1,
+      "collect_project_ms": 165.85599997779354,
+      "serialized_bytes": 3616268
+    }
+  },
+  "numerical_values_equal": true
+}

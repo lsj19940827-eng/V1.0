@@ -5,6 +5,8 @@
 功能：单次计算（推荐管径 + 候选表 + 详细过程）、批量计算（后台线程 + 进度 + CSV/PDF）
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import copy
@@ -566,6 +568,9 @@ class PressurePipePanel(QWidget):
         self._batch_worker: _BatchWorker | None = None
         self._initial_sized = False
         self._initial_help_rendered = False
+        self._initial_help_timer = QTimer(self)
+        self._initial_help_timer.setSingleShot(True)
+        self._initial_help_timer.timeout.connect(self._ensure_initial_help_rendered)
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
@@ -621,8 +626,8 @@ class PressurePipePanel(QWidget):
             self._initial_sized = True
             QTimer.singleShot(0, self._auto_fit_input_width)
         if not self._initial_help_rendered:
-            # 启动阶段先完成主窗口装配，首次真正显示该页时再渲染帮助内容。
-            QTimer.singleShot(0, self._ensure_initial_help_rendered)
+            # 合并快速切换产生的请求；定时器随面板释放，避免遗留回调。
+            self._initial_help_timer.start(0)
 
     def _auto_fit_input_width(self):
         """根据内容实际 sizeHint 自动设置左侧面板初始宽度"""
@@ -1413,7 +1418,11 @@ class PressurePipePanel(QWidget):
 
     def _ensure_initial_help_rendered(self):
         """首次真正显示面板时再补初始帮助，避免阻塞主窗口启动。"""
-        if self._initial_help_rendered:
+        if self._initial_help_rendered or not self.isVisible():
+            return
+        if self._all_results or self._last_errors:
+            # 工程恢复或计算可能早于首次显示，帮助页不得覆盖已有成果或错误详情。
+            self._initial_help_rendered = True
             return
         self._show_initial_help()
 
@@ -2939,30 +2948,6 @@ class PressurePipePanel(QWidget):
             '快捷导航：</span>' + ''.join(btns) + '</div>'
         )
 
-    def _display_all_results(self):
-        """显示所有工况的结果（导航条 + 分段标题 + 多卡片堆叠）"""
-        nav_html = self._build_nav_bar_html()
-
-        parts = []
-        for case_idx, inp, result in self._all_results:
-            parts.append(self._build_result_card_html(case_idx, inp, result))
-
-        full_html = nav_html + "\n".join(parts)
-
-        if self.detail_cb.isChecked():
-            _multi = len(self._all_results) > 1
-            for case_idx, inp, result in self._all_results:
-                if result.calc_steps:
-                    _dtitle = f'工况 {case_idx+1}（Q = {inp.Q} m³/s）详细计算过程' if _multi else '详细计算过程'
-                    full_html += (f'<h3 style="margin:20px 0 8px;padding:8px 14px;'
-                                  f'background:#fafafa;border-left:4px solid #1565c0;'
-                                  f'border-radius:0 8px 8px 0;font-size:15px;'
-                                  f'font-weight:700;color:#1565c0;">'
-                                  f'{_dtitle}</h3>')
-                    full_html += plain_text_to_formula_html(concise_process_text(result))
-
-        load_formula_page(self.result_view, full_html)
-        self.notebook.setCurrentIndex(0)
 
     def _display_all_results(self):
         """显示所有工况结果，并为多工况提供共享导航与定位。"""
@@ -3103,7 +3088,7 @@ class PressurePipePanel(QWidget):
             calc_content_desc=desc,
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n{desc}',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n{desc}',
         )
         doc.add_page_break()
 
@@ -3912,8 +3897,9 @@ class PressurePipePanel(QWidget):
             if self._all_results:
                 apply_case_result_state(self, result_state)
                 # 历史钢管结果仍可查看，重算前不得误标成新的最小外径计算成果。
+                # 兼容输入快照可能缺少材料字段，只有明确为钢管时才应用专项失效规则。
                 old_steel_indexes = [index for index, inp, saved in self._all_results
-                                     if inp.material_key == '钢管'
+                                     if getattr(inp, 'material_key', None) == '钢管'
                                      and not getattr(saved.recommended, 'steel_sizing_trace', None)]
                 if old_steel_indexes:
                     self._mark_results_dirty(case_indexes=old_steel_indexes)

@@ -2426,14 +2426,6 @@ class PressurePipeConfigDialog(QDialog):
         target = coerce_row_index(getattr(group, "target_row_index", -1), -1)
         return target, target
 
-    @staticmethod
-    def _format_row_range_text(start_row: int, end_row: int) -> str:
-        """把 0 基行号范围格式化成界面文案。"""
-        if start_row < 0 and end_row < 0:
-            return "未定位"
-        if start_row == end_row:
-            return f"第{start_row + 1}行"
-        return f"第{start_row + 1}行 ~ 第{end_row + 1}行"
 
     def _resolve_route_water_hammer_saved_map(self, route_key: str) -> Dict[str, Dict[str, Any]]:
         """读取 route 级已保存的水锤段结果。"""

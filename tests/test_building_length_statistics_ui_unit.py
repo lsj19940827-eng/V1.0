@@ -94,7 +94,8 @@ def test_displayed_lengths_close_to_displayed_stations_and_summary(app):
         _dispose(app, dialog)
 
 
-def test_project_reopen_rebuilds_lengths_and_replaces_previous_project_cache(app):
+@pytest.mark.parametrize("table_format", ["current", "legacy"])
+def test_project_reopen_rebuilds_lengths_and_replaces_previous_project_cache(app, table_format):
     panel, restored = WaterProfilePanel(), WaterProfilePanel()
     try:
         panel._settings = ProjectSettings(channel_name='统计往返', start_station=0)
@@ -112,8 +113,14 @@ def test_project_reopen_rebuilds_lengths_and_replaces_previous_project_cache(app
         assert restored.btn_building_stats.isEnabled()
         # 表格快照可以比节点模型更新，恢复统计时必须以当前表格为准。
         edited_payload = copy.deepcopy(payload)
-        edited_payload['node_table_rows'][-1][15] = '统计支0+130.125'
-        edited_payload['node_numeric_display_values'][-1].pop('15', None)
+        if table_format == 'current':
+            row = edited_payload['table_state']['rows'][-1]
+            row['cells'][15] = '统计支0+130.125'
+            row['cell_data']['0']['_numeric_display_values'].pop('15', None)
+        else:
+            edited_payload.pop('table_state')
+            edited_payload['node_table_rows'][-1][15] = '统计支0+130.125'
+            edited_payload['node_numeric_display_values'][-1].pop('15', None)
         restored.from_project_dict(edited_payload, skip_dirty_signal=True)
         assert restored._last_channel_total_length == 130.125
         restored.from_project_dict({}, skip_dirty_signal=True)

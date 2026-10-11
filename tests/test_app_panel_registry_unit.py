@@ -25,10 +25,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 BASE_PACKAGE = "app_渠系计算前端"
+_QAPP = None
 
 
 def _get_qapp():
-    return QApplication.instance() or QApplication([])
+    global _QAPP
+    _QAPP = QApplication.instance() or QApplication([])
+    return _QAPP
 
 
 def _flush_events(rounds=4):

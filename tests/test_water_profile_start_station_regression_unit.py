@@ -107,6 +107,8 @@ def test_project_reload_with_zero_based_snapshot_recovers_on_recalculate():
 
     stale_start = "合干0+000.000"
     stale_end = "合干0+100.000"
+    # 此案例验证旧工程表格快照；新格式的完整状态由独立往返回归覆盖。
+    state.pop("table_state", None)
     for col in (13, 14, 15, 16):
         state["node_table_rows"][0][col] = stale_start
         state["node_table_rows"][1][col] = stale_end

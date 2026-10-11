@@ -227,6 +227,8 @@ PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS = [
     "有压管道设计",
     "calc_渠系计算算法内核.pe_pipe_catalog",
     "calc_渠系计算算法内核.pipe_product_catalog",
+    "calc_渠系计算算法内核.pressure_pipe_batch_models",
+    "calc_渠系计算算法内核.pressure_pipe_batch_export",
 ]
 
 CALC_CORE_HIDDEN_IMPORTS = [
@@ -235,9 +237,20 @@ CALC_CORE_HIDDEN_IMPORTS = [
     "隧洞设计",
     "矩形暗涵设计",
     "生成断面汇总表",
+    "calc_渠系计算算法内核.flat_bottom_circle",
+    "calc_渠系计算算法内核.明渠设计",
+    "calc_渠系计算算法内核.渡槽设计",
+    "calc_渠系计算算法内核.隧洞设计",
+    "calc_渠系计算算法内核.矩形暗涵设计",
+    "calc_渠系计算算法内核.圆拱直墙型暗涵设计",
 ]
 
 SIPHON_CORE_HIDDEN_IMPORTS = [
+    "倒虹吸水力计算系统",
+    "倒虹吸水力计算系统.arc_geometry",
+    "倒虹吸水力计算系统.siphon_models",
+    "倒虹吸水力计算系统.siphon_coefficients",
+    "arc_geometry",
     "siphon_models",
     "siphon_hydraulics",
     "siphon_coefficients",
@@ -292,12 +305,23 @@ WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS = [
     "推求水面线.utils.pressure_pipe_result_helpers",
     "推求水面线.models",
     "推求水面线.models.data_models",
+    "推求水面线.models.pressure_pipe_override",
+    "推求水面线.models.profile_state",
+    "推求水面线.models.profile_node_codec",
     "推求水面线.models.enums",
     "推求水面线.shared",
     "推求水面线.shared.shared_data_manager",
     "推求水面线.shared.k12_images_data",
     "推求水面线.managers",
     "推求水面线.managers.siphon_manager",
+]
+
+FRONTEND_ARCHITECTURE_HIDDEN_IMPORTS = [
+    "app_渠系计算前端.task_runner",
+    "app_渠系计算前端.batch.schema",
+    "app_渠系计算前端.batch.engines",
+    "app_渠系计算前端.batch.calculation_service",
+    "app_渠系计算前端.water_profile.table_state_adapter",
 ]
 
 COLLECT_SUBMODULE_PACKAGES = [
@@ -318,6 +342,7 @@ def get_hidden_imports() -> list[str]:
         *SIPHON_CORE_HIDDEN_IMPORTS,
         *WATER_PROFILE_CORE_HIDDEN_IMPORTS,
         *WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS,
+        *FRONTEND_ARCHITECTURE_HIDDEN_IMPORTS,
     ]
 
 
@@ -330,6 +355,7 @@ def get_verify_import_groups() -> dict[str, list[str]]:
             *PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS,
         ],
         "倒虹吸水力计算系统": list(SIPHON_CORE_HIDDEN_IMPORTS),
+        "界面计算与状态桥接": list(FRONTEND_ARCHITECTURE_HIDDEN_IMPORTS),
         "推求水面线": [
             *WATER_PROFILE_CORE_HIDDEN_IMPORTS,
             *WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS,

@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 
+from version import APP_VERSION
+
 # Word导出依赖（可选）
 try:
     from docx import Document as DocxDocument
@@ -146,9 +148,7 @@ def ask_open_file(filepath, parent=None):
 # ============================================================
 
 # --- 配色常量 ---
-WORD_NAVY = "1B2A4A"
 WORD_GOLD = "C9A96E"
-WORD_WARM_GRAY = "F8F6F3"
 WORD_TEXT_DARK = "2C3E50"
 WORD_TEXT_MID = "5D6D7E"
 
@@ -156,25 +156,7 @@ _NAVY_RGB = RGBColor(0x1B, 0x2A, 0x4A) if WORD_EXPORT_AVAILABLE else None
 _GOLD_RGB = RGBColor(0xC9, 0xA9, 0x6E) if WORD_EXPORT_AVAILABLE else None
 _TEXT_DARK_RGB = RGBColor(0x2C, 0x3E, 0x50) if WORD_EXPORT_AVAILABLE else None
 _TEXT_MID_RGB = RGBColor(0x5D, 0x6D, 0x7E) if WORD_EXPORT_AVAILABLE else None
-_WHITE_RGB = RGBColor(0xFF, 0xFF, 0xFF) if WORD_EXPORT_AVAILABLE else None
-
-
-def _set_cell_shading(cell, color_hex):
-    """设置单元格底色"""
-    shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}" w:val="clear"/>')
-    cell._tc.get_or_add_tcPr().append(shading)
-
-
-def _set_cell_border(cell, **kwargs):
-    """设置单元格边框 kwargs: top/bottom/left/right = (size, color, style)"""
-    tcPr = cell._tc.get_or_add_tcPr()
-    tcBorders = parse_xml(f'<w:tcBorders {nsdecls("w")}/>')
-    for edge, (sz, color, style) in kwargs.items():
-        el = parse_xml(
-            f'<w:{edge} {nsdecls("w")} w:val="{style}" w:sz="{sz}" w:space="0" w:color="{color}"/>'
-        )
-        tcBorders.append(el)
-    tcPr.append(tcBorders)
+_BLACK_RGB = RGBColor(0, 0, 0) if WORD_EXPORT_AVAILABLE else None
 
 
 def _set_paragraph_border_bottom(paragraph, color="000000", size=6):
@@ -188,27 +170,39 @@ def _set_paragraph_border_bottom(paragraph, color="000000", size=6):
     pPr.append(pBdr)
 
 
-def _set_table_borders(table, top_color, bottom_color, inside_h_color,
-                       inside_v_color=None, left_color=None, right_color=None,
-                       top_sz="8", bottom_sz="8", inside_h_sz="2"):
-    """设置表格边框样式"""
-    tbl = table._tbl
-    tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
-    iv = f'<w:insideV w:val="single" w:sz="2" w:space="0" w:color="{inside_v_color}"/>' if inside_v_color else \
-         f'<w:insideV w:val="none" w:sz="0" w:space="0" w:color="FFFFFF"/>'
-    lv = f'<w:left w:val="single" w:sz="2" w:space="0" w:color="{left_color}"/>' if left_color else \
-         f'<w:left w:val="none" w:sz="0" w:space="0" w:color="FFFFFF"/>'
-    rv = f'<w:right w:val="single" w:sz="2" w:space="0" w:color="{right_color}"/>' if right_color else \
-         f'<w:right w:val="none" w:sz="0" w:space="0" w:color="FFFFFF"/>'
-    borders = parse_xml(
-        f'<w:tblBorders {nsdecls("w")}>'
-        f'  <w:top w:val="single" w:sz="{top_sz}" w:space="0" w:color="{top_color}"/>'
-        f'  <w:bottom w:val="single" w:sz="{bottom_sz}" w:space="0" w:color="{bottom_color}"/>'
-        f'  <w:insideH w:val="single" w:sz="{inside_h_sz}" w:space="0" w:color="{inside_h_color}"/>'
-        f'  {iv}{lv}{rv}'
-        f'</w:tblBorders>'
-    )
-    tblPr.append(borders)
+def doc_apply_plain_table_style(table, repeat_header=False):
+    """统一为黑色细网格、黑字、透明底色，保留原有内容、列宽和合并关系。"""
+    table.style = 'Table Grid'
+    tbl_pr = table._tbl.tblPr
+    # 清理模板及单元格的直接装饰，避免覆盖普通网格样式。
+    for node in table._tbl.xpath('.//w:shd | .//w:tblBorders | .//w:tcBorders | .//w:highlight'):
+        node.getparent().remove(node)
+    borders = parse_xml(f'<w:tblBorders {nsdecls("w")}/>')
+    for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+        borders.append(parse_xml(
+            f'<w:{edge} {nsdecls("w")} w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        ))
+    tbl_pr.append(borders)
+    # nil 表示无底纹，不以白色填充冒充透明；显式覆盖表格样式的底纹。
+    tbl_pr.append(parse_xml(f'<w:shd {nsdecls("w")} w:val="nil"/>'))
+    for look in tbl_pr.findall(qn('w:tblLook')):
+        tbl_pr.remove(look)
+    tbl_pr.append(parse_xml(
+        f'<w:tblLook {nsdecls("w")} w:val="0600" w:firstRow="0" w:lastRow="0" '
+        'w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'
+    ))
+    for cell in table._tbl.xpath('.//w:tc'):
+        cell.get_or_add_tcPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:val="nil"/>'))
+    for run in table._tbl.xpath('.//w:r'):
+        run.get_or_add_rPr().get_or_add_color()
+    for color in table._tbl.xpath('.//w:rPr/w:color'):
+        color.attrib.clear()
+        color.set(qn('w:val'), '000000')
+    if repeat_header and table.rows:
+        tr_pr = table.rows[0]._tr.get_or_add_trPr()
+        if tr_pr.find(qn('w:tblHeader')) is None:
+            tr_pr.append(parse_xml(f'<w:tblHeader {nsdecls("w")}/>'))
+    return table
 
 
 def _add_page_number(section, font_name='微软雅黑', font_size=9):
@@ -252,7 +246,7 @@ def _run_styled(paragraph, text, font_name='微软雅黑', font_size=11,
 
 _LOGO_PNG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'logo.png')
 _APP_NAME = "渠系建筑物水力计算系统"
-_APP_VERSION = "V1.0"
+_APP_VERSION = f"V{APP_VERSION}"
 _DEFAULT_DESIGN_UNIT = "四川水发勘测设计研究有限公司"
 
 
@@ -408,10 +402,7 @@ def _add_cover_info_table(doc, items):
                 r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                 r.font.size = Pt(12)
                 r.font.color.rgb = _TEXT_DARK_RGB
-        for c in (c0, c1):
-            _set_cell_border(c,
-                top=("0","FFFFFF","none"), left=("0","FFFFFF","none"),
-                right=("0","FFFFFF","none"), bottom=("2", WORD_GOLD, "single"))
+    doc_apply_plain_table_style(info_tbl)
 
 
 def doc_add_h1(doc, text):
@@ -474,14 +465,14 @@ def doc_add_formula(doc, latex_str, prefix=""):
 
 def doc_add_styled_table(doc, headers, data, highlight_col=None, highlight_val=None,
                          with_full_border=False):
-    """添加方案3风格的数据表格
+    """添加透明底色的普通网格数据表格
     
     Args:
         headers: 列标题列表
         data: 二维数据列表
-        highlight_col: 高亮匹配的列索引
-        highlight_val: 高亮匹配的值
-        with_full_border: 是否显示完整网格线
+        highlight_col: 需加粗匹配的列索引（不使用彩色高亮）
+        highlight_val: 需加粗匹配的值
+        with_full_border: 保留旧调用兼容性，所有表格均显示完整网格线
     """
     table = doc.add_table(rows=len(data)+1, cols=len(headers))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -497,8 +488,7 @@ def doc_add_styled_table(doc, headers, data, highlight_col=None, highlight_val=N
                 r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                 r.font.size = Pt(9)
                 r.bold = True
-                r.font.color.rgb = _WHITE_RGB
-        _set_cell_shading(c, WORD_NAVY)
+                r.font.color.rgb = _BLACK_RGB
     
     # 数据行
     for i, row_data in enumerate(data):
@@ -511,25 +501,14 @@ def doc_add_styled_table(doc, headers, data, highlight_col=None, highlight_val=N
                     r.font.name = '微软雅黑'
                     r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                     r.font.size = Pt(9)
-                    r.font.color.rgb = _TEXT_DARK_RGB
+                    r.font.color.rgb = _BLACK_RGB
                     if highlight_col is not None and j == highlight_col and highlight_val and val == highlight_val:
-                        r.font.color.rgb = _GOLD_RGB
                         r.bold = True
-        if i % 2 == 0:
-            for j in range(len(headers)):
-                _set_cell_shading(table.cell(i+1, j), WORD_WARM_GRAY)
-    
-    # 边框
-    iv_color = "E8E4DF" if with_full_border else None
-    lv_color = "E8E4DF" if with_full_border else None
-    rv_color = "E8E4DF" if with_full_border else None
-    _set_table_borders(table, WORD_NAVY, WORD_NAVY, "E8E4DF",
-                       inside_v_color=iv_color, left_color=lv_color, right_color=rv_color)
-    return table
+    return doc_apply_plain_table_style(table, repeat_header=True)
 
 
 def doc_add_result_table(doc, items):
-    """添加计算结果汇总表（项目+结果 两列，金色表头）
+    """添加计算结果汇总表（项目+结果两列，透明底色普通网格）
     
     Args:
         items: list of (name, value) 元组
@@ -546,8 +525,7 @@ def doc_add_result_table(doc, items):
                 r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                 r.font.size = Pt(10)
                 r.bold = True
-                r.font.color.rgb = _GOLD_RGB
-        _set_cell_shading(c, WORD_NAVY)
+                r.font.color.rgb = _BLACK_RGB
     
     for i, (name, val) in enumerate(items):
         c0 = table.cell(i+1, 0)
@@ -561,21 +539,15 @@ def doc_add_result_table(doc, items):
                 r.font.name = '微软雅黑'
                 r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                 r.font.size = Pt(11)
-                r.font.color.rgb = _TEXT_MID_RGB
+                r.font.color.rgb = _BLACK_RGB
         for p in c1.paragraphs:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in p.runs:
                 r.font.name = '微软雅黑'
                 r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                 r.font.size = Pt(11)
-                r.font.color.rgb = _NAVY_RGB
-                r.bold = True
-        if i % 2 == 0:
-            for j in range(2):
-                _set_cell_shading(table.cell(i+1, j), WORD_WARM_GRAY)
-    
-    _set_table_borders(table, WORD_NAVY, WORD_NAVY, "E8E4DF")
-    return table
+                r.font.color.rgb = _BLACK_RGB
+    return doc_apply_plain_table_style(table, repeat_header=True)
 
 
 def doc_add_param_table(doc, params):
@@ -596,8 +568,7 @@ def doc_add_param_table(doc, params):
                 r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                 r.font.size = Pt(10)
                 r.bold = True
-                r.font.color.rgb = _WHITE_RGB
-        _set_cell_shading(c, WORD_NAVY)
+                r.font.color.rgb = _BLACK_RGB
     
     for i, (name, val) in enumerate(params):
         for j, txt in enumerate([name, val]):
@@ -609,13 +580,8 @@ def doc_add_param_table(doc, params):
                     r.font.name = '微软雅黑'
                     r._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
                     r.font.size = Pt(10)
-                    r.font.color.rgb = _TEXT_DARK_RGB
-        if i % 2 == 0:
-            for j in range(2):
-                _set_cell_shading(table.cell(i+1, j), WORD_WARM_GRAY)
-    
-    _set_table_borders(table, WORD_NAVY, WORD_NAVY, "E8E4DF")
-    return table
+                    r.font.color.rgb = _BLACK_RGB
+    return doc_apply_plain_table_style(table, repeat_header=True)
 
 
 def doc_add_table_caption(doc, text):
@@ -823,6 +789,7 @@ def _add_page1_running_card(doc, meta, calc_title, calc_content_desc):
                 f'<w:trHeight {nsdecls("w")} w:val="{int(rh.emu / 12700)}" w:hRule="atLeast"/>'
             )
             trPr.append(trHeight)
+    doc_apply_plain_table_style(tbl)
 
 
 def _add_page2_cover(doc, meta, calc_title):
@@ -934,6 +901,7 @@ def _add_page3_mandatory_standards(doc, meta, calc_title, calc_content_desc):
     _cell_text_song(tbl.cell(5, 3), '', 10)
     tbl.cell(5, 4).merge(tbl.cell(5, 5))
     _cell_text_song(tbl.cell(5, 4), '', 10)
+    doc_apply_plain_table_style(tbl)
 
 
 def _add_page4_toc(doc):
@@ -991,7 +959,7 @@ def _add_page5_calc_intro(doc, meta, calc_purpose, references, calc_program_text
             _body(seg)
 
     _h4('4、计算程序')
-    _body(calc_program_text or '渠系建筑物水力计算系统 V1.0')
+    _body(calc_program_text or f'{_APP_NAME} {_APP_VERSION}')
 
 
 def _add_eng_header_footer(doc, meta, calc_title):
@@ -1049,7 +1017,7 @@ def create_engineering_report_doc_from_template(meta, calc_title, calc_content_d
     proj  = meta.project_name.strip() or '工程名称'
     stage = meta.design_stage.strip()  or '施工详图设计'
     now   = datetime.datetime.now()
-    paras = doc.paragraphs  # 总共37段（0-36）
+    paras = doc.paragraphs  # 不包含目录内容控件内部的段落
 
     # ------------------------------------------------------------------
     # Para[1] — 标题行  "工程   阶段 计算 产品运行卡"
@@ -1129,15 +1097,36 @@ def create_engineering_report_doc_from_template(meta, calc_title, calc_content_d
     _fill_template_cell(tbl1.cell(2, 1), calc_title,       10, left=True)
     _fill_template_cell(tbl1.cell(2, 3), calc_content_desc,10, left=True)
 
-    # Para[31]: 空 Heading 1 + 分节符
-    # 分节符必须保留：Section 1(封面/目录页)无页脚页码，Section 2(正文)页码从1开始
-    p31 = doc.paragraphs[31]
-    p31.style = doc.styles['Normal']
+    # 将封面分节属性附到日期段，避免两个空段被挤到独立空白页。
+    # 保留分节属性和书签：目录仍另起一页，正文的页码重启规则不受影响。
+    p31 = paras[31]
+    section_break = p31._p.pPr.find(qn('w:sectPr'))
+    if section_break is not None:
+        paras[29]._p.get_or_add_pPr().append(section_break)
+    for node in list(p31._p):
+        if node.tag != qn('w:pPr'):
+            paras[29]._p.append(node)
+    for paragraph in (paras[30], p31):
+        paragraph._p.getparent().remove(paragraph._p)
     # 删除 Para[31] 之后的多余空段（模板末尾可能残留）
-    for p in list(doc.paragraphs[32:]):
+    for p in paras[32:]:
         p._element.getparent().remove(p._element)
 
-    program_text = calc_program_text or '渠系建筑物水力计算系统 V1.0'
+    # 目录标题不参与目录条目，防止 Word 刷新时把“目录”自身再列一次。
+    for toc in doc._element.body.xpath('./w:sdt[w:sdtPr/w:docPartObj/w:docPartGallery[@w:val="Table of Contents"]]'):
+        title = toc.find(qn('w:sdtContent')).find(qn('w:p'))
+        if title is not None:
+            title_pr = title.get_or_add_pPr()
+            title_pr.get_or_add_pStyle().val = doc.styles['Normal'].style_id
+            title_pr.get_or_add_outlineLvl().val = 9
+            for run in title.findall(qn('w:r')):
+                run.get_or_add_rPr().get_or_add_sz().val = Pt(15)
+                run.get_or_add_rPr().get_or_add_b().val = True
+
+    for table in doc.tables:
+        doc_apply_plain_table_style(table)
+
+    program_text = calc_program_text or f'{_APP_NAME} {_APP_VERSION}'
 
     def _h4(text):
         """章节标题（Heading 1 样式，WPS 手动生成目录时可识别）"""
@@ -1208,7 +1197,7 @@ def create_engineering_report_doc(meta, calc_title, calc_content_desc,
     style_normal.font.size = Pt(12)
     style_normal.paragraph_format.line_spacing = Pt(20)
 
-    program_text = calc_program_text or '渠系建筑物水力计算系统 V1.0'
+    program_text = calc_program_text or f'{_APP_NAME} {_APP_VERSION}'
 
     _add_page1_running_card(doc, meta, calc_title, calc_content_desc)
     _add_page2_cover(doc, meta, calc_title)

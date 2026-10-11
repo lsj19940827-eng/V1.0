@@ -1,0 +1,515 @@
+{
+  "date": "2026-10-11",
+  "reviewer_scope": "Independent review of shared geometry, siphon coefficients and package imports, pressure override compatibility, batch calculation/export split and build import collection",
+  "production_code_modified": false,
+  "new_regressions_found": [],
+  "baseline_archive_sha256": "cbbd4be3a61dfced5a39f4a4e21c4bbefa7cb9f213ee83a7c5aea56278cf0c5e",
+  "artifact_comparison": {
+    "case_count": 4,
+    "artifact_counts": {
+      ".csv": 5,
+      ".png": 4,
+      ".pdf": 3
+    },
+    "pdf_pages_including_merged": 4,
+    "xlsx_files": 2,
+    "differences": [],
+    "csv_comparison": "exact file bytes, headers, field order and rows",
+    "png_comparison": "exact dimensions, mode and pixel bytes",
+    "pdf_comparison": "page count, page dimensions and extracted text",
+    "xlsx_comparison": "all visible cell values, style identifiers, column widths and merged-cell ranges",
+    "csv_detail": [
+      {
+        "case": "explicit_csv",
+        "filename": "无压输水能力对比明细.csv",
+        "data_rows": 48,
+        "columns": 25
+      },
+      {
+        "case": "explicit_csv",
+        "filename": "有压管道批量计算结果.csv",
+        "data_rows": 24,
+        "columns": 59
+      },
+      {
+        "case": "all_formats",
+        "filename": "无压输水能力对比明细.csv",
+        "data_rows": 6,
+        "columns": 25
+      },
+      {
+        "case": "all_formats",
+        "filename": "有压管道批量计算结果.csv",
+        "data_rows": 3,
+        "columns": 59
+      },
+      {
+        "case": "unknown_material",
+        "filename": "有压管道批量计算结果.csv",
+        "data_rows": 0,
+        "columns": 0
+      }
+    ],
+    "artifact_fingerprints": [
+      {
+        "case": "explicit_csv",
+        "path": "无压输水能力对比明细.csv",
+        "baseline_comparison_sha256": "345351d96ba3f0eec53310e46427739d18602fd0515f89fc519b49202fb4130b",
+        "current_comparison_sha256": "345351d96ba3f0eec53310e46427739d18602fd0515f89fc519b49202fb4130b",
+        "equal": true
+      },
+      {
+        "case": "explicit_csv",
+        "path": "有压管道批量计算结果.csv",
+        "baseline_comparison_sha256": "05ad10bcb801fcb8d2af48ef62d66f3f135ad4abadb52a1d3a5e9eff30a7af91",
+        "current_comparison_sha256": "05ad10bcb801fcb8d2af48ef62d66f3f135ad4abadb52a1d3a5e9eff30a7af91",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "合并图表_有压管道批量计算.pdf",
+        "baseline_comparison_sha256": "a0ad400320436dc60e58d7bc647898e67443b29e023f81594d427bf92e520dd0",
+        "current_comparison_sha256": "a0ad400320436dc60e58d7bc647898e67443b29e023f81594d427bf92e520dd0",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "图2_优选设计点_0.5_0.5_钢管.pdf",
+        "baseline_comparison_sha256": "9ad8901bca0d9449d2662f8a70d8279956d6d782df34b2db4c52d9e1588d196a",
+        "current_comparison_sha256": "9ad8901bca0d9449d2662f8a70d8279956d6d782df34b2db4c52d9e1588d196a",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "子图PNG/钢管/图2_Q0.5_钢管.png",
+        "baseline_comparison_sha256": "6b61d190e65da6604d9391a2cb0a14a88cdc7821976037d3d6e9959fd96be63d",
+        "current_comparison_sha256": "6b61d190e65da6604d9391a2cb0a14a88cdc7821976037d3d6e9959fd96be63d",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "无压输水能力_钢管_Q0.5.pdf",
+        "baseline_comparison_sha256": "c7eed8c0eeab5adc99efee197da842618c7722e3463644f3632ff02e5e527dcd",
+        "current_comparison_sha256": "c7eed8c0eeab5adc99efee197da842618c7722e3463644f3632ff02e5e527dcd",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "无压输水能力_钢管_Q0.5.png",
+        "baseline_comparison_sha256": "7314b7066910c1d4f7bfa4672957d0006deebbc1c5c36c38d3db96cc5e0ae3d1",
+        "current_comparison_sha256": "7314b7066910c1d4f7bfa4672957d0006deebbc1c5c36c38d3db96cc5e0ae3d1",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "无压输水能力对比明细.csv",
+        "baseline_comparison_sha256": "058fbfb4930a3bd3d7fcc3edd0b74ab54b33e7bb609b799094de06170498d6fa",
+        "current_comparison_sha256": "058fbfb4930a3bd3d7fcc3edd0b74ab54b33e7bb609b799094de06170498d6fa",
+        "equal": true
+      },
+      {
+        "case": "all_formats",
+        "path": "有压管道批量计算结果.csv",
+        "baseline_comparison_sha256": "5fb9632c07eab80ac5aaa62457e8201356e14945c2da3fbe3b4f06d73fbb2b02",
+        "current_comparison_sha256": "5fb9632c07eab80ac5aaa62457e8201356e14945c2da3fbe3b4f06d73fbb2b02",
+        "equal": true
+      },
+      {
+        "case": "png_only_no_csv",
+        "path": "子图PNG/钢管/图1_Q0.5_钢管.png",
+        "baseline_comparison_sha256": "e08dbc53a3e6a835fd5fd8e681d4ec368e4456b7461fa2a7e21ec6bd9c2e4c1d",
+        "current_comparison_sha256": "e08dbc53a3e6a835fd5fd8e681d4ec368e4456b7461fa2a7e21ec6bd9c2e4c1d",
+        "equal": true
+      },
+      {
+        "case": "png_only_no_csv",
+        "path": "子图PNG/钢管/图2_Q0.5_钢管.png",
+        "baseline_comparison_sha256": "6b61d190e65da6604d9391a2cb0a14a88cdc7821976037d3d6e9959fd96be63d",
+        "current_comparison_sha256": "6b61d190e65da6604d9391a2cb0a14a88cdc7821976037d3d6e9959fd96be63d",
+        "equal": true
+      },
+      {
+        "case": "unknown_material",
+        "path": "有压管道批量计算结果.csv",
+        "baseline_comparison_sha256": "2a9061a33923e6e3adc1e3490982f74ca18d7364e8f6337307c92b8f980197ac",
+        "current_comparison_sha256": "2a9061a33923e6e3adc1e3490982f74ca18d7364e8f6337307c92b8f980197ac",
+        "equal": true
+      },
+      {
+        "case": "xlsx",
+        "path": "ip.xlsx",
+        "baseline_comparison_sha256": "2a2be113d1fa99ab881eea1325578282b4d3de4aafc7648c548367449d272658",
+        "current_comparison_sha256": "2a2be113d1fa99ab881eea1325578282b4d3de4aafc7648c548367449d272658",
+        "equal": true
+      },
+      {
+        "case": "xlsx",
+        "path": "results.xlsx",
+        "baseline_comparison_sha256": "18d2b317e934442faaabaecfc670ecd0db8a1014f22500ea3dd1939a15b25138",
+        "current_comparison_sha256": "18d2b317e934442faaabaecfc670ecd0db8a1014f22500ea3dd1939a15b25138",
+        "equal": true
+      }
+    ]
+  },
+  "override_checks": {
+    "normalization_variants": 11,
+    "normalized_values_equal_baseline": true,
+    "legacy_and_direct_project_fields_equal_baseline": true
+  },
+  "reexport_checks": {
+    "failed_csv_write_raises": true,
+    "retry_succeeds_with_solver_and_catalog_queries_disabled": true,
+    "two_reexports_equal_original": true,
+    "snapshot_unchanged": true
+  },
+  "source_checks": {
+    "倒虹吸水力计算系统/siphon_coefficients.py": {
+      "CoefficientService": true
+    },
+    "倒虹吸水力计算系统/siphon_models.py": {
+      "SegmentDirection": true,
+      "TurnType": true,
+      "SegmentType": true,
+      "is_common_type": true,
+      "V2Strategy": true,
+      "GradientType": true,
+      "InletOutletShape": true,
+      "TrashRackBarShape": true,
+      "GlobalParameters": true,
+      "StructureSegment": true,
+      "CalculationResult": true,
+      "TrashRackParams": true,
+      "LongitudinalNode": true,
+      "PlanFeaturePoint": true,
+      "SpatialNode": true,
+      "SpatialMergeResult": true,
+      "PlanSegment": true,
+      "ProfileSegment": true,
+      "BendEvent": true
+    },
+    "倒虹吸水力计算系统/arc_geometry.py": {
+      "_to_float": true,
+      "_normalize_point": true,
+      "_normalize_bool": true,
+      "_unit_vector": true,
+      "_positive_angle": true,
+      "clone_arc_geometry": true,
+      "build_arc_geometry": true,
+      "infer_arc_clockwise": true,
+      "build_plan_arc_geometry_from_context": true,
+      "build_profile_arc_geometry_from_context": true,
+      "reverse_arc_geometry": true,
+      "sample_arc_geometry_points": true,
+      "arc_midpoint": true
+    },
+    "moved_geometry": {
+      "_circular_segment_area": true,
+      "build_flat_bottom_circle_geometry": true,
+      "flat_bottom_circle_full_depth": true,
+      "flat_bottom_circle_area": true,
+      "flat_bottom_circle_perimeter": true,
+      "flat_bottom_circle_half_width": true,
+      "flat_bottom_circle_surface_width": true
+    },
+    "pressure_unchanged_functions": {
+      "PressurePipeInput": true,
+      "DiameterCandidate": true,
+      "RecommendationResult": true,
+      "get_flow_increase_percent": true,
+      "_calc_q_max_unpressurized": true,
+      "solve_unpressurized": true,
+      "_validate_hydraulic_number": true,
+      "_validate_pressure_pipe_input": true,
+      "evaluate_single_diameter": true,
+      "_candidate_dimension_key": true,
+      "_candidate_identity": true,
+      "_format_candidate_size": true,
+      "_auto_recommend": true,
+      "_order_for_display": true,
+      "_steel_specs": true,
+      "recommend_diameter": true,
+      "build_detailed_process_text": true,
+      "_build_process_text": true
+    },
+    "moved_export_helpers": {
+      "_safe_savefig": true,
+      "_numbered_path": true,
+      "_setup_adaptive_xaxis": true
+    },
+    "new_definitions": [
+      "_validate_batch_config",
+      "calculate_batch"
+    ]
+  },
+  "build_import_checks": {
+    "import_groups": {
+      "calc_渠系计算算法内核": [
+        "明渠设计",
+        "渡槽设计",
+        "隧洞设计",
+        "矩形暗涵设计",
+        "生成断面汇总表",
+        "calc_渠系计算算法内核.flat_bottom_circle",
+        "calc_渠系计算算法内核.明渠设计",
+        "calc_渠系计算算法内核.渡槽设计",
+        "calc_渠系计算算法内核.隧洞设计",
+        "calc_渠系计算算法内核.矩形暗涵设计",
+        "calc_渠系计算算法内核.圆拱直墙型暗涵设计",
+        "有压管道设计",
+        "calc_渠系计算算法内核.pe_pipe_catalog",
+        "calc_渠系计算算法内核.pipe_product_catalog",
+        "calc_渠系计算算法内核.pressure_pipe_batch_models",
+        "calc_渠系计算算法内核.pressure_pipe_batch_export"
+      ],
+      "倒虹吸水力计算系统": [
+        "倒虹吸水力计算系统",
+        "倒虹吸水力计算系统.arc_geometry",
+        "倒虹吸水力计算系统.siphon_models",
+        "倒虹吸水力计算系统.siphon_coefficients",
+        "arc_geometry",
+        "siphon_models",
+        "siphon_hydraulics",
+        "siphon_coefficients",
+        "dxf_parser",
+        "spatial_merger"
+      ]
+    },
+    "import_failures": {},
+    "module_count": 26,
+    "packaged_executable_tested": false
+  },
+  "environment": "Initial parallel-run PDF and ZIP operations hit MemoryError under about 1.7 GiB available commit; serial rerun with project Windows WMI guard succeeded.",
+  "not_covered": [
+    "Word report actual generation in this independent review",
+    "Native Word/WPS print layout",
+    "Packaged executable on a clean machine",
+    "All possible user projects and all material/catalog combinations beyond the selected explicit-input export cases"
+  ],
+  "reproduction": "Use the recorded tested_input_overrides with BatchScanConfig and run_batch_scan in separate baseline/current Python processes; apply tools/pyinstaller_runtime_wmi_guard.py first. Compare artifact contents using the comparison rules above. The one-time probe and generated artifacts were removed after recording their fingerprints.",
+  "tested_input_overrides": {
+    "explicit_csv": {
+      "q_values": [
+        0.35,
+        0.8
+      ],
+      "slope_denominators": [
+        1000,
+        2500
+      ],
+      "diameter_values": [
+        0.5,
+        0.8
+      ],
+      "materials": [
+        "钢管",
+        "球墨铸铁管",
+        "HDPE管"
+      ],
+      "length_m": 850.0,
+      "local_loss_ratio": 0.21,
+      "n_unpr": 0.014,
+      "output_pdf_charts": false,
+      "output_subplot_png": false,
+      "output_merged_pdf": false
+    },
+    "all_formats": {
+      "q_values": [
+        0.5
+      ],
+      "slope_denominators": [
+        1000
+      ],
+      "diameter_values": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "materials": [
+        "钢管"
+      ]
+    },
+    "png_only_no_csv": {
+      "q_values": [
+        0.5
+      ],
+      "slope_denominators": [],
+      "diameter_values": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "materials": [
+        "钢管"
+      ],
+      "output_csv": false,
+      "output_pdf_charts": false,
+      "output_subplot_png": true,
+      "output_merged_pdf": false
+    },
+    "unknown_material": {
+      "q_values": [
+        0.5
+      ],
+      "slope_denominators": [],
+      "diameter_values": [
+        0.8
+      ],
+      "materials": [
+        "未知管材"
+      ],
+      "output_pdf_charts": false,
+      "output_subplot_png": false,
+      "output_merged_pdf": false
+    }
+  },
+  "default_output_options": {
+    "output_csv": true,
+    "output_pdf_charts": true,
+    "output_subplot_png": true,
+    "output_merged_pdf": true
+  },
+  "xlsx_fixture": {
+    "channel_name": "独立复核",
+    "channel_level": "支渠",
+    "nodes": [
+      {
+        "structure": "明渠-梯形",
+        "in_out": "正常"
+      },
+      {
+        "structure": "有压管道",
+        "in_out": "进"
+      },
+      {
+        "structure": "有压管道",
+        "in_out": "出"
+      }
+    ],
+    "flow": 1.5,
+    "velocity": 1.2,
+    "water_depth": 0.8,
+    "water_level": "102.0 - row_index * 0.2",
+    "bottom_elevation": "101.2 - row_index * 0.2",
+    "station_MC": "row_index * 25.125",
+    "x": "100.125 + row_index * 11.234",
+    "y": "200.234 + row_index * 9.321",
+    "pressure_diameter": 1.2,
+    "manual_total_head_loss": 0.17
+  },
+  "source_versions": {
+    "identity": "SHA256 of each scoped production source; baseline is the before.zip snapshot, not Git HEAD",
+    "files": [
+      {
+        "path": "calc_渠系计算算法内核/有压管道设计.py",
+        "baseline_sha256": "161908d00dcf97204787ad944b79767d305a733c4aa34c8fff9b148e530a59a4",
+        "current_sha256": "a70de2b2207e0c40d594f6e498254effa6800e4c3da302d43db3cb1cd216cf0b"
+      },
+      {
+        "path": "calc_渠系计算算法内核/pressure_pipe_batch_models.py",
+        "baseline_sha256": null,
+        "current_sha256": "f9f3d58fb347886bb5cacad3dce6021a095cbf0953be0f5011d1e3f7514e726c"
+      },
+      {
+        "path": "calc_渠系计算算法内核/pressure_pipe_batch_export.py",
+        "baseline_sha256": null,
+        "current_sha256": "20befac856d6f529d94a92d0837019ea5c8cba6c85ffff49851a762c6c7b4570"
+      },
+      {
+        "path": "calc_渠系计算算法内核/flat_bottom_circle.py",
+        "baseline_sha256": null,
+        "current_sha256": "01ec8d5f8f4ae41dd6cdcab8a2691eb538d6a149c976ceab0d76bcd1849b5425"
+      },
+      {
+        "path": "calc_渠系计算算法内核/隧洞设计.py",
+        "baseline_sha256": "201540e21eeaa8a455982980e5aaeb4e766052651873a1bebe2f8f670503d769",
+        "current_sha256": "ddeda44e3efda526a7890786481b5c76e73d27da4df2e05b1448ded24b8fa91a"
+      },
+      {
+        "path": "calc_渠系计算算法内核/unpressurized_comparison.py",
+        "baseline_sha256": "54af0e467b2784a96f07cf267543bce265fb1c6308940ee319913ccd1580d203",
+        "current_sha256": "54af0e467b2784a96f07cf267543bce265fb1c6308940ee319913ccd1580d203"
+      },
+      {
+        "path": "calc_渠系计算算法内核/unpressurized_plots.py",
+        "baseline_sha256": "0d1db959fc5953afcc7b171437780b4fff74b25fb84bef8cd837b9f0321bd272",
+        "current_sha256": "0d1db959fc5953afcc7b171437780b4fff74b25fb84bef8cd837b9f0321bd272"
+      },
+      {
+        "path": "calc_渠系计算算法内核/pe_pipe_catalog.py",
+        "baseline_sha256": "1242dd85a0706e597b0fa3e7a751ae869134d3d699a4bc3667bd5609b182c307",
+        "current_sha256": "1242dd85a0706e597b0fa3e7a751ae869134d3d699a4bc3667bd5609b182c307"
+      },
+      {
+        "path": "calc_渠系计算算法内核/pipe_product_catalog.py",
+        "baseline_sha256": "6a1c7d6bd5bfa0823f1c021860c0819acffa745e92aa085411fd1b36fdb83412",
+        "current_sha256": "6a1c7d6bd5bfa0823f1c021860c0819acffa745e92aa085411fd1b36fdb83412"
+      },
+      {
+        "path": "app_渠系计算前端/tunnel/geometry.py",
+        "baseline_sha256": "4563444d4c086865a5f9da4ba4371b991cdf8ad5bada9319b0f8708abb331770",
+        "current_sha256": "eabe40b611974f5e30c7f492a0792bb56af7d69299cc7976d08b556d0b0edcd5"
+      },
+      {
+        "path": "倒虹吸水力计算系统/__init__.py",
+        "baseline_sha256": null,
+        "current_sha256": "48104efca6eb0d613690f1c8d564c4ae50dbf47a02f98952e8d22d234781d790"
+      },
+      {
+        "path": "倒虹吸水力计算系统/siphon_coefficients.py",
+        "baseline_sha256": "eb23d14fe6138893e7ee6b60e108a9d5ede8d6084ce4c8e866b191155f841ace",
+        "current_sha256": "506e21eeb0af41225c258a550963808bd421b2a792a749dfaff89ad99245bbea"
+      },
+      {
+        "path": "倒虹吸水力计算系统/siphon_models.py",
+        "baseline_sha256": "0ee4abc808d9a13d3b0666b1a6f4ab88383e4d613514aefe1f854fc8767a1479",
+        "current_sha256": "fb11fb63deda6937eee209bed9c061c18fb9a9916086f0b02ffa2d60e0c4fd11"
+      },
+      {
+        "path": "倒虹吸水力计算系统/arc_geometry.py",
+        "baseline_sha256": "6f4fc196fee9c3e45c08ebdb97ba843afc0a59b9b7b0ccfeeaa6bbb959d2133f",
+        "current_sha256": "6f4fc196fee9c3e45c08ebdb97ba843afc0a59b9b7b0ccfeeaa6bbb959d2133f"
+      },
+      {
+        "path": "推求水面线/models/__init__.py",
+        "baseline_sha256": "47008ca87b0decf4b0cb7259ef06706e51e53b8fe61672fa5190f991173bb969",
+        "current_sha256": "7b1d313945ef4f3fea93c273f189058075f0ccf1156f9381a0dde7f919b08c10"
+      },
+      {
+        "path": "推求水面线/models/enums.py",
+        "baseline_sha256": "cf3946922de1a22de85a9ca3b3837d1407221a37457efd9bacdf222f03e60894",
+        "current_sha256": "cf3946922de1a22de85a9ca3b3837d1407221a37457efd9bacdf222f03e60894"
+      },
+      {
+        "path": "推求水面线/models/data_models.py",
+        "baseline_sha256": "7ade7d2b4a8258a2360ecf34ba485d9a78034dc578de6e6e03d7488070a28849",
+        "current_sha256": "0b79afd91a07ac9a32c92523f8b800acc56f22631d2d4fe010558f88fddaedc1"
+      },
+      {
+        "path": "推求水面线/models/pressure_pipe_override.py",
+        "baseline_sha256": null,
+        "current_sha256": "b5a1bff57ee14cb69a7936392ebe8493c32380cc377e613afee021fe1dce3301"
+      },
+      {
+        "path": "推求水面线/core/pressure_pipe_calc.py",
+        "baseline_sha256": "a6c9ee64d31df7befa7e8b4d2282bb593fb6866cea94e8a7173366db1941fe4c",
+        "current_sha256": "829a1b2e26c6c4355046312e26a643374d3a5c1f447bbb1916db343427203e5d"
+      },
+      {
+        "path": "推求水面线/core/hydraulic_calc.py",
+        "baseline_sha256": "4fb3d6969efd28014d77340b8cef44f1831ec1d8e94e770e91261e9ec1e9e174",
+        "current_sha256": "f1d56f114f0af56aa6a6f6316fb2d9305a0c6014c7e8a7d5bd0cf77dbc2c0235"
+      },
+      {
+        "path": "推求水面线/utils/excel_io.py",
+        "baseline_sha256": "1349a2361ac44582371123a92282a0a8d5ee64c0d004c230c09b267fc45ea96a",
+        "current_sha256": "1349a2361ac44582371123a92282a0a8d5ee64c0d004c230c09b267fc45ea96a"
+      },
+      {
+        "path": "tools/build.py",
+        "baseline_sha256": "e68548f0cb88644eda88ebf9a598e70ef0f0765eb2ce1255284f62e14a0cebbc",
+        "current_sha256": "bc22784df30e4d9b3ab956117e52b3e7e42f0832076e123b268957473300151e"
+      }
+    ]
+  },
+  "probe_script_sha256": "c6854717557b0d0b5e98e21e4b637c52dde98a8ef0a4c46807ae320292a2f9d4"
+}

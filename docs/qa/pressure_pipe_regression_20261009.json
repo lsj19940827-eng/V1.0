@@ -1,0 +1,271 @@
+{
+  "date": "2026-10-09",
+  "test_file_count": 22,
+  "unique_passed": 403,
+  "failed": 0,
+  "initial_run": [
+    {
+      "file": "test_pressure_pipe_first_entry_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 3.03s"
+    },
+    {
+      "file": "test_project_atomic_save_unit.py",
+      "exit_code": 0,
+      "summary": "4 passed in 0.17s"
+    },
+    {
+      "file": "test_formula_cache_lifecycle_unit.py",
+      "exit_code": 0,
+      "summary": "2 passed in 0.62s"
+    },
+    {
+      "file": "test_formula_renderer_result_pages_unit.py",
+      "exit_code": 0,
+      "summary": "43 passed in 4.22s"
+    },
+    {
+      "file": "test_pressure_pipe_kernel.py",
+      "exit_code": 0,
+      "summary": "41 passed in 0.62s"
+    },
+    {
+      "file": "test_pressure_pipe_batch.py",
+      "exit_code": 0,
+      "summary": "9 passed in 21.71s"
+    },
+    {
+      "file": "test_pressure_pipe_pe_integration.py",
+      "exit_code": 0,
+      "summary": "6 passed in 1.66s"
+    },
+    {
+      "file": "test_pressure_pipe_product_catalog_integration.py",
+      "exit_code": 0,
+      "summary": "8 passed in 1.61s"
+    },
+    {
+      "file": "test_pressure_pipe_standards_audit.py",
+      "exit_code": 0,
+      "summary": "31 passed in 1.96s"
+    },
+    {
+      "file": "test_pressure_pipe_pe_panel_unit.py",
+      "exit_code": 0,
+      "summary": "11 passed in 2.12s"
+    },
+    {
+      "file": "test_pressure_pipe_product_catalog_panel_unit.py",
+      "exit_code": 0,
+      "summary": "24 passed in 3.58s"
+    },
+    {
+      "file": "test_pressure_pipe_project_save_unit.py",
+      "exit_code": 0,
+      "summary": "3 passed in 0.74s"
+    },
+    {
+      "file": "test_pressure_pipe_steel_dimensions.py",
+      "exit_code": 0,
+      "summary": "48 passed in 4.54s"
+    },
+    {
+      "file": "test_pressure_pipe_flow_comparison.py",
+      "exit_code": 0,
+      "summary": "28 passed in 1.51s"
+    },
+    {
+      "file": "test_pressure_pipe_result_details.py",
+      "exit_code": 0,
+      "summary": "13 passed in 0.46s"
+    },
+    {
+      "file": "test_pressure_pipe_diameter_explanation.py",
+      "exit_code": 0,
+      "summary": "22 passed in 2.75s"
+    },
+    {
+      "file": "test_unpressurized_comparison.py",
+      "exit_code": 0,
+      "summary": "22 passed in 3.64s"
+    },
+    {
+      "file": "test_unpressurized_controls.py",
+      "exit_code": 0,
+      "summary": "8 passed in 2.44s"
+    },
+    {
+      "file": "test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "summary": "1 passed in 0.38s"
+    },
+    {
+      "file": "test_multi_case_panel_smoke_unit.py",
+      "exit_code": 1,
+      "summary": "2 failed, 61 passed in 19.68s"
+    },
+    {
+      "file": "test_multi_case_q_recalc_regression_unit.py",
+      "exit_code": 0,
+      "summary": "5 passed in 78.57s (0:01:18)"
+    },
+    {
+      "file": "test_water_profile_flow_selector_unit.py",
+      "exit_code": 0,
+      "summary": "7 passed in 4.70s"
+    }
+  ],
+  "preexisting_failure_reproduction": {
+    "baseline": "7da3a28accee9d361d240f27739ef4bedadc365d",
+    "file": "tests/test_multi_case_panel_smoke_unit.py",
+    "selection": "project_roundtrip and pressure_pipe",
+    "result": "2 failed, 61 deselected",
+    "reason": "兼容输入缺少 material_key 时直接访问字段"
+  },
+  "targeted_recheck": {
+    "files": [
+      "tests/test_multi_case_panel_smoke_unit.py",
+      "tests/test_pressure_pipe_first_entry_unit.py",
+      "tests/test_pressure_pipe_steel_dimensions.py"
+    ],
+    "result": "115 passed in 37.14s"
+  },
+  "atomic_save_recheck": "4 passed in 0.32s",
+  "final_file_results": [
+    {
+      "file": "tests/test_pressure_pipe_first_entry_unit.py",
+      "passed": 4,
+      "failed": 0,
+      "verification": "定向联合复测 115 passed"
+    },
+    {
+      "file": "tests/test_project_atomic_save_unit.py",
+      "passed": 4,
+      "failed": 0,
+      "verification": "保存入口补充复测 4 passed"
+    },
+    {
+      "file": "tests/test_formula_cache_lifecycle_unit.py",
+      "passed": 2,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_formula_renderer_result_pages_unit.py",
+      "passed": 43,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_kernel.py",
+      "passed": 41,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_batch.py",
+      "passed": 9,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_pe_integration.py",
+      "passed": 6,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_product_catalog_integration.py",
+      "passed": 8,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_standards_audit.py",
+      "passed": 31,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_pe_panel_unit.py",
+      "passed": 11,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_product_catalog_panel_unit.py",
+      "passed": 24,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_project_save_unit.py",
+      "passed": 3,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_steel_dimensions.py",
+      "passed": 48,
+      "failed": 0,
+      "verification": "定向联合复测 115 passed"
+    },
+    {
+      "file": "tests/test_pressure_pipe_flow_comparison.py",
+      "passed": 28,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_result_details.py",
+      "passed": 13,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_pressure_pipe_diameter_explanation.py",
+      "passed": 22,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_unpressurized_comparison.py",
+      "passed": 22,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_unpressurized_controls.py",
+      "passed": 8,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_app_panel_registry_unit.py",
+      "passed": 1,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_multi_case_panel_smoke_unit.py",
+      "passed": 63,
+      "failed": 0,
+      "verification": "定向联合复测 115 passed"
+    },
+    {
+      "file": "tests/test_multi_case_q_recalc_regression_unit.py",
+      "passed": 5,
+      "failed": 0,
+      "verification": "独立进程回归"
+    },
+    {
+      "file": "tests/test_water_profile_flow_selector_unit.py",
+      "passed": 7,
+      "failed": 0,
+      "verification": "独立进程回归"
+    }
+  ],
+  "user_autosave_sha256_before_and_after": "8023bec7617da838c3fe637ed24fa2014072465becc0cc28073d5c6c35d3ac68",
+  "desktop_session_verified": false,
+  "release_built": false
+}

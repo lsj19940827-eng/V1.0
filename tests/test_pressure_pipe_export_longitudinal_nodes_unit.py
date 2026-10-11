@@ -3,9 +3,26 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def runtime_longitudinal_tools(monkeypatch):
+    """运行期显式提供纯纵断面服务，不依赖导入助手泄漏的模块缓存。"""
+    root = Path(__file__).resolve().parents[1]
+    module = _load_module(
+        'pressure_pipe_longitudinal_runtime_test',
+        root / '推求水面线' / 'utils' / 'pressure_pipe_longitudinal_utils.py',
+    )
+    package = sys.modules.get('utils') or types.ModuleType('utils')
+    monkeypatch.setitem(sys.modules, 'utils', package)
+    monkeypatch.setattr(package, 'pressure_pipe_longitudinal_utils', module, raising=False)
+    monkeypatch.setitem(sys.modules, 'utils.pressure_pipe_longitudinal_utils', module)
 
 
 def _load_module(module_name: str, file_path: Path):
@@ -16,6 +33,8 @@ def _load_module(module_name: str, file_path: Path):
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     root = Path(__file__).resolve().parents[1]
 
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
@@ -100,6 +119,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -139,6 +159,7 @@ def _install_panel_import_stubs():
     sys.modules["shared.shared_data_manager"] = shared_mod
 
 
+@isolated_imports
 def _load_panel_class():
     root = Path(__file__).resolve().parents[1]
     patched_names = [
@@ -178,6 +199,7 @@ def _load_panel_class():
                 sys.modules[name] = old_module
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_prefers_identity_match():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -215,6 +237,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_prefers_identity_match(
     }
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_uses_unique_name_fallback():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -245,6 +268,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_uses_unique_name_fallba
     }
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_avoids_cross_flow_mix_and_filters_empty():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -275,6 +299,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_avoids_cross_flow_mix_a
     assert result == {}
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_bucket_and_clips_segment():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -313,6 +338,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_bucket_and_
     assert result["flow2-row6"][-1]["chainage"] == 60.0
 
 
+@isolated_imports
 def test_get_pressure_pipe_raw_profile_polylines_for_export_reads_route_bucket():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -351,6 +377,7 @@ def test_get_pressure_pipe_raw_profile_polylines_for_export_reads_route_bucket()
     }
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_bucket_when_storage_key_changes():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -403,6 +430,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_buc
     assert result["flow2-row8"][-1]["chainage"] == 60.0
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_xxpipe_anchor_group():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -451,6 +479,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_x
     assert result["flow1-row1"] == route_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_profile_segments():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -514,6 +543,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_profile_seg
     ]
 
 
+@isolated_imports
 def test_build_generated_tunnel_profile_segment_prefers_row_bottom_elevation_without_manual_invert():
     WaterProfilePanel = _load_panel_class()
 
@@ -551,6 +581,7 @@ def test_build_generated_tunnel_profile_segment_prefers_row_bottom_elevation_wit
     ]
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_nodes_when_segment_only_has_one_point():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -606,6 +637,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_nod
     assert result["flow2-row6"] == route_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_nodes_when_segment_misses_target_station():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -674,6 +706,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_nod
     assert result["flow1-row19"] == route_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_adds_group_row_identity_aliases():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -734,6 +767,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_adds_group_row_identity
     assert result["flow1-row1"] == route_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_cross_flow_boundary_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -796,6 +830,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_c
     assert result["flow2-row63"] == route_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_bucket_from_row_metadata():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -861,6 +896,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_buc
     assert result["flow1-row73"] == route_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_segments_bucket_by_identity():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -912,6 +948,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_segments_bucket_b
     assert result["flow1-row74"] == segment_nodes
 
 
+@isolated_imports
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_when_segment_misses_row_station():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

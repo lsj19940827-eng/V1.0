@@ -1,0 +1,69 @@
+{
+  "finding": "ProjectCodec 调用新纯数据模块，但准确模块尚未列入架构检查集合。",
+  "production_earthwork_modified": false,
+  "allowlist_delta": [
+    "app_渠系计算前端.earthwork.project_state"
+  ],
+  "inspection": {
+    "project_state_imports": [
+      "__future__.annotations",
+      "copy",
+      "math",
+      "typing.Any"
+    ],
+    "earthwork_package_entry": "仅编码声明和文档说明，无导入",
+    "frontend_package_entry": "只导入 qfluentwidgets_compat.ensure_qfluentwidgets_compat；该模块导入仅标准库，不自动执行兼容安装函数"
+  },
+  "regressions": [
+    "允许ProjectCodec导入准确纯模块",
+    "拒绝ProjectCodec导入earthwork面板、相似project_state_ui模块、earthwork整包",
+    "新增纯模块自身7种Qt或相邻UI直接/相对/动态导入均拒绝",
+    "领域层仍不得反向导入该前端纯数据模块",
+    "独立-I子进程拦截Qt/Rhino和相邻面板导入，真实包初始化与ProjectCodec.normalize成功"
+  ],
+  "validation": {
+    "passed": 20,
+    "failures": 0,
+    "errors": 0,
+    "duration_seconds": 2.966,
+    "normal_exit_code": 0,
+    "production_scan": {
+      "files_checked": 164,
+      "issues": []
+    },
+    "junit_sha256": "8fef485baa26e64c9e403a1a366b55915c438b4d6caa0496884ba4c6ec6026b8"
+  },
+  "tested_files": [
+    {
+      "path": "tools/check_architecture.py",
+      "sha256": "c2cc0eaf471cf3bd8669eacdf7e1e4fb0ba9a6f9f3c94d4539ff5dd150672566",
+      "isolated_copy_matches_current": true
+    },
+    {
+      "path": "tests/test_architecture_checker_unit.py",
+      "sha256": "b285adeac4ff398536be09cb0b957118d1d1cbfa34ed776c172b972d8f2ac21d",
+      "isolated_copy_matches_current": true
+    },
+    {
+      "path": "app_渠系计算前端/earthwork/project_state.py",
+      "sha256": "c76b82b607fa0367464ee7fc09219336b2dcbfe4b3a6ac10a39bc2f24f9bccce",
+      "isolated_copy_matches_current": true
+    },
+    {
+      "path": "app_渠系计算前端/earthwork/__init__.py",
+      "sha256": "c2210fd66cb5de169121f745964998060c6ea346c967017012da038aa4f3315b",
+      "isolated_copy_matches_current": true
+    },
+    {
+      "path": "app_渠系计算前端/__init__.py",
+      "sha256": "05a454cd769ac9522e12ecc75d97802ba12faf32b0871c088c98c63b8fb6e31d",
+      "isolated_copy_matches_current": true
+    },
+    {
+      "path": "app_渠系计算前端/qfluentwidgets_compat.py",
+      "sha256": "1671d9995807d52550e6a74d9c2efb53c34d1c06f84058c6e7f149c680780a89",
+      "isolated_copy_matches_current": true
+    }
+  ],
+  "prd": "docs/PRD_架构优化与工程状态.md：维护与验收新增准确模块依赖监测说明。"
+}

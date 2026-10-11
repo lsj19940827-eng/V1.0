@@ -1,0 +1,321 @@
+{
+  "before": {
+    "source_sha256": {
+      "app_渠系计算前端/batch/panel.py": "05f545a53a74111a07491807d0f27344faa17c807b280ea2eb3406d743c905d0",
+      "app_渠系计算前端/water_profile/panel.py": "e32049c5ea04e1be1dda9040a1255f74c89b0f1ece1f171ae2bb1b72aca42687",
+      "app_渠系计算前端/project_manager.py": "baffd420ff673563cbb6eba32887b53cc67f561b5402cf4ea3f93ab6b393c11c"
+    },
+    "recorded_at": "2026-10-09 15:28:17",
+    "scenarios": {
+      "table": {
+        "samples": [
+          {
+            "selection_ms": 1072.3962000047322,
+            "paste_ms": 352.01850000885315,
+            "selection_snapshots": 100,
+            "paste_snapshots": 1,
+            "paste_notifications": 18382,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 959.3120000063209,
+            "paste_ms": 358.60890000185464,
+            "selection_snapshots": 100,
+            "paste_snapshots": 1,
+            "paste_notifications": 18382,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 991.4560000033816,
+            "paste_ms": 407.2585999965668,
+            "selection_snapshots": 100,
+            "paste_snapshots": 1,
+            "paste_notifications": 18382,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 1038.3180000062566,
+            "paste_ms": 352.9991999967024,
+            "selection_snapshots": 100,
+            "paste_snapshots": 1,
+            "paste_notifications": 18382,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 1098.3118000003742,
+            "paste_ms": 448.9203999983147,
+            "selection_snapshots": 100,
+            "paste_snapshots": 1,
+            "paste_notifications": 18382,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          }
+        ],
+        "medians": {
+          "selection_ms": 1038.3180000062566,
+          "paste_ms": 358.60890000185464
+        }
+      },
+      "open": {
+        "samples": [
+          {
+            "open_ms": 2390.5206000054022,
+            "created_panels": 8,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 2554.945299998508,
+            "created_panels": 8,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 2608.317399994121,
+            "created_panels": 8,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 2682.457600007183,
+            "created_panels": 8,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 2613.3977999998024,
+            "created_panels": 8,
+            "active_payload_equal": true
+          }
+        ],
+        "medians": {
+          "open_ms": 2608.317399994121
+        }
+      }
+    }
+  },
+  "after": {
+    "source_sha256": {
+      "app_渠系计算前端/batch/panel.py": "74d507d6575d49c3f8627c77e48591f1428abd4eaa8afcd2e0f33cec74be2612",
+      "app_渠系计算前端/water_profile/panel.py": "cda00b0b3ac68a0b00f1ae547a512def102045955e77e9db461779334259f51d",
+      "app_渠系计算前端/project_manager.py": "202589b96f5f72f503cf4032383f969656a25e3b515a45959f9001eefc397122"
+    },
+    "recorded_at": "2026-10-09 15:55:21",
+    "scenarios": {
+      "table": {
+        "samples": [
+          {
+            "selection_ms": 41.189200012013316,
+            "paste_ms": 123.50030000379775,
+            "selection_snapshots": 0,
+            "paste_snapshots": 1,
+            "paste_notifications": 1,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 13.310900001670234,
+            "paste_ms": 101.401399995666,
+            "selection_snapshots": 0,
+            "paste_snapshots": 1,
+            "paste_notifications": 1,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 19.55959999759216,
+            "paste_ms": 106.17529999581166,
+            "selection_snapshots": 0,
+            "paste_snapshots": 1,
+            "paste_notifications": 1,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 13.364399987040088,
+            "paste_ms": 120.24480001127813,
+            "selection_snapshots": 0,
+            "paste_snapshots": 1,
+            "paste_notifications": 1,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          },
+          {
+            "selection_ms": 18.100700006471016,
+            "paste_ms": 133.49300000118092,
+            "selection_snapshots": 0,
+            "paste_snapshots": 1,
+            "paste_notifications": 1,
+            "undo_steps": 1,
+            "rows": 400,
+            "columns": 42,
+            "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+          }
+        ],
+        "medians": {
+          "selection_ms": 18.100700006471016,
+          "paste_ms": 120.24480001127813
+        }
+      },
+      "open": {
+        "samples": [
+          {
+            "open_ms": 44.702900006086566,
+            "created_panels": 1,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 44.586099989828654,
+            "created_panels": 1,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 39.98600000340957,
+            "created_panels": 1,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 54.11729999468662,
+            "created_panels": 1,
+            "active_payload_equal": true
+          },
+          {
+            "open_ms": 41.46549999131821,
+            "created_panels": 1,
+            "active_payload_equal": true
+          }
+        ],
+        "medians": {
+          "open_ms": 44.586099989828654
+        }
+      }
+    }
+  },
+  "table_state_equal": true,
+  "previous_measurements": [
+    {
+      "phase": "after",
+      "source_sha256": {
+        "app_渠系计算前端/batch/panel.py": "74d507d6575d49c3f8627c77e48591f1428abd4eaa8afcd2e0f33cec74be2612",
+        "app_渠系计算前端/water_profile/panel.py": "0001b33cd83329446a8cc324c977e28d625224325932c4e94a96ce9339131ae3",
+        "app_渠系计算前端/project_manager.py": "202589b96f5f72f503cf4032383f969656a25e3b515a45959f9001eefc397122"
+      },
+      "recorded_at": "2026-10-09 15:50:28",
+      "scenarios": {
+        "table": {
+          "samples": [
+            {
+              "selection_ms": 14.130299998214468,
+              "paste_ms": 98.39509999437723,
+              "selection_snapshots": 0,
+              "paste_snapshots": 1,
+              "paste_notifications": 1,
+              "undo_steps": 1,
+              "rows": 400,
+              "columns": 42,
+              "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+            },
+            {
+              "selection_ms": 12.252300002728589,
+              "paste_ms": 96.75320000678767,
+              "selection_snapshots": 0,
+              "paste_snapshots": 1,
+              "paste_notifications": 1,
+              "undo_steps": 1,
+              "rows": 400,
+              "columns": 42,
+              "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+            },
+            {
+              "selection_ms": 13.996900001075119,
+              "paste_ms": 99.24919999320991,
+              "selection_snapshots": 0,
+              "paste_snapshots": 1,
+              "paste_notifications": 1,
+              "undo_steps": 1,
+              "rows": 400,
+              "columns": 42,
+              "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+            },
+            {
+              "selection_ms": 12.413799995556474,
+              "paste_ms": 96.16020000248682,
+              "selection_snapshots": 0,
+              "paste_snapshots": 1,
+              "paste_notifications": 1,
+              "undo_steps": 1,
+              "rows": 400,
+              "columns": 42,
+              "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+            },
+            {
+              "selection_ms": 13.259200000902638,
+              "paste_ms": 96.02979999908712,
+              "selection_snapshots": 0,
+              "paste_snapshots": 1,
+              "paste_notifications": 1,
+              "undo_steps": 1,
+              "rows": 400,
+              "columns": 42,
+              "state_digest": "9d03c27ae6dc044fdd6732f0292eeb61aff12d7d80965fa40b249f66cda8f732"
+            }
+          ],
+          "medians": {
+            "selection_ms": 13.259200000902638,
+            "paste_ms": 96.75320000678767
+          }
+        },
+        "open": {
+          "samples": [
+            {
+              "open_ms": 43.66389999631792,
+              "created_panels": 1,
+              "active_payload_equal": true
+            },
+            {
+              "open_ms": 39.91260001203045,
+              "created_panels": 1,
+              "active_payload_equal": true
+            },
+            {
+              "open_ms": 39.711999997962266,
+              "created_panels": 1,
+              "active_payload_equal": true
+            },
+            {
+              "open_ms": 44.44110000622459,
+              "created_panels": 1,
+              "active_payload_equal": true
+            },
+            {
+              "open_ms": 60.960599992540665,
+              "created_panels": 1,
+              "active_payload_equal": true
+            }
+          ],
+          "medians": {
+            "open_ms": 43.66389999631792
+          }
+        }
+      }
+    }
+  ]
+}

@@ -3,12 +3,15 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -91,6 +94,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -146,6 +150,7 @@ def _install_panel_import_stubs():
     sys.modules["shared.shared_data_manager"] = shared_mod
 
 
+@isolated_imports
 def _load_panel_module():
     patched_names = [
         "PySide6",
@@ -375,6 +380,7 @@ def _build_minimal_panel(WaterProfilePanel, nodes):
     return panel
 
 
+@isolated_imports
 def test_collect_missing_structure_height_names_skips_pressure_pipe_like_rows_in_mixed_route():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -408,6 +414,7 @@ def test_collect_missing_structure_height_names_skips_pressure_pipe_like_rows_in
     assert result == []
 
 
+@isolated_imports
 def test_collect_missing_structure_height_names_keeps_real_tunnel_missing_height_warning():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -434,6 +441,7 @@ def test_collect_missing_structure_height_names_keeps_real_tunnel_missing_height
     assert result == ["罗家湾"]
 
 
+@isolated_imports
 def test_collect_missing_structure_height_names_skips_auto_inserted_helper_rows():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -462,6 +470,7 @@ def test_collect_missing_structure_height_names_skips_auto_inserted_helper_rows(
     assert result == ["罗家湾"]
 
 
+@isolated_imports
 def test_collect_xxpipe_route_context_map_uses_resolved_first_non_tunnel_anchor(monkeypatch):
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -519,6 +528,7 @@ def test_collect_xxpipe_route_context_map_uses_resolved_first_non_tunnel_anchor(
     assert route_map["flow2-route1"]["import_anchor_station_mc"] == 20.0
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_requires_transition_rows_before_topology_ready():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -544,6 +554,7 @@ def test_pressure_pipe_calculator_requires_transition_rows_before_topology_ready
     assert any("插入渐变段" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_allows_prepared_topology_without_transition_rows():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -570,6 +581,7 @@ def test_pressure_pipe_calculator_allows_prepared_topology_without_transition_ro
     assert not any("插入渐变段" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_repairs_stale_sync_flags_when_table3_topology_still_valid():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -610,6 +622,7 @@ def test_pressure_pipe_calculator_repairs_stale_sync_flags_when_table3_topology_
     assert not any("操作已锁定" in rec["title"] for rec in _FakeInfoBar.records)
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_opens_dialog_for_continuous_xxqu_anonymous_rows():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -661,6 +674,7 @@ def test_pressure_pipe_calculator_opens_dialog_for_continuous_xxqu_anonymous_row
     assert len(opened[0]["pipe_groups"]) == 2
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_opens_dialog_for_xxpipe_anonymous_row_segments():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -714,6 +728,7 @@ def test_pressure_pipe_calculator_opens_dialog_for_xxpipe_anonymous_row_segments
     assert opened[0]["pipe_groups"][0].display_name == "流量段1 第2行有压管道"
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_opens_route_only_dialog_for_supported_xxpipe_routes():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -782,6 +797,7 @@ def test_pressure_pipe_calculator_opens_route_only_dialog_for_supported_xxpipe_r
     assert not any("隧洞" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_keeps_tunnel_mixed_xxpipe_routes_available():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -926,6 +942,7 @@ def test_pressure_pipe_calculator_keeps_tunnel_mixed_xxpipe_routes_available():
     assert not any("夹带隧洞" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+@isolated_imports
 def test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_xxqu():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -968,6 +985,7 @@ def test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_
     assert "flow7-route1" in result["route_import_targets"]
 
 
+@isolated_imports
 def test_prepare_pressure_pipe_dialog_context_shares_route_import_across_internal_tunnel():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1029,6 +1047,7 @@ def test_prepare_pressure_pipe_dialog_context_shares_route_import_across_interna
     }
 
 
+@isolated_imports
 def test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_mode():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1053,6 +1072,7 @@ def test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_
     assert result["route_import_targets"] == {}
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_keeps_route_profile_segments_when_pure_xxpipe_route_recomputed():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1237,6 +1257,7 @@ def test_pressure_pipe_calculator_keeps_route_profile_segments_when_pure_xxpipe_
     assert panel._pressure_pipe_manager.calls[0]["profile_segments"] is None
 
 
+@isolated_imports
 def test_build_pressure_pipe_route_profile_segments_uses_group_identity_without_typeerror():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1279,6 +1300,7 @@ def test_build_pressure_pipe_route_profile_segments_uses_group_identity_without_
     assert result[route_key][0]["source_kind"] == "non_tunnel_dxf"
 
 
+@isolated_imports
 def test_mark_section_results_stale_clears_transition_topology_prepared_flag():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1303,6 +1325,7 @@ def test_mark_section_results_stale_clears_transition_topology_prepared_flag():
     }
 
 
+@isolated_imports
 def test_mark_section_results_stale_disables_all_downstream_buttons():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1338,6 +1361,7 @@ def test_mark_section_results_stale_disables_all_downstream_buttons():
         assert btn.property("table3_locked_look") is None
 
 
+@isolated_imports
 def test_refresh_pressure_pipe_controls_keeps_button_disabled_when_sync_not_ready():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1354,6 +1378,7 @@ def test_refresh_pressure_pipe_controls_keeps_button_disabled_when_sync_not_read
     assert panel.btn_pressure_pipe_calc.tooltip == ""
 
 
+@isolated_imports
 def test_set_downstream_actions_enabled_reenables_buttons_without_custom_style():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1382,6 +1407,7 @@ def test_set_downstream_actions_enabled_reenables_buttons_without_custom_style()
         assert btn.property("table3_locked_look") is None
 
 
+@isolated_imports
 def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready_without_changing_enabled_state():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1418,6 +1444,7 @@ def _build_water_hammer_button_state_panel(WaterProfilePanel, *, sync_ready=True
     return panel
 
 
+@isolated_imports
 def test_refresh_pressure_pipe_water_hammer_controls_requires_section_ready():
     """表1/表3链路未就绪时，水锤按钮保持灰色。"""
     module = _load_panel_module()
@@ -1434,6 +1461,7 @@ def test_refresh_pressure_pipe_water_hammer_controls_requires_section_ready():
     assert "断面批量计算" in panel.btn_pressure_pipe_water_hammer.tooltip
 
 
+@isolated_imports
 def test_refresh_pressure_pipe_water_hammer_controls_requires_pressure_pipe_result():
     """有压管道水力计算未完成时，水锤按钮保持灰色。"""
     module = _load_panel_module()
@@ -1450,6 +1478,7 @@ def test_refresh_pressure_pipe_water_hammer_controls_requires_pressure_pipe_resu
     assert "有压管道水力计算" in panel.btn_pressure_pipe_water_hammer.tooltip
 
 
+@isolated_imports
 def test_refresh_pressure_pipe_water_hammer_controls_requires_table3_water_level():
     """未执行计算生成有效表3水位时，水锤按钮保持灰色。"""
     module = _load_panel_module()
@@ -1466,6 +1495,7 @@ def test_refresh_pressure_pipe_water_hammer_controls_requires_table3_water_level
     assert "执行计算" in panel.btn_pressure_pipe_water_hammer.tooltip
 
 
+@isolated_imports
 def test_refresh_pressure_pipe_water_hammer_controls_enables_after_water_level_ready():
     """基础条件满足后，水锤按钮变为可点击。"""
     module = _load_panel_module()
@@ -1482,6 +1512,7 @@ def test_refresh_pressure_pipe_water_hammer_controls_enables_after_water_level_r
     assert "水锤验算" in panel.btn_pressure_pipe_water_hammer.tooltip
 
 
+@isolated_imports
 def test_open_pressure_pipe_water_hammer_checker_uses_dedicated_dialog(monkeypatch):
     """点击新按钮后打开水锤专用窗口。"""
     module = _load_panel_module()
@@ -1528,6 +1559,7 @@ def test_open_pressure_pipe_water_hammer_checker_uses_dedicated_dialog(monkeypat
     assert dialog_calls[-1] == {"refreshed": True}
 
 
+@isolated_imports
 def test_resolve_loaded_section_gate_state_treats_missing_sync_ready_as_legacy_ready():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1541,6 +1573,7 @@ def test_resolve_loaded_section_gate_state_treats_missing_sync_ready_as_legacy_r
     assert legacy_loaded is True
 
 
+@isolated_imports
 def test_resolve_loaded_section_gate_state_recovers_successful_loaded_project_even_if_sync_ready_false():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1556,6 +1589,7 @@ def test_resolve_loaded_section_gate_state_recovers_successful_loaded_project_ev
     assert legacy_loaded is True
 
 
+@isolated_imports
 def test_resolve_loaded_section_gate_state_keeps_explicit_false_for_stale_loaded_project():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1571,6 +1605,7 @@ def test_resolve_loaded_section_gate_state_keeps_explicit_false_for_stale_loaded
     assert legacy_loaded is False
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_writeback():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1647,6 +1682,7 @@ def test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_w
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_recalc_override_reload():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1773,6 +1809,7 @@ def test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_accepts_real_split_parent_when_only_row_members_have_results():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1871,6 +1908,7 @@ def test_collect_pending_pressure_pipe_execute_members_accepts_real_split_parent
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_accepts_real_same_name_long_tail_after_apply():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2005,6 +2043,7 @@ def test_collect_pending_pressure_pipe_execute_members_accepts_real_same_name_lo
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_writeback():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2059,6 +2098,7 @@ def test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_wri
     assert pending == ["苟家湾（前缀段）"]
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_accepts_named_group_hidden_result():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2119,6 +2159,7 @@ def test_collect_pending_pressure_pipe_execute_members_accepts_named_group_hidde
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_skips_split_named_group_parent():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2207,6 +2248,7 @@ def test_collect_pending_pressure_pipe_execute_members_skips_split_named_group_p
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tunnel_row_override():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2291,6 +2333,7 @@ def test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tu
     assert pending == []
 
 
+@isolated_imports
 def test_pressure_pipe_calculator_skips_named_group_total_when_split_to_row_members():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2492,6 +2535,7 @@ def test_pressure_pipe_calculator_skips_named_group_total_when_split_to_row_memb
 
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tail_row_members():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -2614,6 +2658,7 @@ def test_collect_pending_pressure_pipe_execute_members_allows_completed_named_ta
     assert pending == []
 
 
+@isolated_imports
 def test_collect_pending_pressure_pipe_execute_members_ignores_tunnel_only_chain_without_pressure_pipe_groups():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel

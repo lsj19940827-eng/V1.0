@@ -8,6 +8,10 @@
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Literal
 from .enums import StructureType, InOutType
+from .pressure_pipe_override import (
+    get_pressure_pipe_window_override,
+    pressure_pipe_section_params_for_project,
+)
 
 
 @dataclass
@@ -35,7 +39,7 @@ class ChannelNode:
     roughness: float = 0.014                    # 糙率 n
     
     # ========== 断面参数（可从多渠段导入或手动输入） ==========
-    section_params: Dict[str, float] = field(default_factory=dict)
+    section_params: Dict[str, Any] = field(default_factory=dict)
     # 可能的键: 底宽b, 水深h, 边坡m, 直径D, 内半径R 等
     
     # ========== 几何计算结果 ==========
@@ -115,6 +119,12 @@ class ChannelNode:
     transition_calc_details: Dict[str, Any] = field(default_factory=dict)  # 计算详情（用于LaTeX显示）
     transition_length_calc_details: Dict[str, Any] = field(default_factory=dict)  # 渐变段长度计算详情（用于双击展示）
     
+    profile_row_id: str = ""                    # 表3稳定行标识，旧工程由适配器生成
+
+    def __post_init__(self):
+        """构造时迁移旧专项结果，断面参数不再维护结果镜像。"""
+        get_pressure_pipe_window_override(self)
+
     def get_structure_type_str(self) -> str:
         """获取结构形式的字符串表示"""
         return self.structure_type.value if self.structure_type else ""
@@ -243,7 +253,8 @@ class ChannelNode:
             # ========== 水力输入字段 ==========
             "flow": self.flow,
             "roughness": self.roughness,
-            "section_params": self.section_params,
+            "profile_row_id": self.profile_row_id,
+            "section_params": pressure_pipe_section_params_for_project(self),
             
             # ========== 几何计算结果 ==========
             "azimuth": self.azimuth,
@@ -364,6 +375,7 @@ class ChannelNode:
         # ========== 水力输入字段 ==========
         node.flow = d.get("flow", 0.0)
         node.roughness = d.get("roughness", 0.014)
+        node.profile_row_id = str(d.get("profile_row_id", "") or "")
         node.section_params = d.get("section_params", {})
         
         # ========== 几何计算结果 ==========
@@ -450,6 +462,7 @@ class ChannelNode:
         node.transition_calc_details = d.get("transition_calc_details", {})
         node.transition_length_calc_details = d.get("transition_length_calc_details", {})
         
+        get_pressure_pipe_window_override(node)
         return node
 
 

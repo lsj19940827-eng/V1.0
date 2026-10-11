@@ -1,0 +1,141 @@
+{
+  "scenario": "明渠首页就绪后，首次进入有压管道直到真实网页加载完成",
+  "environment": "独立 Python 进程，Qt offscreen，真实 WebEngine，1380x850",
+  "python": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+  "baseline_ref": "7da3a28accee9d361d240f27739ef4bedadc365d",
+  "source_sha256": {
+    "calc_渠系计算算法内核/有压管道设计.py": "161908d00dcf97204787ad944b79767d305a733c4aa34c8fff9b148e530a59a4",
+    "calc_渠系计算算法内核/unpressurized_comparison.py": "54af0e467b2784a96f07cf267543bce265fb1c6308940ee319913ccd1580d203",
+    "app_渠系计算前端/pressure_pipe/panel.py": "468eb1fdaa6aac498ff219f4f9f44e962d230c7a21da73fc112946b8427a2a69",
+    "app_渠系计算前端/pressure_pipe/slope_controls.py": "4348ac035633daac89f0f9c726641f1874101c4700ddf31eee5f1e6c4cbce7e3",
+    "app_渠系计算前端/formula_renderer.py": "a1c8ebfc04f456c43c9c1f8bc425fa6cf5bee7852e2e2d41528bed88de184130"
+  },
+  "samples": {
+    "baseline": [
+      {
+        "import_ms": 799.0417999972124,
+        "construction_ms": 147.33380000689067,
+        "display_ready_ms": 207.63039999292232,
+        "first_entry_ms": 1154.0059999970254,
+        "repeat_switch_ms": 11.272300005657598,
+        "batch_libraries_newly_loaded": [
+          "pandas",
+          "scipy.optimize"
+        ],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 697.9378999967594,
+        "construction_ms": 126.33240000286605,
+        "display_ready_ms": 214.34960000624415,
+        "first_entry_ms": 1038.6199000058696,
+        "repeat_switch_ms": 12.050500008626841,
+        "batch_libraries_newly_loaded": [
+          "pandas",
+          "scipy.optimize"
+        ],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 900.3414999897359,
+        "construction_ms": 130.61610001022927,
+        "display_ready_ms": 232.5020999996923,
+        "first_entry_ms": 1263.4596999996575,
+        "repeat_switch_ms": 11.847299989312887,
+        "batch_libraries_newly_loaded": [
+          "pandas",
+          "scipy.optimize"
+        ],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 813.0722000059905,
+        "construction_ms": 133.83459999749903,
+        "display_ready_ms": 219.77090000291355,
+        "first_entry_ms": 1166.677700006403,
+        "repeat_switch_ms": 12.286500001209788,
+        "batch_libraries_newly_loaded": [
+          "pandas",
+          "scipy.optimize"
+        ],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 785.4190000070957,
+        "construction_ms": 123.80659999325871,
+        "display_ready_ms": 202.62530000763945,
+        "first_entry_ms": 1111.850900007994,
+        "repeat_switch_ms": 11.162200011312962,
+        "batch_libraries_newly_loaded": [
+          "pandas",
+          "scipy.optimize"
+        ],
+        "page_loaded": true
+      }
+    ],
+    "current": [
+      {
+        "import_ms": 24.1295000014361,
+        "construction_ms": 126.63759999850299,
+        "display_ready_ms": 306.01660000684205,
+        "first_entry_ms": 456.78370000678115,
+        "repeat_switch_ms": 10.9402000089176,
+        "batch_libraries_newly_loaded": [],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 23.741400000290014,
+        "construction_ms": 138.44120000430848,
+        "display_ready_ms": 213.48269999725744,
+        "first_entry_ms": 375.66530000185594,
+        "repeat_switch_ms": 11.775300008594058,
+        "batch_libraries_newly_loaded": [],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 22.654500004136935,
+        "construction_ms": 139.38609999604523,
+        "display_ready_ms": 205.56170000054408,
+        "first_entry_ms": 367.60230000072625,
+        "repeat_switch_ms": 12.006399992969818,
+        "batch_libraries_newly_loaded": [],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 24.515700002666563,
+        "construction_ms": 130.74829999823123,
+        "display_ready_ms": 200.5122999980813,
+        "first_entry_ms": 355.7762999989791,
+        "repeat_switch_ms": 13.115099995047785,
+        "batch_libraries_newly_loaded": [],
+        "page_loaded": true
+      },
+      {
+        "import_ms": 22.919099996215664,
+        "construction_ms": 136.21250000142027,
+        "display_ready_ms": 202.87790001020767,
+        "first_entry_ms": 362.0095000078436,
+        "repeat_switch_ms": 11.847000001580454,
+        "batch_libraries_newly_loaded": [],
+        "page_loaded": true
+      }
+    ]
+  },
+  "medians_ms": {
+    "baseline": {
+      "import_ms": 799.042,
+      "construction_ms": 130.616,
+      "display_ready_ms": 214.35,
+      "first_entry_ms": 1154.006,
+      "repeat_switch_ms": 11.847
+    },
+    "current": {
+      "import_ms": 23.741,
+      "construction_ms": 136.213,
+      "display_ready_ms": 205.562,
+      "first_entry_ms": 367.602,
+      "repeat_switch_ms": 11.847
+    }
+  },
+  "first_entry_reduction_percent": 68.15
+}

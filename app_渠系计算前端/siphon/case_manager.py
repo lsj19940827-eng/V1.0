@@ -2,6 +2,8 @@
 """倒虹吸工况管理器"""
 import os
 import json
+from atomic_json import atomic_write_json
+import math
 import time
 from typing import List, Dict, Optional
 
@@ -19,11 +21,13 @@ class CaseManager:
         self.cases_dir = cases_dir
         os.makedirs(cases_dir, exist_ok=True)
         self.cases: List[CaseInfo] = []
+        self.load_errors: List[Dict[str, str]] = []
         self._load_cases()
 
     def _load_cases(self):
         """加载所有工况"""
         self.cases = []
+        self.load_errors = []
         if not os.path.exists(self.cases_dir):
             return
 
@@ -33,12 +37,19 @@ class CaseManager:
                 try:
                     with open(fpath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
+                    if not isinstance(data, dict):
+                        raise ValueError("工况内容必须是 JSON 对象。")
                     name = data.get('case_name', fname.replace('.siphon.json', ''))
-                    created = data.get('created_time', os.path.getctime(fpath))
-                    order = data.get('order', created)
+                    if not isinstance(name, str):
+                        raise ValueError("工况名称必须是文本。")
+                    created = float(data.get('created_time', os.path.getctime(fpath)))
+                    order = float(data.get('order', created))
+                    if not math.isfinite(created) or not math.isfinite(order):
+                        raise ValueError("工况时间和顺序必须是有限数值。")
                     self.cases.append(CaseInfo(name, fpath, created, order))
-                except:
-                    pass
+                except Exception as exc:
+                    # 一个损坏文件不阻断其他工况，界面可统一显示诊断。
+                    self.load_errors.append({'path': fpath, 'message': str(exc)})
 
         self.cases.sort(key=lambda c: c.order)
 
@@ -52,8 +63,7 @@ class CaseManager:
         order = created
 
         data = {'case_name': name, 'created_time': created, 'order': order}
-        with open(fpath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(fpath, data)
 
         case = CaseInfo(name, fpath, created, order)
         self.cases.append(case)
@@ -72,8 +82,7 @@ class CaseManager:
         data['order'] = now
 
         file_path = os.path.join(self.cases_dir, f"{name}.siphon.json")
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(file_path, data)
 
         self._load_cases()
         for case in self.cases:
@@ -147,8 +156,7 @@ class CaseManager:
             data = json.load(f)
         data['case_name'] = new_name
 
-        with open(new_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(new_path, data)
 
         if old_path != new_path:
             os.remove(old_path)
@@ -179,8 +187,7 @@ class CaseManager:
         data['order'] = created
 
         new_path = os.path.join(self.cases_dir, f"{new_name}.siphon.json")
-        with open(new_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(new_path, data)
 
         new_case = CaseInfo(new_name, new_path, created, created)
         self.cases.append(new_case)
@@ -189,21 +196,20 @@ class CaseManager:
     def reorder_cases(self, new_order: List[CaseInfo]):
         """重新排序工况"""
         for i, case in enumerate(new_order):
-            case.order = i
             with open(case.file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             data['order'] = i
-            with open(case.file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(case.file_path, data)
+            case.order = i
         self.cases = new_order
 
     def save_case_data(self, case: CaseInfo, data: dict):
         """保存工况数据"""
+        data = dict(data)
         data['case_name'] = case.name
         data['created_time'] = case.created_time
         data['order'] = case.order
-        with open(case.file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(case.file_path, data)
 
     def load_case_data(self, case: CaseInfo) -> dict:
         """加载工况数据"""

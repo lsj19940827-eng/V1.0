@@ -110,6 +110,15 @@ def test_panels_only_show_default_percent_increase_input_on_first_open(
 ):
     panel = _new_panel(folder, class_name)
 
+    if folder == "spillway_steep_chute":
+        # 专项面板的加大参数位于按需展开区，先验证首次进入的折叠契约。
+        assert panel.advanced_group.is_collapsed() is True
+        assert panel.inc_lbl.isVisible() is False
+        assert panel.inc_edit.isVisible() is False
+        assert panel.inc_q_lbl.isVisible() is False
+        assert panel.inc_q_edit.isVisible() is False
+        panel.advanced_group.set_collapsed(False)
+        _flush_events(3)
     _assert_single_visible_increase_input(panel, percent_visible=True)
 
     panel.close()

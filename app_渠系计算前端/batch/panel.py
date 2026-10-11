@@ -12,6 +12,7 @@ import math
 import re
 import datetime
 import copy
+from contextlib import contextmanager
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
@@ -157,16 +158,6 @@ def parse_manual_qmax_label(label: str):
     return _parse_chinese_segment_number(match.group("segment"))
 
 
-def _column_index_to_excel_name(column_index: int) -> str:
-    """把列号转换成 Excel 列名，便于提示用户。"""
-    if column_index <= 0:
-        return str(column_index)
-    name = ""
-    current = column_index
-    while current > 0:
-        current, remainder = divmod(current - 1, 26)
-        name = chr(ord("A") + remainder) + name
-    return name
 
 
 def _normalize_manual_qmax_value(raw_value, segment_index: int):
@@ -292,236 +283,140 @@ except ImportError:
     CHANNEL_LEVEL_OPTIONS = ["总干渠", "总干管", "分干渠", "分干管", "干渠", "干管", "支渠", "支管", "分支渠", "分支管", "充水渠", "泄水渠"]
 
 # 计算引擎导入
-try:
-    from 明渠设计 import (
-        quick_calculate as mingqu_calculate,
-        quick_calculate_compound_trapezoidal as mingqu_compound_calculate,
-        quick_calculate_circular as circular_calculate,
-        quick_calculate_u_section as mingqu_u_calculate
-    )
-    MINGQU_AVAILABLE = True
-except ImportError:
-    MINGQU_AVAILABLE = False
 
-try:
-    from 渡槽设计 import (
-        quick_calculate_u as ducao_u_calculate,
-        quick_calculate_rect as ducao_rect_calculate
-    )
-    DUCAO_AVAILABLE = True
-except ImportError:
-    DUCAO_AVAILABLE = False
 
-try:
-    from 隧洞设计 import (
-        quick_calculate_circular as suidong_circular_calculate,
-        quick_calculate_flat_bottom_circular as suidong_flat_bottom_circular_calculate,
-        quick_calculate_horseshoe as suidong_horseshoe_calculate,
-        quick_calculate_horseshoe_std as suidong_horseshoe_std_calculate
-    )
-    SUIDONG_AVAILABLE = True
-except ImportError:
-    SUIDONG_AVAILABLE = False
 
-try:
-    from 矩形暗涵设计 import (
-        quick_calculate_rectangular_culvert as rect_culvert_calculate
-    )
-    RECT_CULVERT_AVAILABLE = True
-except ImportError:
-    RECT_CULVERT_AVAILABLE = False
 
-try:
-    from 圆拱直墙型暗涵设计 import (
-        quick_calculate_arch_culvert as arch_culvert_calculate,
-        get_required_freeboard_height_arch,
-    )
-    ARCH_CULVERT_AVAILABLE = True
-except ImportError:
-    ARCH_CULVERT_AVAILABLE = False
+
+from app_渠系计算前端.batch.schema import (
+    _column_index_to_excel_name,
+    SECTION_TYPES,
+    PRESSURE_PIPE_LIKE_SECTION_TYPES,
+    _PROJECT_SECTION_TYPE_ALIASES,
+    normalize_project_section_type,
+    is_pressure_pipe_like_section_type,
+    is_spillway_steep_chute_section_type,
+    resolve_spillway_steep_chute_display_type,
+    is_fill_channel_section_type,
+    is_gate_like_section_type,
+    is_tunnel_section_type,
+    is_rect_culvert_section_type,
+    is_arch_culvert_section_type,
+    INPUT_HEADERS,
+    _INPUT_HEADERS_BEFORE_AE_AF_REORDER,
+    _INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS,
+    COL_SEQ,
+    COL_SEGMENT,
+    COL_BUILDING_NAME,
+    COL_SECTION_TYPE,
+    COL_X,
+    COL_Y,
+    COL_Q,
+    COL_N,
+    COL_SLOPE,
+    COL_M,
+    COL_B,
+    COL_RECT_CULVERT_HB_RATIO,
+    COL_RECT_CULVERT_H,
+    COL_BETA,
+    COL_R,
+    COL_D,
+    COL_DUCAO_DEPTH_RATIO,
+    COL_TIE_ROD_HEIGHT,
+    COL_CHAMFER_ANGLE,
+    COL_CHAMFER_LENGTH,
+    COL_THETA,
+    COL_ARCH_H_STRAIGHT,
+    COL_V_MIN,
+    COL_V_MAX,
+    COL_TURN_RADIUS,
+    COL_PIPE_MATERIAL,
+    COL_COMPOUND_M1,
+    COL_COMPOUND_B1,
+    COL_COMPOUND_M2,
+    COL_COMPOUND_B2,
+    COL_COMPOUND_M3,
+    COL_COMPOUND_H1,
+    COL_SPILLWAY_INLET_WEIR_WIDTH,
+    COL_SPILLWAY_INLET_HEAD,
+    COL_SPILLWAY_INLET_CONNECTION_TYPE,
+    COL_SPILLWAY_WEIR_COEFFICIENT,
+    COL_SPILLWAY_CONTRACTION_COEFFICIENT,
+    COL_SPILLWAY_ALPHA_PROFILE,
+    COL_SPILLWAY_AERATION_COEFFICIENT,
+    COL_SPILLWAY_SIDEWALL_FREEBOARD,
+    COL_SPILLWAY_POOL_DEPTH_FACTOR,
+    COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR,
+    COL_PIPE_LOCAL_LOSS,
+    COL_PIPE_IN_OUT,
+    _LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS,
+    _RECT_CULVERT_MANUAL_H_META_KEY,
+    _IMPORTED_RATIO_WARNING_TOLERANCE,
+    SPILLWAY_STEEP_CHUTE_PARAM_KEY,
+    SPILLWAY_STEEP_CHUTE_ADVANCED_COLUMN_MAP,
+    SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS,
+    _canonical_excel_header,
+    _EXCEL_HEADER_ALIASES,
+    _excel_header_mapping,
+    _map_excel_row_by_headers,
+    _map_input_row_by_header_order,
+    _extract_spillway_steep_chute_advanced_params,
+    RESULT_HEADERS
+)
+from app_渠系计算前端.batch.engines import (
+    mingqu_calculate,
+    mingqu_compound_calculate,
+    circular_calculate,
+    mingqu_u_calculate,
+    MINGQU_AVAILABLE,
+    ducao_u_calculate,
+    ducao_rect_calculate,
+    DUCAO_AVAILABLE,
+    suidong_circular_calculate,
+    suidong_flat_bottom_circular_calculate,
+    suidong_horseshoe_calculate,
+    suidong_horseshoe_std_calculate,
+    SUIDONG_AVAILABLE,
+    rect_culvert_calculate,
+    RECT_CULVERT_AVAILABLE,
+    arch_culvert_calculate,
+    get_required_freeboard_height_arch,
+    ARCH_CULVERT_AVAILABLE
+)
+from app_渠系计算前端.batch.calculation_service import (
+    BatchCalculationRequest, BatchCalculationOutcome, BatchCalculationService,
+)
 
 # 断面类型列表
-SECTION_TYPES = [
-    "明渠-梯形", "明渠-复式梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
-    "渡槽-U形", "渡槽-矩形",
-    "隧洞-圆形", "隧洞-平底圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
-    "暗涵-矩形", "暗涵-圆拱直墙型", "倒虹吸", "有压管道", "定向钻", "顶管",
-    "充水渠", "泄水渠与陡坡",
-    "分水闸", "分水口", "节制闸", "泄水闸", "退水闸",
-]
-
-PRESSURE_PIPE_LIKE_SECTION_TYPES = {"有压管道", "定向钻", "顶管"}
-_PRESSURE_PIPE_IMPORT_MATERIALS = {
-    "HDPE管": {"name": "HDPE管"},
-    "玻璃钢夹砂管": {"name": "玻璃钢夹砂管"},
-    "球墨铸铁管": {"name": "球墨铸铁管"},
-    "预应力钢筒混凝土管": {"name": "预应力钢筒混凝土管(n=0.013)"},
-    "预应力钢筒混凝土管_n014": {"name": "预应力钢筒混凝土管(n=0.014)"},
-    "预应力钢筒混凝土管_n015": {"name": "预应力钢筒混凝土管(n=0.015)"},
-    "钢管": {"name": "钢管"},
-}
-_PROJECT_SECTION_TYPE_ALIASES = {
-    "暗涵": "暗涵-矩形",
-    "暗渠": "暗涵-矩形",
-    "矩形暗渠": "暗涵-矩形",
-    "矩形暗涵": "暗涵-矩形",
-    "暗涵-矩形": "暗涵-矩形",
-    "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
-    "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
-    "充水渠": "泄水渠与陡坡",
-    "泄水渠": "泄水渠与陡坡",
-    "泄水渠与陡坡": "泄水渠与陡坡",
-    "陡坡": "泄水渠与陡坡",
-    "泄槽": "泄水渠与陡坡",
-    "陡槽": "泄水渠与陡坡",
-    "泄水渠及陡坡": "泄水渠与陡坡",
-}
 
 
-def normalize_project_section_type(section_type):
-    """将项目文件中的旧断面名称统一为当前标准口径。"""
-    text = normalize_section_type_name(section_type)
-    return _PROJECT_SECTION_TYPE_ALIASES.get(text, text)
 
 
-def is_pressure_pipe_like_section_type(section_type) -> bool:
-    """判断结构类型是否按有压管道占位语义处理。"""
-    return normalize_section_type_name(section_type) in PRESSURE_PIPE_LIKE_SECTION_TYPES
 
 
-def is_spillway_steep_chute_section_type(section_type) -> bool:
-    """判断结构类型是否为泄水渠与陡坡。"""
-    return normalize_project_section_type(section_type) == "泄水渠与陡坡"
 
 
-def resolve_spillway_steep_chute_display_type(raw_type, fallback="泄水渠与陡坡") -> str:
-    """保留用户填写的泄水渠类结构名，仅把计算口径归一。"""
-    text = str(getattr(raw_type, "value", raw_type) or "").strip()
-    if text.endswith("(连接段)"):
-        text = text[:-5].strip()
-    if _PROJECT_SECTION_TYPE_ALIASES.get(text) == "泄水渠与陡坡":
-        return text
-    fallback_text = str(getattr(fallback, "value", fallback) or "").strip()
-    if fallback_text.endswith("(连接段)"):
-        fallback_text = fallback_text[:-5].strip()
-    if _PROJECT_SECTION_TYPE_ALIASES.get(fallback_text) == "泄水渠与陡坡":
-        return fallback_text
-    return ""
 
 
-def is_fill_channel_section_type(section_type) -> bool:
-    """旧逐行充水渠分支已停用，充水渠类名称统一走专项传参。"""
-    return False
 
 
-def _resolve_import_pressure_pipe_material(material_value):
-    """解析导入阶段的有压管道管材，保留 PCCP 错误 n 值提示标记。"""
-    if resolve_pressure_pipe_material is None:
-        return {}
-    return resolve_pressure_pipe_material(
-        material_value,
-        _PRESSURE_PIPE_IMPORT_MATERIALS,
-        default_material="预应力钢筒混凝土管",
-    )
 
 
-def collect_missing_import_pipe_materials(mapped_records):
-    """管道类必须显式填写管材；隧洞、明渠及纯序号占位行不参与检查。"""
-    missing = []
-    for record in mapped_records or []:
-        row = list(record.get("mapped") or [])
-        structure = str(row[COL_SECTION_TYPE] or "").strip() if len(row) > COL_SECTION_TYPE else ""
-        material = str(row[COL_PIPE_MATERIAL] or "").strip() if len(row) > COL_PIPE_MATERIAL else ""
-        if is_pressure_pipe_like_section_type(structure) and not material:
-            missing.append({
-                "excel_row": record["excel_row"],
-                "sequence": str(row[COL_SEQ] or "").strip(),
-                "section_type": structure,
-            })
-    return missing
 
 
-def build_missing_import_pipe_material_message(missing, filepath, sheet_name, material_column, limit=None):
-    """同时说明定位、缺失原因、导入状态和用户下一步操作。"""
-    visible = missing if limit is None else missing[:limit]
-    lines = [f"文件：{os.path.basename(filepath)}", f"发现 {len(missing)} 处管材漏填："]
-    for item in visible:
-        sequence = f"序号 {item['sequence']}，" if item['sequence'] else ""
-        cell = f"，单元格 {material_column}{item['excel_row']}" if material_column else ""
-        lines.append(f"Excel 第 {item['excel_row']} 行（{sequence}{item['section_type']}）{cell}")
-    if len(visible) < len(missing):
-        lines.append(f"另有 {len(missing) - len(visible)} 处，请点击“查看全部缺失位置”。")
-    if not material_column:
-        lines.append("此文件未识别到“管材”列，请先补充该列及实际管材。")
-    lines.extend([
-        "管材影响水头损失计算，请填写实际管材。",
-        "请修改上述 Excel 的“管材”列并保存，再点击【导入Excel】重新选择此文件。",
-    ])
-    return "\n".join(lines)
 
 
-def collect_unsupported_pccp_material_warnings(mapped_records):
-    """收集 Excel 导入中不支持的 PCCP 管 n 值，不阻断导入。"""
-    warnings = []
-    for record in mapped_records or []:
-        mapped = list(record.get("mapped") or [])
-        section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
-        if not is_pressure_pipe_like_section_type(section_type):
-            continue
-        raw_value = str(mapped[COL_PIPE_MATERIAL]).strip() if len(mapped) > COL_PIPE_MATERIAL else ""
-        if not raw_value:
-            continue
-        material_info = _resolve_import_pressure_pipe_material(raw_value)
-        if not material_info.get("unsupported_pccp_roughness"):
-            continue
-        warnings.append({
-            "excel_row": int(record.get("excel_row") or 0),
-            "section_type": section_type,
-            "raw_value": raw_value,
-            "unsupported_pccp_roughness_value": str(
-                material_info.get("unsupported_pccp_roughness_value", "")
-            ),
-        })
-    return warnings
 
 
-def build_unsupported_pccp_material_warning_message(warnings):
-    """生成用户可读的 PCCP 管材 n 值错误提示。"""
-    if not warnings:
-        return ""
-    visible = warnings[:5]
-    items = "、".join(
-        f"第{item['excel_row']}行“{item['raw_value']}”"
-        for item in visible
-    )
-    if len(warnings) > len(visible):
-        items += f"等{len(warnings)}处"
-    return (
-        "Excel 已导入，但以下有压管道管材填写不支持："
-        f"{items}。目前仅支持 PCCP管、PCCP管0.013、PCCP管0.014、PCCP管0.015；"
-        "这些错误项已自动按 PCCP管0.013（预应力钢筒混凝土管 n=0.013）继续计算，不会阻断导入。"
-    )
 
 
-def is_gate_like_section_type(section_type) -> bool:
-    """判断结构类型是否为闸类点状建筑（含分水口）。"""
-    text = normalize_section_type_name(section_type)
-    return "闸" in text or "分水" in text
 
 
-def is_tunnel_section_type(section_type) -> bool:
-    """判断结构类型是否为隧洞。"""
-    return "隧洞" in normalize_section_type_name(section_type)
 
 
-def is_rect_culvert_section_type(section_type) -> bool:
-    """判断结构类型是否为矩形暗涵（兼容旧值）。"""
-    return normalize_section_type_name(section_type) == "暗涵-矩形"
 
 
-def is_arch_culvert_section_type(section_type) -> bool:
-    """判断结构类型是否为圆拱直墙型暗涵（兼容旧值）。"""
-    return normalize_section_type_name(section_type) == "暗涵-圆拱直墙型"
+
 
 # 输入表列定义（含X/Y坐标列）
 # 列索引: 0序号, 1流量段, 2建筑物名称, 3结构形式, 4X, 5Y, 6Q, 7糙率n, 8比降,
@@ -533,118 +428,12 @@ def is_arch_culvert_section_type(section_type) -> bool:
 #          25管材（有压管道专用）
 #          26~31为明渠-复式梯形专用几何列
 #          注：局部损失比例、进出口标识等有压管道专用参数通过 Qt.UserRole 元数据传递，不占表格列
-INPUT_HEADERS = [
-    "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
-    "Q(m³/s)", "糙率n", "比降(1/)",
-    "边坡系数m", "底宽B(m)", "暗涵高宽比H/B", "暗涵高度H(m)", "宽深比β",
-    "半径R(m)", "直径D(m)",
-    "矩形渡槽深宽比", "拉杆高度(m)", "倒角角度(°)", "倒角底边(m)", "圆心角(°)", "直墙高度H直(m)",
-    "不淤流速", "不冲流速", "转弯半径(m)",
-    "管材",
-    "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
-    "泄水渠入口宽度(m)", "泄水渠堰上总水头(m)", "泄水渠入口连接形式", "泄水渠手动流量系数",
-    "泄水渠侧收缩系数", "泄水渠动能修正系数", "泄水渠掺气系数",
-    "泄水渠侧墙安全超高(m)", "泄水渠池深系数", "泄水渠整流长度系数",
-]
 
-_INPUT_HEADERS_BEFORE_AE_AF_REORDER = [
-    "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
-    "Q(m³/s)", "糙率n", "比降(1/)",
-    "边坡系数m", "底宽B(m)", "暗涵高宽比H/B", "暗涵高度H(m)", "宽深比β",
-    "半径R(m)", "直径D(m)",
-    "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
-    "不淤流速", "不冲流速", "转弯半径(m)",
-    "管材",
-    "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
-    "直墙高度H直(m)", "拉杆高度(m)",
-]
 
-_INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS = [
-    "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
-    "Q(m³/s)", "糙率n", "比降(1/)",
-    "边坡系数m", "底宽B(m)", "宽深比β",
-    "半径R(m)", "直径D(m)",
-    "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
-    "不淤流速", "不冲流速", "转弯半径(m)",
-    "管材",
-    "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
-    "直墙高度H直(m)", "拉杆高度(m)",
-]
 
-COL_SEQ = 0
-COL_SEGMENT = 1
-COL_BUILDING_NAME = 2
-COL_SECTION_TYPE = 3
-COL_X = 4
-COL_Y = 5
-COL_Q = 6
-COL_N = 7
-COL_SLOPE = 8
-COL_M = 9
-COL_B = 10
-COL_RECT_CULVERT_HB_RATIO = 11
-COL_RECT_CULVERT_H = 12
-COL_BETA = 13
-COL_R = 14
-COL_D = 15
-COL_DUCAO_DEPTH_RATIO = 16
-COL_TIE_ROD_HEIGHT = 17
-COL_CHAMFER_ANGLE = 18
-COL_CHAMFER_LENGTH = 19
-COL_THETA = 20
-COL_ARCH_H_STRAIGHT = 21
-COL_V_MIN = 22
-COL_V_MAX = 23
-COL_TURN_RADIUS = 24
-COL_PIPE_MATERIAL = 25
-COL_COMPOUND_M1 = 26
-COL_COMPOUND_B1 = 27
-COL_COMPOUND_M2 = 28
-COL_COMPOUND_B2 = 29
-COL_COMPOUND_M3 = 30
-COL_COMPOUND_H1 = 31
-COL_SPILLWAY_INLET_WEIR_WIDTH = 32
-COL_SPILLWAY_INLET_HEAD = 33
-COL_SPILLWAY_INLET_CONNECTION_TYPE = 34
-COL_SPILLWAY_WEIR_COEFFICIENT = 35
-COL_SPILLWAY_CONTRACTION_COEFFICIENT = 36
-COL_SPILLWAY_ALPHA_PROFILE = 37
-COL_SPILLWAY_AERATION_COEFFICIENT = 38
-COL_SPILLWAY_SIDEWALL_FREEBOARD = 39
-COL_SPILLWAY_POOL_DEPTH_FACTOR = 40
-COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR = 41
-COL_PIPE_LOCAL_LOSS = len(INPUT_HEADERS)
-COL_PIPE_IN_OUT = len(INPUT_HEADERS) + 1
-_LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS = len(_INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS)
 
 _EXCEL_IMPORTED_ROW_ROLE = getattr(Qt, "UserRole", 0x0100) + 101
 _RECT_CULVERT_MANUAL_H_ROLE = getattr(Qt, "UserRole", 0x0100) + 102
-_RECT_CULVERT_MANUAL_H_META_KEY = "rect_culvert_manual_H"
-_IMPORTED_RATIO_WARNING_TOLERANCE = 0.01
-SPILLWAY_STEEP_CHUTE_PARAM_KEY = "spillway_steep_chute"
-SPILLWAY_STEEP_CHUTE_ADVANCED_COLUMN_MAP = (
-    ("inlet_weir_width", COL_SPILLWAY_INLET_WEIR_WIDTH),
-    ("inlet_head", COL_SPILLWAY_INLET_HEAD),
-    ("inlet_connection_type_label", COL_SPILLWAY_INLET_CONNECTION_TYPE),
-    ("weir_coefficient", COL_SPILLWAY_WEIR_COEFFICIENT),
-    ("contraction_coefficient", COL_SPILLWAY_CONTRACTION_COEFFICIENT),
-    ("alpha_profile", COL_SPILLWAY_ALPHA_PROFILE),
-    ("aeration_coefficient", COL_SPILLWAY_AERATION_COEFFICIENT),
-    ("sidewall_freeboard_m", COL_SPILLWAY_SIDEWALL_FREEBOARD),
-    ("pool_depth_factor", COL_SPILLWAY_POOL_DEPTH_FACTOR),
-    ("outlet_rectification_factor", COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR),
-)
-SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS = {
-    "inlet_weir_width",
-    "inlet_head",
-    "weir_coefficient",
-    "contraction_coefficient",
-    "alpha_profile",
-    "aeration_coefficient",
-    "sidewall_freeboard_m",
-    "pool_depth_factor",
-    "outlet_rectification_factor",
-}
 
 # 输入表头悬浮提示（与原版一致）
 _HEADER_TOOLTIPS = {
@@ -921,126 +710,114 @@ _HEADER_TOOLTIPS = {
 }
 
 
-def _canonical_excel_header(value):
-    """统一 Excel 表头文本，便于兼容旧模板和用户手工表。"""
-    text = str(value or "").strip()
-    return "".join(text.split()).replace("（", "(").replace("）", ")")
 
 
-_EXCEL_HEADER_ALIASES = {
-    "序号": COL_SEQ,
-    "流量段": COL_SEGMENT,
-    "建筑物名称": COL_BUILDING_NAME,
-    "结构形式": COL_SECTION_TYPE,
-    "X": COL_X,
-    "Y": COL_Y,
-    "Q(m³/s)": COL_Q,
-    "Q(m3/s)": COL_Q,
-    "糙率n": COL_N,
-    "比降(1/)": COL_SLOPE,
-    "边坡系数m": COL_M,
-    "底宽B(m)": COL_B,
-    "暗涵高宽比H/B": COL_RECT_CULVERT_HB_RATIO,
-    "暗涵高度H(m)": COL_RECT_CULVERT_H,
-    "宽深比β": COL_BETA,
-    "明渠宽深比": COL_BETA,
-    "半径R(m)": COL_R,
-    "直径D(m)": COL_D,
-    "矩形渡槽深宽比": COL_DUCAO_DEPTH_RATIO,
-    "倒角角度(°)": COL_CHAMFER_ANGLE,
-    "倒角底边(m)": COL_CHAMFER_LENGTH,
-    "圆心角(°)": COL_THETA,
-    "不淤流速": COL_V_MIN,
-    "不冲流速": COL_V_MAX,
-    "转弯半径": COL_TURN_RADIUS,
-    "转弯半径(m)": COL_TURN_RADIUS,
-    "管材": COL_PIPE_MATERIAL,
-    "左上坡m1": COL_COMPOUND_M1,
-    "平台宽B1(m)": COL_COMPOUND_B1,
-    "左下坡m2": COL_COMPOUND_M2,
-    "渠底宽B2(m)": COL_COMPOUND_B2,
-    "右坡m3": COL_COMPOUND_M3,
-    "平台高差h1(m)": COL_COMPOUND_H1,
-    "直墙高度H直(m)": COL_ARCH_H_STRAIGHT,
-    "拉杆高度(m)": COL_TIE_ROD_HEIGHT,
-    "泄水渠入口宽度(m)": COL_SPILLWAY_INLET_WEIR_WIDTH,
-    "泄水渠堰上总水头(m)": COL_SPILLWAY_INLET_HEAD,
-    "泄水渠入口连接形式": COL_SPILLWAY_INLET_CONNECTION_TYPE,
-    "泄水渠手动流量系数": COL_SPILLWAY_WEIR_COEFFICIENT,
-    "泄水渠侧收缩系数": COL_SPILLWAY_CONTRACTION_COEFFICIENT,
-    "泄水渠动能修正系数": COL_SPILLWAY_ALPHA_PROFILE,
-    "泄水渠掺气系数": COL_SPILLWAY_AERATION_COEFFICIENT,
-    "泄水渠侧墙安全超高(m)": COL_SPILLWAY_SIDEWALL_FREEBOARD,
-    "泄水渠池深系数": COL_SPILLWAY_POOL_DEPTH_FACTOR,
-    "泄水渠整流长度系数": COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR,
-}
 
 
-def _excel_header_mapping(header_values):
-    """按表头建立 Excel 源列到当前输入表列的映射。"""
-    mapping = {}
-    for src_idx, header in enumerate(header_values):
-        target_idx = _EXCEL_HEADER_ALIASES.get(_canonical_excel_header(header))
-        if target_idx is not None and target_idx not in mapping.values():
-            mapping[src_idx] = target_idx
-    required = {COL_SEQ, COL_SECTION_TYPE, COL_Q}
-    if not required.issubset(set(mapping.values())):
-        return {}
-    return mapping
 
 
-def _map_excel_row_by_headers(row_values, header_mapping):
-    """把 Excel 行按表头映射为当前输入表结构。"""
-    mapped = [""] * len(INPUT_HEADERS)
-    for src_idx, target_idx in header_mapping.items():
-        if src_idx < len(row_values):
-            mapped[target_idx] = row_values[src_idx]
-    return mapped
 
 
-def _map_input_row_by_header_order(row_values, source_headers):
-    """按源表头顺序把一行输入数据重排为当前输入表结构。"""
-    mapped = [""] * len(INPUT_HEADERS)
-    if not source_headers:
-        return mapped
-    for src_idx, header in enumerate(source_headers):
-        target_idx = _EXCEL_HEADER_ALIASES.get(_canonical_excel_header(header))
-        if target_idx is not None and src_idx < len(row_values):
-            mapped[target_idx] = row_values[src_idx]
-    return mapped
 
 
-def _extract_spillway_steep_chute_advanced_params(values) -> dict:
-    """从批量输入行提取泄水渠与陡坡专项可选参数。"""
-    values = list(values or [])
-    advanced = {}
-    for key, col in SPILLWAY_STEEP_CHUTE_ADVANCED_COLUMN_MAP:
-        if col >= len(values):
-            continue
-        raw = values[col]
-        if raw is None or str(raw).strip() == "":
-            continue
-        if key in SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS:
-            try:
-                advanced[key] = float(raw)
-            except (TypeError, ValueError):
-                advanced[key] = str(raw).strip()
-        else:
-            advanced[key] = str(raw).strip()
-    return advanced
 
 
 # 结果表列定义
-RESULT_HEADERS = [
-    "序号", "流量段", "建筑物名称", "结构形式",
-    "底宽B(m)", "直径D(m)", "半径R(m)",
-    "h设计(m)", "V设计(m/s)", "A设计(m²)", "R水力(m)", "湿周χ(m)",
-    "Q加大(m³/s)", "h加大(m)", "V加大(m/s)",
-    "加大有效超高Fb(m)", "建筑物总高H(含拉杆)(m)",
-    "设计净空高度(m)", "加大净空高度(m)",
-    "设计净空比例(%)", "加大净空比例(%)",
-    "状态",
-]
+
+
+_PRESSURE_PIPE_IMPORT_MATERIALS = {
+    "HDPE管": {"name": "HDPE管"},
+    "玻璃钢夹砂管": {"name": "玻璃钢夹砂管"},
+    "球墨铸铁管": {"name": "球墨铸铁管"},
+    "预应力钢筒混凝土管": {"name": "预应力钢筒混凝土管(n=0.013)"},
+    "预应力钢筒混凝土管_n014": {"name": "预应力钢筒混凝土管(n=0.014)"},
+    "预应力钢筒混凝土管_n015": {"name": "预应力钢筒混凝土管(n=0.015)"},
+    "钢管": {"name": "钢管"},
+}
+
+def _resolve_import_pressure_pipe_material(material_value):
+    """解析导入阶段的有压管道管材，保留 PCCP 错误 n 值提示标记。"""
+    if resolve_pressure_pipe_material is None:
+        return {}
+    return resolve_pressure_pipe_material(
+        material_value,
+        _PRESSURE_PIPE_IMPORT_MATERIALS,
+        default_material="预应力钢筒混凝土管",
+    )
+
+def collect_missing_import_pipe_materials(mapped_records):
+    """管道类必须显式填写管材；隧洞、明渠及纯序号占位行不参与检查。"""
+    missing = []
+    for record in mapped_records or []:
+        row = list(record.get("mapped") or [])
+        structure = str(row[COL_SECTION_TYPE] or "").strip() if len(row) > COL_SECTION_TYPE else ""
+        material = str(row[COL_PIPE_MATERIAL] or "").strip() if len(row) > COL_PIPE_MATERIAL else ""
+        if is_pressure_pipe_like_section_type(structure) and not material:
+            missing.append({
+                "excel_row": record["excel_row"],
+                "sequence": str(row[COL_SEQ] or "").strip(),
+                "section_type": structure,
+            })
+    return missing
+
+def build_missing_import_pipe_material_message(missing, filepath, sheet_name, material_column, limit=None):
+    """同时说明定位、缺失原因、导入状态和用户下一步操作。"""
+    visible = missing if limit is None else missing[:limit]
+    lines = [f"文件：{os.path.basename(filepath)}", f"发现 {len(missing)} 处管材漏填："]
+    for item in visible:
+        sequence = f"序号 {item['sequence']}，" if item['sequence'] else ""
+        cell = f"，单元格 {material_column}{item['excel_row']}" if material_column else ""
+        lines.append(f"Excel 第 {item['excel_row']} 行（{sequence}{item['section_type']}）{cell}")
+    if len(visible) < len(missing):
+        lines.append(f"另有 {len(missing) - len(visible)} 处，请点击“查看全部缺失位置”。")
+    if not material_column:
+        lines.append("此文件未识别到“管材”列，请先补充该列及实际管材。")
+    lines.extend([
+        "管材影响水头损失计算，请填写实际管材。",
+        "请修改上述 Excel 的“管材”列并保存，再点击【导入Excel】重新选择此文件。",
+    ])
+    return "\n".join(lines)
+
+def collect_unsupported_pccp_material_warnings(mapped_records):
+    """收集 Excel 导入中不支持的 PCCP 管 n 值，不阻断导入。"""
+    warnings = []
+    for record in mapped_records or []:
+        mapped = list(record.get("mapped") or [])
+        section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
+        if not is_pressure_pipe_like_section_type(section_type):
+            continue
+        raw_value = str(mapped[COL_PIPE_MATERIAL]).strip() if len(mapped) > COL_PIPE_MATERIAL else ""
+        if not raw_value:
+            continue
+        material_info = _resolve_import_pressure_pipe_material(raw_value)
+        if not material_info.get("unsupported_pccp_roughness"):
+            continue
+        warnings.append({
+            "excel_row": int(record.get("excel_row") or 0),
+            "section_type": section_type,
+            "raw_value": raw_value,
+            "unsupported_pccp_roughness_value": str(
+                material_info.get("unsupported_pccp_roughness_value", "")
+            ),
+        })
+    return warnings
+
+def build_unsupported_pccp_material_warning_message(warnings):
+    """生成用户可读的 PCCP 管材 n 值错误提示。"""
+    if not warnings:
+        return ""
+    visible = warnings[:5]
+    items = "、".join(
+        f"第{item['excel_row']}行“{item['raw_value']}”"
+        for item in visible
+    )
+    if len(warnings) > len(visible):
+        items += f"等{len(warnings)}处"
+    return (
+        "Excel 已导入，但以下有压管道管材填写不支持："
+        f"{items}。目前仅支持 PCCP管、PCCP管0.013、PCCP管0.014、PCCP管0.015；"
+        "这些错误项已自动按 PCCP管0.013（预应力钢筒混凝土管 n=0.013）继续计算，不会阻断导入。"
+    )
 
 
 class BatchPanel(QWidget):
@@ -1048,6 +825,12 @@ class BatchPanel(QWidget):
 
     # 数据变化信号（用于项目管理器追踪脏状态）
     data_changed = Signal()
+    # 一次完整输入操作只通知一次，供合并面板使计算结果失效。
+    input_changed = Signal()
+    calculation_finished = Signal(object)
+    calculation_failed = Signal(str)
+    calculation_discarded = Signal()
+    calculation_running_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1066,7 +849,10 @@ class BatchPanel(QWidget):
         self._table_redo_stack = []
         self._undo_group = 0
         self._pre_edit_snapshot = None
+        self._pre_edit_cell_value = None
+        self._deleting_input_cells = False
         self._info_parent_override = None
+        self._calculation_runner = None
         self._load_user_prefs()
         self._init_ui()
 
@@ -1143,7 +929,11 @@ class BatchPanel(QWidget):
         lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
         tb1.addWidget(lbl)
 
-        btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self._batch_calculate)
+        btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self.start_calculation)
+        self._calculate_button = btn_calc
+        self._cancel_calculation_button = PushButton("取消计算")
+        self._cancel_calculation_button.clicked.connect(self.cancel_calculation)
+        self._cancel_calculation_button.setVisible(False)
         _sample_menu = RoundMenu(parent=self)
         _sample_menu.addAction(Action("示例一（综合演示）", triggered=self._add_sample_data))
         _sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._add_sample_data_2))
@@ -1176,7 +966,7 @@ class BatchPanel(QWidget):
         self.inc_cb = CheckBox("考虑加大流量")
         self.inc_cb.setChecked(True)
 
-        for w in [btn_import, btn_calc, btn_sample, btn_template]:
+        for w in [btn_import, btn_calc, self._cancel_calculation_button, btn_sample, btn_template]:
             tb1.addWidget(w)
         tb1.addStretch()
         tb1.addWidget(self.inc_cb)
@@ -1240,7 +1030,8 @@ class BatchPanel(QWidget):
         self.input_table.undoRequested.connect(self._undo_table)
         self.input_table.redoRequested.connect(self._redo_table)
         # Delete 通过 FrozenColumnTableWidget 的信号连接
-        self.input_table.deleteRequested.connect(self._push_undo_snapshot)
+        self.input_table.deleteRequested.connect(self._begin_delete_input_cells)
+        self.input_table.deleteFinished.connect(self._finish_delete_input_cells)
         self.input_table.currentCellChanged.connect(self._on_current_cell_changed_undo)
 
         # 操作提示
@@ -1253,36 +1044,97 @@ class BatchPanel(QWidget):
 
     def _on_cell_changed(self, row, col):
         """单元格编辑完成后的回调（与原版_on_input_end_edit_cell一致）"""
-        if self._undo_group == 0 and self._pre_edit_snapshot is not None:
-            self._table_undo_stack.append(self._pre_edit_snapshot)
-            if len(self._table_undo_stack) > 20:
-                self._table_undo_stack.pop(0)
-            self._table_redo_stack.clear()
-            self._pre_edit_snapshot = None
+        previous = self._pre_edit_cell_value
+        if self._undo_group == 0 and previous is not None and previous[:2] == (row, col):
+            item = self.input_table.item(row, col)
+            current = item.text() if item else ''
+            if current != previous[2] or self._collect_row_hidden_meta(row, include_excel=True) != previous[3]:
+                # 仅在真正编辑时复制整表，并还原被修改的原单元格及行级参数。
+                snapshot = self._snapshot_table()
+                snapshot['rows'][row][col] = previous[2]
+                snapshot['row_meta'][row] = previous[3]
+                self._table_undo_stack.append(snapshot)
+                if len(self._table_undo_stack) > 20:
+                    self._table_undo_stack.pop(0)
+                self._table_redo_stack.clear()
+        was_blocked = self.input_table.blockSignals(True)
+        try:
+            if col == COL_SEGMENT:
+                self._sync_row_flow(row)
+            if col == COL_SECTION_TYPE:
+                self._update_roughness_cell_state(row)
+        finally:
+            self.input_table.blockSignals(was_blocked)
+        if not self._deleting_input_cells:
+            self._remember_current_input_cell()
+            self._notify_input_changed()
+
+    def _sync_row_flow(self, row):
+        """流量段被单独修改时应用该段流量，显式粘贴的流量由粘贴入口保留。"""
+        seg_item = self.input_table.item(row, COL_SEGMENT)
+        if seg_item:
+            try:
+                flow = self._get_flow_for_segment(int(seg_item.text().strip()))
+                self.input_table.setItem(row, COL_Q, QTableWidgetItem(str(flow)))
+            except (ValueError, TypeError):
+                pass
+
+    def _notify_input_changed(self):
+        """输入操作结束后统一更新样例标记、下游状态和工程未保存标记。"""
+        if self.input_table.signalsBlocked():
+            return
         if not self._loading_sample:
             self._is_sample_data = False
-        # 触发数据变化信号（除非正在加载项目）
         if not getattr(self, '_loading_project', False):
+            self.input_changed.emit()
             self.data_changed.emit()
-        if col == COL_SEGMENT:
-            # 流量段列被编辑，自动同步Q值
-            seg_item = self.input_table.item(row, COL_SEGMENT)
-            if seg_item:
-                try:
-                    segment_num = int(seg_item.text().strip())
-                    new_Q = self._get_flow_for_segment(segment_num)
-                    self.input_table.blockSignals(True)
-                    self.input_table.setItem(row, COL_Q, QTableWidgetItem(str(new_Q)))
-                    self.input_table.blockSignals(False)
-                except (ValueError, TypeError):
-                    pass
-        if col == COL_SECTION_TYPE:
-            # 结构形式列被编辑，更新糙率n列的可编辑状态
-            self._update_roughness_cell_state(row)
+
+    @contextmanager
+    def _batch_input_update(self):
+        """批量写表时暂停逐格通知和重绘，异常时也恢复原信号与界面状态。"""
+        table = self.input_table
+        was_blocked = table.blockSignals(True)
+        updates_enabled = table.updatesEnabled()
+        table.setUpdatesEnabled(False)
+        self._undo_group += 1
+        try:
+            yield
+        finally:
+            self._undo_group -= 1
+            table.blockSignals(was_blocked)
+            table.setUpdatesEnabled(updates_enabled)
+            self._remember_current_input_cell()
+            if not was_blocked:
+                self._notify_input_changed()
+
+    def _begin_delete_input_cells(self):
+        self._push_undo_snapshot()
+        self._undo_group += 1
+        self._deleting_input_cells = True
+
+    def _finish_delete_input_cells(self):
+        if self._deleting_input_cells:
+            self._deleting_input_cells = False
+            self._undo_group -= 1
+            self._remember_current_input_cell()
+            self._notify_input_changed()
+
+    def _remember_current_input_cell(self):
+        """选格只记录当前文字与行级参数，不复制整表。"""
+        self._pre_edit_snapshot = None
+        row, col = self.input_table.currentRow(), self.input_table.currentColumn()
+        if row < 0 or col < 0:
+            self._pre_edit_cell_value = None
+            return
+        item = self.input_table.item(row, col)
+        self._pre_edit_cell_value = (
+            row, col, item.text() if item else '',
+            self._collect_row_hidden_meta(row, include_excel=True),
+        )
 
     def _on_current_cell_changed_undo(self, row, col, prev_row, prev_col):
         if self._undo_group == 0:
-            self._pre_edit_snapshot = self._snapshot_table()
+            self._remember_current_input_cell()
 
     def _update_roughness_cell_state(self, row):
         """更新指定行的糙率n列可编辑状态（有压管道同类行禁用）"""
@@ -1320,26 +1172,45 @@ class BatchPanel(QWidget):
                 row.append(item.text() if item else "")
             rows.append(row)
             row_meta.append(self._collect_row_hidden_meta(r, include_excel=True))
-        return {"rows": rows, "row_meta": row_meta}
+        return {"rows": rows, "row_meta": row_meta,
+                "flow_segments": self.flow_segments_edit.text(),
+                "manual_qmax_by_segment": copy.deepcopy(self._manual_qmax_by_segment),
+                "excel_import_session_active": self._excel_import_session_active}
 
     def _restore_table(self, snapshot):
+        current_row = self.input_table.currentRow()
+        current_col = self.input_table.currentColumn()
         if isinstance(snapshot, dict):
             rows = snapshot.get("rows", [])
             row_meta = snapshot.get("row_meta", [])
         else:
             rows = snapshot
             row_meta = []
-        self.input_table.blockSignals(True)
-        self.input_table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(val)
-                if c == 3:
-                    item.setTextAlignment(Qt.AlignCenter)
-                self.input_table.setItem(r, c, item)
-            if r < len(row_meta):
-                self._apply_row_hidden_meta(r, row_meta[r], include_excel=True)
-        self.input_table.blockSignals(False)
+        with self._batch_input_update():
+            self.input_table.clearContents()
+            self.input_table.setRowCount(len(rows))
+            for r, row in enumerate(rows):
+                for c, val in enumerate(row):
+                    item = QTableWidgetItem(val)
+                    if c == COL_SECTION_TYPE:
+                        item.setTextAlignment(Qt.AlignCenter)
+                    self.input_table.setItem(r, c, item)
+                if r < len(row_meta):
+                    self._apply_row_hidden_meta(r, row_meta[r], include_excel=True)
+                self._update_roughness_cell_state(r)
+            if isinstance(snapshot, dict):
+                if 'flow_segments' in snapshot:
+                    self.flow_segments_edit.setText(snapshot['flow_segments'])
+                if 'manual_qmax_by_segment' in snapshot:
+                    self._manual_qmax_by_segment = copy.deepcopy(snapshot['manual_qmax_by_segment'])
+                if 'excel_import_session_active' in snapshot:
+                    self._set_excel_import_session_active(snapshot['excel_import_session_active'])
+            # clearContents 会清除当前索引；恢复选格后连续编辑才能记录正确的前值。
+            if rows and current_row >= 0 and current_col >= 0:
+                self.input_table.setCurrentCell(
+                    min(current_row, len(rows)-1),
+                    min(current_col, self.input_table.columnCount()-1),
+                )
 
     def _push_undo_snapshot(self):
         if self._undo_group > 0:
@@ -1349,6 +1220,7 @@ class BatchPanel(QWidget):
             self._table_undo_stack.pop(0)
         self._table_redo_stack.clear()
         self._pre_edit_snapshot = None
+        self._pre_edit_cell_value = None
 
     def _undo_table(self):
         if not self._table_undo_stack:
@@ -1390,13 +1262,13 @@ class BatchPanel(QWidget):
                 new_type = dlg.selected_type
                 old_type = current
                 self._push_undo_snapshot()
-                self._undo_group += 1
-                type_item = QTableWidgetItem(new_type)
-                type_item.setTextAlignment(Qt.AlignCenter)
-                self.input_table.setItem(row, col, type_item)
-                if new_type != old_type:
-                    self._apply_section_type_change(row, new_type)
-                self._undo_group -= 1
+                with self._batch_input_update():
+                    type_item = QTableWidgetItem(new_type)
+                    type_item.setTextAlignment(Qt.AlignCenter)
+                    self.input_table.setItem(row, col, type_item)
+                    if new_type != old_type:
+                        self._apply_section_type_change(row, new_type)
+                    self._update_roughness_cell_state(row)
             # 无论选择还是 Esc 取消，都回到原表格单元格，保持操作连续性
             self.input_table.setCurrentCell(row, col)
             self.input_table.setFocus(Qt.OtherFocusReason)
@@ -1452,72 +1324,72 @@ class BatchPanel(QWidget):
     def _insert_row_at(self, insert_at):
         """在指定位置插入新行，继承上一行的流量段"""
         self._push_undo_snapshot()
-        self._undo_group += 1
-        new_segment = 1
-        if insert_at > 0:
-            prev_seg_item = self.input_table.item(insert_at - 1, COL_SEGMENT)
-            if prev_seg_item:
-                try:
-                    new_segment = int(prev_seg_item.text().strip())
-                except ValueError:
-                    new_segment = 1
-        new_Q = str(self._get_flow_for_segment(new_segment))
-        self.input_table.insertRow(insert_at)
-        self.input_table.setItem(insert_at, COL_SEQ, QTableWidgetItem(str(insert_at + 1)))
-        self.input_table.setItem(insert_at, COL_SEGMENT, QTableWidgetItem(str(new_segment)))
-        self.input_table.setItem(insert_at, COL_BUILDING_NAME, QTableWidgetItem("-"))
-        type_item = QTableWidgetItem("明渠-梯形")
-        type_item.setTextAlignment(Qt.AlignCenter)
-        self.input_table.setItem(insert_at, COL_SECTION_TYPE, type_item)
-        self.input_table.setItem(insert_at, COL_Q, QTableWidgetItem(new_Q))
-        self.input_table.setItem(insert_at, COL_N, QTableWidgetItem("0.014"))
-        self.input_table.setItem(insert_at, COL_SLOPE, QTableWidgetItem("3000"))
-        self.input_table.setItem(insert_at, COL_M, QTableWidgetItem("1.0"))
-        self.input_table.setItem(insert_at, COL_V_MIN, QTableWidgetItem("0.1"))
-        self.input_table.setItem(insert_at, COL_V_MAX, QTableWidgetItem("100"))
-        self._undo_group -= 1
-        self._renumber()
-        self.input_table.selectRow(insert_at)
+        with self._batch_input_update():
+            new_segment = 1
+            if insert_at > 0:
+                prev_seg_item = self.input_table.item(insert_at - 1, COL_SEGMENT)
+                if prev_seg_item:
+                    try:
+                        new_segment = int(prev_seg_item.text().strip())
+                    except ValueError:
+                        new_segment = 1
+            new_Q = str(self._get_flow_for_segment(new_segment))
+            self.input_table.insertRow(insert_at)
+            self.input_table.setItem(insert_at, COL_SEQ, QTableWidgetItem(str(insert_at + 1)))
+            self.input_table.setItem(insert_at, COL_SEGMENT, QTableWidgetItem(str(new_segment)))
+            self.input_table.setItem(insert_at, COL_BUILDING_NAME, QTableWidgetItem("-"))
+            type_item = QTableWidgetItem("明渠-梯形")
+            type_item.setTextAlignment(Qt.AlignCenter)
+            self.input_table.setItem(insert_at, COL_SECTION_TYPE, type_item)
+            self.input_table.setItem(insert_at, COL_Q, QTableWidgetItem(new_Q))
+            self.input_table.setItem(insert_at, COL_N, QTableWidgetItem("0.014"))
+            self.input_table.setItem(insert_at, COL_SLOPE, QTableWidgetItem("3000"))
+            self.input_table.setItem(insert_at, COL_M, QTableWidgetItem("1.0"))
+            self.input_table.setItem(insert_at, COL_V_MIN, QTableWidgetItem("0.1"))
+            self.input_table.setItem(insert_at, COL_V_MAX, QTableWidgetItem("100"))
+            self._renumber()
+            self.input_table.selectRow(insert_at)
 
     def _add_row(self, data=None):
         """添加一行（无data时填充完整默认值，与原版_create_default_row一致）"""
         self._push_undo_snapshot()
-        row = self.input_table.rowCount()
-        self.input_table.insertRow(row)
-        if data and isinstance(data, (list, tuple)):
-            # 有数据时直接填充
-            for col, val in enumerate(data):
-                if col < self.input_table.columnCount():
-                    item = QTableWidgetItem(str(val) if val else "")
-                    if col == 3:
-                        item.setTextAlignment(Qt.AlignCenter)
-                    self.input_table.setItem(row, col, item)
-            # 更新糙率n列状态
-            self._update_roughness_cell_state(row)
-        else:
-            # 无数据时填充默认值：流量段编号在上一行基础上递增（与原版一致）
-            if row > 0:
-                prev_seg_item = self.input_table.item(row - 1, COL_SEGMENT)
-                try:
-                    last_segment = int(prev_seg_item.text().strip()) if prev_seg_item else 1
-                except ValueError:
-                    last_segment = 1
-                new_segment = last_segment + 1
+        with self._batch_input_update():
+            row = self.input_table.rowCount()
+            self.input_table.insertRow(row)
+            if data and isinstance(data, (list, tuple)):
+                # 有数据时直接填充
+                for col, val in enumerate(data):
+                    if col < self.input_table.columnCount():
+                        item = QTableWidgetItem(str(val) if val else "")
+                        if col == 3:
+                            item.setTextAlignment(Qt.AlignCenter)
+                        self.input_table.setItem(row, col, item)
+                # 更新糙率n列状态
+                self._update_roughness_cell_state(row)
             else:
-                new_segment = 1
-            new_Q = str(self._get_flow_for_segment(new_segment))
-            self.input_table.setItem(row, COL_SEQ, QTableWidgetItem(str(row + 1)))
-            self.input_table.setItem(row, COL_SEGMENT, QTableWidgetItem(str(new_segment)))
-            self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem("-"))
-            type_item = QTableWidgetItem("明渠-梯形")
-            type_item.setTextAlignment(Qt.AlignCenter)
-            self.input_table.setItem(row, COL_SECTION_TYPE, type_item)
-            self.input_table.setItem(row, COL_Q, QTableWidgetItem(new_Q))
-            self.input_table.setItem(row, COL_N, QTableWidgetItem("0.014"))
-            self.input_table.setItem(row, COL_SLOPE, QTableWidgetItem("3000"))
-            self.input_table.setItem(row, COL_M, QTableWidgetItem("1.0"))
-            self.input_table.setItem(row, COL_V_MIN, QTableWidgetItem("0.1"))
-            self.input_table.setItem(row, COL_V_MAX, QTableWidgetItem("100"))
+                # 无数据时填充默认值：流量段编号在上一行基础上递增（与原版一致）
+                if row > 0:
+                    prev_seg_item = self.input_table.item(row - 1, COL_SEGMENT)
+                    try:
+                        last_segment = int(prev_seg_item.text().strip()) if prev_seg_item else 1
+                    except ValueError:
+                        last_segment = 1
+                    new_segment = last_segment + 1
+                else:
+                    new_segment = 1
+                new_Q = str(self._get_flow_for_segment(new_segment))
+                self.input_table.setItem(row, COL_SEQ, QTableWidgetItem(str(row + 1)))
+                self.input_table.setItem(row, COL_SEGMENT, QTableWidgetItem(str(new_segment)))
+                self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem("-"))
+                type_item = QTableWidgetItem("明渠-梯形")
+                type_item.setTextAlignment(Qt.AlignCenter)
+                self.input_table.setItem(row, COL_SECTION_TYPE, type_item)
+                self.input_table.setItem(row, COL_Q, QTableWidgetItem(new_Q))
+                self.input_table.setItem(row, COL_N, QTableWidgetItem("0.014"))
+                self.input_table.setItem(row, COL_SLOPE, QTableWidgetItem("3000"))
+                self.input_table.setItem(row, COL_M, QTableWidgetItem("1.0"))
+                self.input_table.setItem(row, COL_V_MIN, QTableWidgetItem("0.1"))
+                self.input_table.setItem(row, COL_V_MAX, QTableWidgetItem("100"))
 
     def _insert_row(self):
         """插入行 - 在选中行之前插入新行（与原版一致）"""
@@ -1628,11 +1500,10 @@ class BatchPanel(QWidget):
         if not fluent_question(self._dialog_parent(), "确认删除", confirm_msg):
             return
         self._push_undo_snapshot()
-        self._undo_group += 1
-        for r in rows:
-            self.input_table.removeRow(r)
-        self._undo_group -= 1
-        self._renumber()
+        with self._batch_input_update():
+            for r in rows:
+                self.input_table.removeRow(r)
+            self._renumber()
 
     def _copy_row(self):
         rows = sorted(set(idx.row() for idx in self.input_table.selectedIndexes()))
@@ -1640,16 +1511,13 @@ class BatchPanel(QWidget):
             InfoBar.warning("提示", "请先选择要复制的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
         self._push_undo_snapshot()
-        self._undo_group += 1
-        try:
+        with self._batch_input_update():
             for r in rows:
                 data = self._get_row_data(r)
                 meta = self._collect_row_hidden_meta(r, include_excel=True)
                 self._add_row(data)
                 self._apply_row_hidden_meta(self.input_table.rowCount() - 1, meta, include_excel=True)
             self._renumber()
-        finally:
-            self._undo_group -= 1
 
     def _clear_input(self, force=False, clear_shared=True):
         """清空表1输入，可按需保留共享批量结果。"""
@@ -1669,6 +1537,8 @@ class BatchPanel(QWidget):
             self._is_sample_data = False
         # 同步清空结果（防止清空输入后仍能导出/查看旧结果）
         self._clear_results(clear_shared=clear_shared)
+        self._remember_current_input_cell()
+        self._notify_input_changed()
 
     def _copy_to_clipboard(self):
         """复制选中单元格到剪贴板（制表符分隔，可直接粘贴到Excel）"""
@@ -1702,16 +1572,14 @@ class BatchPanel(QWidget):
         text = clipboard.text()
         if not text or not text.strip():
             return
-        self._push_undo_snapshot()
-        self._undo_group += 1
         # 解析剪贴板文本（制表符分隔行/列）
-        lines = text.strip().split('\n')
+        # 首尾制表符表示空单元格，不能用 strip() 吞掉而使整行错列。
+        lines = text.rstrip('\r\n').split('\n')
         paste_data = []
         for line in lines:
             cells = line.rstrip('\r').split('\t')
             paste_data.append(cells)
         if not paste_data:
-            self._undo_group -= 1
             return
         # 确定粘贴起始位置
         selected = self.input_table.selectedIndexes()
@@ -1721,21 +1589,25 @@ class BatchPanel(QWidget):
         else:
             start_row = self.input_table.rowCount()
             start_col = 0
-        # 扩展行数以容纳粘贴数据
-        needed_rows = start_row + len(paste_data)
-        while self.input_table.rowCount() < needed_rows:
-            self.input_table.insertRow(self.input_table.rowCount())
         # 收集无效断面类型（与原版一致）
         invalid_types = []
         pasted_rows = 0
-        # 填充数据
-        for r_offset, row_data in enumerate(paste_data):
-            if not any(c.strip() for c in row_data):
-                continue
-            for c_offset, val in enumerate(row_data):
+        self._push_undo_snapshot()
+        with self._batch_input_update():
+            # 一次扩展行数并暂停逐格通知，完成后统一同步依赖和工程状态。
+            needed_rows = start_row + len(paste_data)
+            if needed_rows > self.input_table.rowCount():
+                self.input_table.setRowCount(needed_rows)
+            for r_offset, row_data in enumerate(paste_data):
+                if not any(c.strip() for c in row_data):
+                    continue
                 target_row = start_row + r_offset
-                target_col = start_col + c_offset
-                if target_col < self.input_table.columnCount():
+                pasted_columns = set()
+                for c_offset, val in enumerate(row_data):
+                    target_col = start_col + c_offset
+                    if target_col >= self.input_table.columnCount():
+                        break
+                    pasted_columns.add(target_col)
                     cell_value = val.strip()
                     # 断面类型列(索引3)特殊处理：验证类型有效性（与原版一致）
                     if target_col == COL_SECTION_TYPE and cell_value:
@@ -1748,31 +1620,26 @@ class BatchPanel(QWidget):
                     if target_col == COL_SECTION_TYPE:
                         item.setTextAlignment(Qt.AlignCenter)
                     self.input_table.setItem(target_row, target_col, item)
-            pasted_rows += 1
-        self._renumber()
-        # 粘贴后校验：自动映射断面类型并确保比降有默认值（与原版_on_input_end_paste一致）
-        self.input_table.blockSignals(True)
-        for r_offset in range(len(paste_data)):
-            target_row = start_row + r_offset
-            if target_row >= self.input_table.rowCount():
-                break
-            # 断面类型映射（允许用户粘贴简写）
-            type_item = self.input_table.item(target_row, COL_SECTION_TYPE)
-            if type_item:
-                raw_type = type_item.text().strip()
-                if raw_type and raw_type not in SECTION_TYPES:
-                    mapped = self._map_section_type(raw_type)
-                    if mapped:
-                        type_item.setText(mapped)
-            # 确保比降有默认值
-            slope_item = self.input_table.item(target_row, COL_SLOPE)
-            if not slope_item or not slope_item.text().strip():
-                self.input_table.setItem(target_row, COL_SLOPE, QTableWidgetItem("3000"))
-        self.input_table.blockSignals(False)
-        # 粘贴后自动检测流量段（与原版一致）
-        self._auto_detect_flow_segments()
+                if COL_SEGMENT in pasted_columns and COL_Q not in pasted_columns:
+                    self._sync_row_flow(target_row)
+                # 在所有输入落位后更新只读状态，避免后写入的糙率单元格覆盖限制。
+                self._update_roughness_cell_state(target_row)
+                pasted_rows += 1
+            self._renumber()
+            for r_offset in range(len(paste_data)):
+                target_row = start_row + r_offset
+                type_item = self.input_table.item(target_row, COL_SECTION_TYPE)
+                if type_item:
+                    raw_type = type_item.text().strip()
+                    if raw_type and raw_type not in SECTION_TYPES:
+                        mapped = self._map_section_type(raw_type)
+                        if mapped:
+                            type_item.setText(mapped)
+                slope_item = self.input_table.item(target_row, COL_SLOPE)
+                if not slope_item or not slope_item.text().strip():
+                    self.input_table.setItem(target_row, COL_SLOPE, QTableWidgetItem("3000"))
+            self._auto_detect_flow_segments()
         # 显示结果（与原版一致：如有无效类型则警告）
-        self._undo_group -= 1
         if invalid_types:
             error_msgs = ["【无效的类型】"]
             for msg in invalid_types[:5]:
@@ -1793,25 +1660,31 @@ class BatchPanel(QWidget):
         if not selected:
             InfoBar.warning("提示", "请先选中要填充的区域", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
-        self._push_undo_snapshot()
         # 按列分组
         col_rows = {}
         for idx in selected:
             col_rows.setdefault(idx.column(), []).append(idx.row())
+        targets = [(col, sorted(rows)) for col, rows in col_rows.items() if len(rows) > 1]
+        if not targets:
+            return
+        self._push_undo_snapshot()
         filled = 0
-        for col, rows in col_rows.items():
-            rows.sort()
-            if len(rows) < 2:
-                continue
-            # 第一行的值作为源
-            first_item = self.input_table.item(rows[0], col)
-            source_val = first_item.text() if first_item else ""
-            for r in rows[1:]:
-                item = QTableWidgetItem(source_val)
-                if col == 3:
-                    item.setTextAlignment(Qt.AlignCenter)
-                self.input_table.setItem(r, col, item)
-                filled += 1
+        with self._batch_input_update():
+            touched = {}
+            for col, rows in targets:
+                first_item = self.input_table.item(rows[0], col)
+                source_val = first_item.text() if first_item else ""
+                for r in rows[1:]:
+                    item = QTableWidgetItem(source_val)
+                    if col == COL_SECTION_TYPE:
+                        item.setTextAlignment(Qt.AlignCenter)
+                    self.input_table.setItem(r, col, item)
+                    touched.setdefault(r, set()).add(col)
+                    filled += 1
+            for row, columns in touched.items():
+                if COL_SEGMENT in columns and COL_Q not in columns:
+                    self._sync_row_flow(row)
+                self._update_roughness_cell_state(row)
         if filled > 0:
             InfoBar.success("填充完成", f"已向下填充 {filled} 个单元格",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
@@ -2336,328 +2209,63 @@ class BatchPanel(QWidget):
         if not self._validate_duplicate_buildings(input_rows):
             return
 
+        request = BatchPanel.build_calculation_request(self, input_rows)
+        service = BatchCalculationService(
+            section_calculator=self._calculate_single,
+            row_formatter=self._extract_result_row,
+        )
+        outcome = service.calculate(request)
+        BatchPanel.apply_calculation_outcome(self, outcome, current_snapshot)
+        return outcome
+
+    def get_input_rows(self):
+        """返回输入副本，调用方无需读取表格私有编辑逻辑。"""
+        return copy.deepcopy(self._get_all_input_data())
+
+    def get_result_records(self):
+        """返回已应用结果的副本，不暴露内部可变结果列表。"""
+        return copy.deepcopy(self.batch_results)
+
+    def set_global_settings(self, *, channel_name=None, channel_level=None,
+                            start_water_level=None, start_station=None, flow_segments=None):
+        """合并界面通过公开参数接口同步基础信息。"""
+        for widget, value in (
+            (self.channel_name_edit, channel_name),
+            (self.start_wl_edit, start_water_level),
+            (self.start_station_edit, start_station),
+            (self.flow_segments_edit, flow_segments),
+        ):
+            if value is not None:
+                widget.setText(str(value))
+        if channel_level is not None:
+            self.channel_level_combo.setCurrentText(str(channel_level))
+
+    def build_calculation_request(self, input_rows=None):
+        """只在界面线程采集控件和隐藏参数，后台收到独立数据快照。"""
+        rows = input_rows if input_rows is not None else self._get_all_input_data()
+        manual_h = getattr(self, "_get_rect_culvert_manual_h", None)
+        imported = getattr(self, "_is_row_excel_imported", None)
+        return BatchCalculationRequest(
+            rows=tuple(tuple(copy.deepcopy(row)) for row in rows),
+            use_increase=bool(self.inc_cb.isChecked()),
+            include_details=bool(self.detail_cb.isChecked()),
+            manual_qmax_by_segment=tuple(copy.deepcopy(getattr(self, "_manual_qmax_by_segment", {}) or {}).items()),
+            manual_heights=tuple(manual_h(i) if callable(manual_h) else None for i in range(len(rows))),
+            imported_rows=tuple(bool(imported(i)) if callable(imported) else False for i in range(len(rows))),
+        )
+
+    def apply_calculation_outcome(self, outcome, current_snapshot):
+        """在界面线程一次应用完整结果；取消或过期任务不进入此步骤。"""
         self._clear_results()
-        self.batch_results = []
-        success_count = 0; fail_count = 0; skip_count = 0; total_count = 0
-        error_details = []  # 收集详细错误信息（与原版一致）
-        result_rows = []
-        detail_lines = []
-
-        detail_lines.append("=" * 80)
-        detail_lines.append("          多流量段批量水力计算 - 详细计算过程报告")
-        detail_lines.append("=" * 80)
-        detail_lines.append(f"计算时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        detail_lines.append(f"总计建筑物数量: {len(input_rows)}")
-        detail_lines.append("-" * 80)
-        detail_lines.append("")
-
-        for row_idx, values in enumerate(input_rows):
-            values = self._normalize_row(values, len(INPUT_HEADERS))
-            raw_section_type = str(values[COL_SECTION_TYPE]).strip()
-            section_type = raw_section_type
-            mapped_section_type = self._map_section_type(section_type) if section_type else None
-            if mapped_section_type:
-                section_type = mapped_section_type
-                values[COL_SECTION_TYPE] = mapped_section_type
-            if not section_type:
-                continue
-            total_count += 1
-            seq = str(values[COL_SEQ]).strip()
-            segment = str(values[COL_SEGMENT]).strip()
-            building_name = str(values[COL_BUILDING_NAME]).strip()
-
-            try:
-                # 倒虹吸占位行
-                if section_type == "倒虹吸":
-                    row_out = ["-"] * len(RESULT_HEADERS)
-                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                    row_out[3] = "倒虹吸"; row_out[-1] = "⏭ 占位行(不参与计算)"
-                    result_rows.append(row_out)
-                    pipe_material = str(values[COL_PIPE_MATERIAL]).strip() if len(values) > COL_PIPE_MATERIAL else ""
-                    siphon_result = {
-                        'success': True, 'section_type': '倒虹吸', 'is_siphon': True,
-                        'flow_section': segment, 'building_name': building_name,
-                        'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
-                        'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.014), 'slope_inv': 0,
-                        'D': self._sf(values[COL_D], 0.0),  # 倒虹吸直径D用于水面线窗口默认指定管径
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
-                        'pipe_material': pipe_material,
-                    }
-                    self.batch_results.append({'input': values, 'result': siphon_result})
-                    skip_count += 1
-                    if self.detail_cb.isChecked():
-                        detail_lines.append(f"【项目 {total_count}】")
-                        detail_lines.append(self._gen_detail_report(values, siphon_result))
-                        detail_lines.append("\n" + "*" * 80 + "\n")
-                    continue
-
-                # 有压管道同类占位行
-                if is_pressure_pipe_like_section_type(section_type):
-                    row_out = ["-"] * len(RESULT_HEADERS)
-                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                    row_out[3] = section_type; row_out[-1] = "⏭ 占位行(不参与计算)"
-                    result_rows.append(row_out)
-                    # 读取有压管道专用列（col 21-23）
-                    pipe_material = str(values[COL_PIPE_MATERIAL]).strip() if len(values) > COL_PIPE_MATERIAL else ""
-                    local_loss_ratio = self._sf(values[COL_PIPE_LOCAL_LOSS], 0.0) if len(values) > COL_PIPE_LOCAL_LOSS else 0.0
-                    in_out_raw = str(values[COL_PIPE_IN_OUT]).strip() if len(values) > COL_PIPE_IN_OUT else ""
-                    ppipe_result = {
-                        'success': True, 'section_type': section_type, 'is_pressure_pipe': True,
-                        'flow_section': segment, 'building_name': building_name,
-                        'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
-                        'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.0), 'slope_inv': 0,
-                        'D': self._sf(values[COL_D], 0.0),  # 直径D用于有压管道同类结构
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
-                        'pipe_material': pipe_material,
-                        'local_loss_ratio': local_loss_ratio,
-                        'in_out_raw': in_out_raw,
-                    }
-                    self.batch_results.append({'input': values, 'result': ppipe_result})
-                    skip_count += 1
-                    if self.detail_cb.isChecked():
-                        detail_lines.append(f"【项目 {total_count}】")
-                        detail_lines.append(self._gen_detail_report(values, ppipe_result))
-                        detail_lines.append("\n" + "*" * 80 + "\n")
-                    continue
-
-                # 泄水渠与陡坡占位行：表1/表2只透传参数，表3按同名进出口成组正式计算
-                if is_spillway_steep_chute_section_type(section_type):
-                    design_q = self._sf(values[COL_Q])
-                    if not math.isfinite(design_q) or design_q <= 0:
-                        raise ValueError("流量Q必须为大于0的有限数值")
-                    use_inc = self.inc_cb.isChecked()
-                    increase_percent = 0.0
-                    manual_qmax = None
-                    if use_inc:
-                        increase_percent, manual_qmax = self._resolve_manual_increase_percent_for_segment(segment, design_q)
-                        if increase_percent is None:
-                            increase_percent = get_auto_increase_percent(design_q)
-                    increased_q = (
-                        manual_qmax if manual_qmax is not None
-                        else calculate_q_increased(design_q, increase_percent)
-                    )
-                    if not math.isfinite(increased_q):
-                        raise ValueError("加大流量必须为有限数值")
-                    row_out = ["-"] * len(RESULT_HEADERS)
-                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                    row_out[3] = "泄水渠与陡坡"; row_out[-1] = "⏭ 表3专项计算"
-                    if use_inc:
-                        row_out[12] = f"{increased_q:.3f}"
-                    result_rows.append(row_out)
-                    display_structure_type = resolve_spillway_steep_chute_display_type(
-                        raw_section_type,
-                        section_type,
-                    )
-                    spillway_advanced_params = _extract_spillway_steep_chute_advanced_params(values)
-                    spillway_payload = (
-                        {"display_structure_type": display_structure_type}
-                        if display_structure_type
-                        else {}
-                    )
-                    if spillway_advanced_params:
-                        spillway_payload["advanced_params"] = spillway_advanced_params
-                    # 运行工况独立于高级参数，表3清空高级输入时仍须保留。
-                    spillway_payload["use_increase"] = use_inc
-                    spillway_payload["Q_increased"] = increased_q
-                    spillway_result = {
-                        'success': True,
-                        'section_type': '泄水渠与陡坡',
-                        'display_structure_type': display_structure_type,
-                        'is_spillway_steep_chute': True,
-                        'flow_section': segment,
-                        'building_name': building_name,
-                        'coord_X': self._sf(values[COL_X], 0.0),
-                        'coord_Y': self._sf(values[COL_Y], 0.0),
-                        'Q': design_q,
-                        'use_increase': use_inc,
-                        '_use_increase': use_inc,
-                        'Q_increased': increased_q,
-                        'Q_inc': increased_q,
-                        'Q_max': increased_q,
-                        'increase_percent': increase_percent,
-                        'n': self._sf(values[COL_N], 0.014),
-                        'slope_inv': self._sf(values[COL_SLOPE], 0.0),
-                        'm': self._sf(values[COL_M], 0.0),
-                        'b': self._sf(values[COL_B], 0.0),
-                        'B': self._sf(values[COL_B], 0.0),
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
-                        SPILLWAY_STEEP_CHUTE_PARAM_KEY: spillway_payload,
-                    }
-                    if manual_qmax is not None:
-                        spillway_result['manual_qmax_from_excel'] = manual_qmax
-                    self.batch_results.append({'input': values, 'result': spillway_result})
-                    skip_count += 1
-                    if self.detail_cb.isChecked():
-                        detail_lines.append(f"【项目 {total_count}】")
-                        detail_lines.append(self._gen_detail_report(values, spillway_result))
-                        detail_lines.append("\n" + "*" * 80 + "\n")
-                    continue
-
-                # 闸·分水类占位行（分水闸/分水口/节制闸/泄水闸等）
-                if "闸" in section_type or "分水" in section_type:
-                    row_out = ["-"] * len(RESULT_HEADERS)
-                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                    row_out[3] = section_type; row_out[-1] = f"⏭ {section_type}(不参与断面计算)"
-                    result_rows.append(row_out)
-                    gate_result = {
-                        'success': True, 'section_type': section_type, 'is_diversion_gate': True,
-                        'flow_section': segment, 'building_name': building_name,
-                        'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
-                        'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.014), 'slope_inv': 0,
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
-                    }
-                    self.batch_results.append({'input': values, 'result': gate_result})
-                    skip_count += 1
-                    if self.detail_cb.isChecked():
-                        detail_lines.append(f"【项目 {total_count}】")
-                        detail_lines.append(self._gen_detail_report(values, gate_result))
-                        detail_lines.append("\n" + "*" * 80 + "\n")
-                    continue
-
-                # 解析输入参数
-                Q = self._sf(values[COL_Q])
-                n = self._sf(values[COL_N], 0.0)
-                slope_inv = self._sf(values[COL_SLOPE])
-                m = self._sf(values[COL_M], 0)
-                b = self._sf(values[COL_B], 0)
-                beta = self._sf(values[COL_BETA], 0)
-                rect_hb_ratio = self._sf(values[COL_RECT_CULVERT_HB_RATIO], 0)
-                R = self._sf(values[COL_R], 0)
-                D = self._sf(values[COL_D], 0)
-                ducao_depth_ratio = self._sf(values[COL_DUCAO_DEPTH_RATIO], 0)
-                chamfer_angle = self._sf(values[COL_CHAMFER_ANGLE], 0)
-                chamfer_length = self._sf(values[COL_CHAMFER_LENGTH], 0)
-                theta_deg = self._sf(values[COL_THETA], 0)
-                normalized_section_type = normalize_section_type_name(section_type)
-                manual_H_rect = None
-                rect_h_text = str(values[COL_RECT_CULVERT_H]).strip() if len(values) > COL_RECT_CULVERT_H else ""
-                if rect_h_text:
-                    try:
-                        manual_H_rect = float(rect_h_text)
-                    except ValueError as exc:
-                        raise ValueError("矩形暗涵指定高度 H 输入无效") from exc
-                else:
-                    manual_H_rect = self._get_rect_culvert_manual_h(row_idx)
-                if is_rect_culvert_section_type(normalized_section_type) and manual_H_rect is not None:
-                    if manual_H_rect <= 0:
-                        raise ValueError("矩形暗涵指定高度 H 必须大于0")
-                    if b <= 0:
-                        raise ValueError("填写高度 H 时必须同时填写底宽 B")
-                    if beta > 0:
-                        raise ValueError("填写高度 H 时不能同时填写宽深比 β")
-                    if rect_hb_ratio > 0:
-                        raise ValueError("填写高度 H 时不能同时填写高宽比 H/B")
-                if is_rect_culvert_section_type(normalized_section_type) and beta > 0 and rect_hb_ratio > 0:
-                    raise ValueError("宽深比 β 与高宽比 H/B 不能同时指定")
-                manual_H_straight = None
-                h_straight_text = (
-                    str(values[COL_ARCH_H_STRAIGHT]).strip()
-                    if len(values) > COL_ARCH_H_STRAIGHT and values[COL_ARCH_H_STRAIGHT] is not None
-                    else ""
-                )
-                if h_straight_text:
-                    try:
-                        manual_H_straight = float(h_straight_text)
-                    except ValueError as exc:
-                        raise ValueError("直墙高度 H直 输入无效") from exc
-                    if manual_H_straight < 0:
-                        raise ValueError("直墙高度 H直 不能为负数")
-                    if normalized_section_type in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"} and b <= 0:
-                        raise ValueError("填写直墙高度 H直 时必须同时填写底宽 B")
-                tie_rod_height = None
-                tie_rod_text = (
-                    str(values[COL_TIE_ROD_HEIGHT]).strip()
-                    if len(values) > COL_TIE_ROD_HEIGHT and values[COL_TIE_ROD_HEIGHT] is not None
-                    else ""
-                )
-                if tie_rod_text and "渡槽" in normalized_section_type:
-                    try:
-                        tie_rod_height = float(tie_rod_text)
-                    except ValueError as exc:
-                        raise ValueError("拉杆高度输入无效") from exc
-                    if tie_rod_height < 0:
-                        raise ValueError("拉杆高度不能为负数")
-                m1 = self._sf(values[COL_COMPOUND_M1], 0)
-                B1 = self._sf(values[COL_COMPOUND_B1], 0)
-                m2 = self._sf(values[COL_COMPOUND_M2], 0)
-                B2 = self._sf(values[COL_COMPOUND_B2], 0)
-                m3 = self._sf(values[COL_COMPOUND_M3], 0)
-                h1 = self._sf(values[COL_COMPOUND_H1], 0)
-                v_min = self._sf(values[COL_V_MIN], 0.1)
-                v_max = self._sf(values[COL_V_MAX], 100)
-
-                if Q <= 0: raise ValueError("流量Q必须大于0")
-                if n <= 0: raise ValueError("糙率n必须大于0")
-                if slope_inv <= 0: raise ValueError("比降必须大于0")
-
-                # 计算分发
-                use_inc = self.inc_cb.isChecked()
-                manual_increase_percent = 0 if not use_inc else None
-                manual_qmax = None
-                if use_inc:
-                    manual_increase_percent, manual_qmax = self._resolve_manual_increase_percent_for_segment(segment, Q)
-                preserve_explicit_bottom_width = self._should_preserve_explicit_bottom_width(
-                    section_type, b
-                )
-                preserve_imported_dimensions = self._should_preserve_imported_dimensions(
-                    row_idx, section_type, b
-                )
-                result = self._calculate_single(
-                    section_type, Q, n, slope_inv, v_min, v_max,
-                    m=m, b=b, beta=beta, R=R, D=D,
-                    m1=m1, B1=B1, m2=m2, B2=B2, m3=m3, h1=h1,
-                    ducao_depth_ratio=ducao_depth_ratio,
-                    chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
-                    theta_deg=theta_deg,
-                    manual_H_straight=manual_H_straight,
-                    manual_H=manual_H_rect,
-                    target_HB_ratio=rect_hb_ratio if rect_hb_ratio > 0 else None,
-                    tie_rod_height=tie_rod_height,
-                    manual_increase_percent=manual_increase_percent,
-                    preserve_explicit_bottom_width=preserve_explicit_bottom_width,
-                    preserve_imported_dimensions=preserve_imported_dimensions,
-                )
-                if result:
-                    result['_use_increase'] = use_inc
-                    result['section_type'] = section_type
-                    if is_fill_channel_section_type(section_type):
-                        if b > 0:
-                            result['B'] = b
-                        result['m'] = m
-                    if manual_qmax is not None and result.get('success'):
-                        result['manual_qmax_from_excel'] = manual_qmax
-                        result['Q_increased'] = manual_qmax
-                        result['Q_inc'] = manual_qmax
-
-                if result and result.get('success'):
-                    row_out = self._extract_result_row(seq, segment, building_name, section_type, result,
-                                                       use_increase=result.get('_use_increase', True))
-                    result_rows.append(row_out)
-                    self.batch_results.append({'input': values, 'result': result})
-                    success_count += 1
-                    # 详细报告
-                    if self.detail_cb.isChecked():
-                        detail_lines.append(f"【项目 {total_count}】 {building_name} ({section_type})")
-                        detail_lines.append(self._gen_detail_report(values, result))
-                        detail_lines.append("\n" + "*" * 80 + "\n")
-                else:
-                    err = result.get('error_message', '计算失败') if result else '计算失败'
-                    if "计算失败" in err:
-                        error_details.append(f"序号{seq} ({building_name}): {err}")
-                    row_out = ["-"] * len(RESULT_HEADERS)
-                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                    row_out[3] = section_type; row_out[-1] = f"✗ {err}"
-                    result_rows.append(row_out)
-                    fail_count += 1
-
-            except Exception as e:
-                row_out = ["-"] * len(RESULT_HEADERS)
-                row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                row_out[3] = section_type; row_out[-1] = f"错误: {str(e)}"
-                result_rows.append(row_out)
-                error_details.append(f"序号{seq} ({building_name or '-'}): {str(e)}")
-                fail_count += 1
-
+        self.batch_results = outcome.batch_results
+        result_rows = outcome.result_rows
+        error_details = outcome.error_details
+        success_count, fail_count = outcome.success_count, outcome.fail_count
+        skip_count, total_count = outcome.skip_count, outcome.total_count
+        detail_lines = [
+            self._gen_detail_report(*part) if isinstance(part, tuple) else part
+            for part in outcome.detail_parts
+        ]
         # 填充结果表格
         self.result_table.setRowCount(len(result_rows))
         for r, row in enumerate(result_rows):
@@ -2706,6 +2314,84 @@ class BatchPanel(QWidget):
         if fail_count == 0:
             self._register_batch_results_to_shared(show_notice=True)
 
+    def _ensure_calculation_runner(self):
+        runner = getattr(self, "_calculation_runner", None)
+        if runner is None:
+            from app_渠系计算前端.task_runner import TaskRunner
+            runner = TaskRunner(self)
+            runner.running_changed.connect(self._on_calculation_running_changed)
+            self._calculation_runner = runner
+        return runner
+
+    @property
+    def calculation_runner(self):
+        """供工程生命周期检查使用，查询本身不创建线程或页面。"""
+        return getattr(self, "_calculation_runner", None)
+
+    def is_calculation_running(self):
+        runner = self.calculation_runner
+        return bool(runner is not None and runner.isRunning())
+
+    def cancel_calculation(self):
+        runner = self.calculation_runner
+        if runner is not None:
+            runner.cancel()
+
+    def _on_calculation_running_changed(self, running):
+        button = getattr(self, "_calculate_button", None)
+        if button is not None:
+            button.setEnabled(not running)
+            button.setText("计算中…" if running else "开始批量计算")
+        cancel = getattr(self, "_cancel_calculation_button", None)
+        if cancel is not None:
+            cancel.setVisible(running)
+        self.calculation_running_changed.emit(running)
+
+    def start_calculation(self):
+        """真实按钮使用的异步入口；通过 calculation_finished 接收可用结果。"""
+        runner = self._ensure_calculation_runner()
+        if runner.isRunning():
+            return False
+        input_rows = self._get_all_input_data()
+        if not input_rows:
+            InfoBar.warning("提示", "请先输入数据", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+            return False
+        current_snapshot = self._make_calc_snapshot(input_rows)
+        if self._last_calc_snapshot is not None and current_snapshot == self._last_calc_snapshot:
+            if self.detail_cb.isChecked() and not self._last_calc_detail and self.batch_results:
+                self._regenerate_detail_report()
+                self._last_calc_detail = True
+            self.calculation_finished.emit(None)
+            return False
+        if not self._validate_duplicate_buildings(input_rows):
+            return False
+        request = self.build_calculation_request(input_rows)
+        # 依赖快照只含纯算法函数，后台不持有面板绑定方法。
+        from app_渠系计算前端.batch.engines import ENGINE_NAMES
+        engine_snapshot = {name: globals()[name] for name in ENGINE_NAMES if name in globals()}
+        service = BatchCalculationService(engine_overrides=engine_snapshot)
+
+        def apply_result(outcome):
+            if current_snapshot != self._make_calc_snapshot() or request != self.build_calculation_request():
+                InfoBar.warning("输入已更新", "本次计算期间输入已变化，请重新计算。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+                self.calculation_discarded.emit()
+                return
+            self.apply_calculation_outcome(outcome, current_snapshot)
+            self.data_changed.emit()
+            self.calculation_finished.emit(outcome)
+
+        def failed(error):
+            InfoBar.error("计算失败", str(error), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            self.calculation_failed.emit(str(error))
+
+        def cancelled():
+            InfoBar.info("已取消", "已取消本次计算，保留上次完整结果。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            self.calculation_discarded.emit()
+
+        runner.submit(lambda token: service.calculate(request, token),
+                      on_success=apply_result, on_error=failed, on_cancelled=cancelled)
+        return True
+
     # ================================================================
     # 计算分发
     # ================================================================
@@ -2721,271 +2407,17 @@ class BatchPanel(QWidget):
                           manual_increase_percent=None,
                           preserve_explicit_bottom_width=False,
                           preserve_imported_dimensions=False):
-        """根据断面类型调用对应计算引擎"""
-        section_type = normalize_section_type_name(section_type)
-        _inc = manual_increase_percent
-        if "明渠-梯形" in section_type:
-            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
-            return mingqu_calculate(Q=Q, m=m, n=n, slope_inv=slope_inv,
-                                    v_min=v_min, v_max=v_max,
-                                    manual_b=b if b > 0 else None,
-                                    manual_beta=beta if beta > 0 else None,
-                                    manual_increase_percent=_inc,
-                                    preserve_manual_b=preserve_explicit_bottom_width)
-        elif "明渠-复式梯形" in section_type:
-            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
-            return mingqu_compound_calculate(
-                Q=Q, m1=m1, B1=B1, m2=m2, B2=B2, m3=m3, h1=h1,
-                n=n, slope_inv=slope_inv,
-                v_min=v_min, v_max=v_max,
-                manual_increase_percent=_inc
-            )
-        elif "明渠-矩形" in section_type or is_fill_channel_section_type(section_type):
-            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
-            return mingqu_calculate(Q=Q, m=m if is_fill_channel_section_type(section_type) else 0, n=n, slope_inv=slope_inv,
-                                    v_min=v_min, v_max=v_max,
-                                    manual_b=b if b > 0 else None,
-                                    manual_beta=beta if beta > 0 else None,
-                                    manual_increase_percent=_inc,
-                                    preserve_manual_b=preserve_explicit_bottom_width)
-        elif "明渠-圆形" in section_type:
-            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
-            return circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                      v_min=v_min, v_max=v_max,
-                                      manual_D=D if D > 0 else None,
-                                      increase_percent=_inc)
-        elif "明渠-U形" in section_type:
-            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
-            if R <= 0:
-                return {'success': False, 'error_message': '明渠-U形需要填写半径R（列索徕12）'}
-            return mingqu_u_calculate(Q=Q, R=R, alpha_deg=chamfer_angle, theta_deg=theta_deg,
-                                      n=n, slope_inv=slope_inv,
-                                      v_min=v_min, v_max=v_max,
-                                      manual_increase_percent=_inc)
-        elif "渡槽-U形" in section_type:
-            if not DUCAO_AVAILABLE: return {'success': False, 'error_message': '渡槽计算模块未加载'}
-            return ducao_u_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                     v_min=v_min, v_max=v_max,
-                                     manual_R=R if R > 0 else None,
-                                     tie_rod_height=tie_rod_height,
-                                     manual_increase_percent=_inc)
-        elif "渡槽-矩形" in section_type:
-            if not DUCAO_AVAILABLE: return {'success': False, 'error_message': '渡槽计算模块未加载'}
-            if preserve_imported_dimensions:
-                dr = ducao_depth_ratio if ducao_depth_ratio > 0 else None
-                result = ducao_rect_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                              v_min=v_min, v_max=v_max,
-                                              depth_width_ratio=dr,
-                                              chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
-                                              manual_increase_percent=_inc,
-                                              tie_rod_height=tie_rod_height,
-                                              manual_B=b if b > 0 else None)
-                return self._annotate_rect_aqueduct_imported_b_result(result, b, ducao_depth_ratio)
-            dr = ducao_depth_ratio if ducao_depth_ratio > 0 else 0.8
-            return ducao_rect_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                        v_min=v_min, v_max=v_max,
-                                        depth_width_ratio=dr,
-                                        chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
-                                        tie_rod_height=tie_rod_height,
-                                        manual_increase_percent=_inc)
-        elif "隧洞-平底圆形" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
-            return suidong_flat_bottom_circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                                          v_min=v_min, v_max=v_max,
-                                                          manual_D=D if D > 0 else None,
-                                                          manual_B=b if b > 0 else None,
-                                                          manual_increase_percent=_inc)
-        elif "隧洞-圆形" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
-            return suidong_circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                              v_min=v_min, v_max=v_max,
-                                              manual_D=D if D > 0 else None,
-                                              manual_increase_percent=_inc)
-        elif "隧洞-圆拱直墙型" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
-            return suidong_horseshoe_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                               v_min=v_min, v_max=v_max,
-                                               manual_B=b if b > 0 else None,
-                                               theta_deg=theta_deg if theta_deg > 0 else None,
-                                               manual_H_straight=manual_H_straight,
-                                               manual_increase_percent=_inc)
-        elif "隧洞-马蹄形" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
-            st = 2 if "Ⅱ型" in section_type else 1
-            return suidong_horseshoe_std_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                                    v_min=v_min, v_max=v_max,
-                                                    manual_r=R if R > 0 else None,
-                                                    section_type=st,
-                                                    manual_increase_percent=_inc)
-        elif is_arch_culvert_section_type(section_type):
-            if not ARCH_CULVERT_AVAILABLE: return {'success': False, 'error_message': '圆拱直墙型暗涵模块未加载'}
-            return arch_culvert_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                          v_min=v_min, v_max=v_max,
-                                          manual_B=b if b > 0 else None,
-                                          theta_deg=theta_deg if theta_deg > 0 else None,
-                                          manual_H_straight=manual_H_straight,
-                                          manual_increase_percent=_inc)
-        elif is_rect_culvert_section_type(section_type):
-            if not RECT_CULVERT_AVAILABLE: return {'success': False, 'error_message': '矩形暗涵模块未加载'}
-            fixed_H = manual_H if manual_H is not None else manual_H_rect
-            return rect_culvert_calculate(Q=Q, n=n, slope_inv=slope_inv,
-                                          v_min=v_min, v_max=v_max,
-                                          manual_B=b if b > 0 else None,
-                                          manual_H=fixed_H if fixed_H is not None and fixed_H > 0 else None,
-                                          target_BH_ratio=beta if beta > 0 else None,
-                                          target_HB_ratio=target_HB_ratio if target_HB_ratio is not None and target_HB_ratio > 0 else None,
-                                          manual_increase_percent=_inc)
-        else:
-            return {'success': False, 'error_message': f'不支持的断面类型: {section_type}'}
+        """兼容旧入口，计算分发由无界面服务统一维护。"""
+        service = BatchCalculationService(engine_overrides={
+            name: globals()[name] for name in ['mingqu_calculate', 'mingqu_compound_calculate', 'circular_calculate', 'mingqu_u_calculate', 'MINGQU_AVAILABLE', 'ducao_u_calculate', 'ducao_rect_calculate', 'DUCAO_AVAILABLE', 'suidong_circular_calculate', 'suidong_flat_bottom_circular_calculate', 'suidong_horseshoe_calculate', 'suidong_horseshoe_std_calculate', 'SUIDONG_AVAILABLE', 'rect_culvert_calculate', 'RECT_CULVERT_AVAILABLE', 'arch_culvert_calculate', 'get_required_freeboard_height_arch', 'ARCH_CULVERT_AVAILABLE'] if name in globals()
+        })
+        return service._calculate_single(section_type, Q, n, slope_inv, v_min, v_max, m=m, b=b, beta=beta, R=R, D=D, m1=m1, B1=B1, m2=m2, B2=B2, m3=m3, h1=h1, ducao_depth_ratio=ducao_depth_ratio, chamfer_angle=chamfer_angle, chamfer_length=chamfer_length, theta_deg=theta_deg, manual_H=manual_H, manual_H_rect=manual_H_rect, target_HB_ratio=target_HB_ratio, manual_H_straight=manual_H_straight, tie_rod_height=tie_rod_height, manual_increase_percent=manual_increase_percent, preserve_explicit_bottom_width=preserve_explicit_bottom_width, preserve_imported_dimensions=preserve_imported_dimensions)
 
     # ================================================================
     # 结果提取
     # ================================================================
     def _extract_result_row(self, seq, segment, building_name, section_type, result, use_increase=True):
-        """从计算结果中提取关键数据为一行"""
-        section_type = normalize_section_type_name(section_type)
-        def fmt(val, default="-"):
-            if val is None or val == 0: return default
-            if isinstance(val, (int, float)): return f"{val:.3f}"
-            return str(val)
-        def fmt_pct(val, default="-"):
-            if val is None or val == 0: return default
-            if isinstance(val, (int, float)): return f"{val:.1f}"
-            return str(val)
-
-        B_val = D_val = R_val = "-"
-        h_design = V_design = A_design = R_hyd = chi = "-"
-        Q_inc = h_inc = V_inc = "-"
-        Fb_surcharge = H_total_val = "-"
-        Fb_cl_d = Fb_cl_i = Fb_pct_d = Fb_pct_i = "-"
-
-        if "明渠" in section_type or is_fill_channel_section_type(section_type):
-            if "圆形" in section_type:
-                D_val = result.get('D_design', result.get('D', 0))
-            elif "U形" in section_type:
-                R_val = result.get('R', 0)
-            else:
-                B_val = result.get('b_design', result.get('B', 0))
-            h_design = result.get('h_design', result.get('y_d', 0))
-            V_design = result.get('V_design', result.get('V_d', 0))
-            A_design = result.get('A_design', result.get('A_d', 0))
-            R_hyd = result.get('R_design', result.get('R_d', 0))
-            chi = result.get('X_design', result.get('P_d', 0))
-            Q_inc = result.get('Q_increased', result.get('Q_inc', 0))
-            h_inc = result.get('h_increased', result.get('y_i', 0))
-            V_inc = result.get('V_increased', result.get('V_i', 0))
-            if "圆形" in section_type:
-                Fb_surcharge = result.get('FB_d', 0)
-                Fb_cl_d = result.get('FB_d', 0)
-                Fb_cl_i = result.get('FB_i', 0)
-                Fb_pct_d = result.get('PA_d', "-")
-                Fb_pct_i = result.get('PA_i', "-")
-                H_total_val = result.get('D', result.get('D_design', 0))
-            else:
-                Fb_surcharge = result.get('Fb', result.get('FB_d', 0))
-                H_total_val = result.get('h_prime', 0)
-
-        elif "渡槽" in section_type:
-            if "U形" in section_type:
-                R_val = result.get('R', 0)
-            else:
-                B_val = result.get('B', 0)
-            h_design = result.get('h_design', 0)
-            V_design = result.get('V_design', 0)
-            A_design = result.get('A_design', 0)
-            R_hyd = result.get('R_hyd_design', 0)
-            chi = result.get('P_design', 0)
-            Q_inc = result.get('Q_increased', 0)
-            h_inc = result.get('h_increased', 0)
-            V_inc = result.get('V_increased', 0)
-            Fb_surcharge = result.get('Fb', 0)
-            H_total_val = result.get('H_total', 0)
-
-        elif "隧洞" in section_type:
-            if "平底圆形" in section_type:
-                B_val = result.get('B', 0)
-                D_val = result.get('D', result.get('D_design', 0))
-            elif "圆形" in section_type:
-                D_val = result.get('D', result.get('D_design', 0))
-            elif "圆拱直墙型" in section_type:
-                B_val = result.get('B', 0)
-            elif "马蹄形" in section_type:
-                R_val = result.get('r', 0)
-            h_design = result.get('h_design', result.get('y_d', 0))
-            V_design = result.get('V_design', result.get('V_d', 0))
-            A_design = result.get('A_design', result.get('A_d', 0))
-            R_hyd = result.get('R_hyd_design', result.get('R_d', 0))
-            chi = result.get('P_design', result.get('P_d', 0))
-            Q_inc = result.get('Q_increased', result.get('Q_inc', 0))
-            h_inc = result.get('h_increased', result.get('y_i', 0))
-            V_inc = result.get('V_increased', result.get('V_i', 0))
-            if "平底圆形" in section_type:
-                H_total_val = result.get('H_total', 0)
-            elif "圆形" in section_type:
-                H_total_val = result.get('D', result.get('D_design', 0))
-            elif "马蹄形" in section_type:
-                r_v = result.get('r', 0)
-                H_total_val = 2 * r_v if r_v else 0
-            else:
-                H_total_val = result.get('H_total', 0)
-            Fb_cl_d = result.get('freeboard_hgt_design', result.get('FB_d', 0))
-            Fb_cl_i = result.get('freeboard_hgt_inc', result.get('FB_i', 0))
-            Fb_pct_d = result.get('freeboard_pct_design', 0)
-            Fb_pct_i = result.get('freeboard_pct_inc', 0)
-
-        elif is_arch_culvert_section_type(section_type):
-            B_val = result.get('B', 0)
-            h_design = result.get('h_design', 0)
-            V_design = result.get('V_design', 0)
-            A_design = result.get('A_design', 0)
-            R_hyd = result.get('R_hyd_design', 0)
-            chi = result.get('P_design', 0)
-            Q_inc = result.get('Q_increased', 0)
-            h_inc = result.get('h_increased', 0)
-            V_inc = result.get('V_increased', 0)
-            H_total_val = result.get('H_total', 0)
-            Fb_cl_d = result.get('freeboard_hgt_design', 0)
-            Fb_cl_i = result.get('freeboard_hgt_inc', 0)
-            Fb_pct_d = result.get('freeboard_pct_design', 0)
-            Fb_pct_i = result.get('freeboard_pct_inc', 0)
-
-        elif is_rect_culvert_section_type(section_type):
-            B_val = result.get('B', 0)
-            h_design = result.get('h_design', 0)
-            V_design = result.get('V_design', 0)
-            A_design = result.get('A_design', 0)
-            R_hyd = result.get('R_hyd_design', 0)
-            chi = result.get('P_design', 0)
-            Q_inc = result.get('Q_increased', 0)
-            h_inc = result.get('h_increased', 0)
-            V_inc = result.get('V_increased', 0)
-            H_total_val = result.get('H', result.get('H_total', 0))
-            Fb_cl_d = result.get('freeboard_hgt_design', 0)
-            Fb_cl_i = result.get('freeboard_hgt_inc', 0)
-            Fb_pct_d = result.get('freeboard_pct_design', 0)
-            Fb_pct_i = result.get('freeboard_pct_inc', 0)
-
-        if not use_increase:
-            Q_inc = h_inc = V_inc = "—"
-            Fb_surcharge = "—"
-            Fb_cl_i = Fb_pct_i = "—"
-
-        status_text = "✓ 成功"
-        if result.get('preserved_manual_b') and result.get('constraint_warnings'):
-            status_text = "⚠ 按显式底宽计算" if ("明渠" in section_type or is_fill_channel_section_type(section_type)) else "⚠ 按导入尺寸计算"
-
-        return [seq, segment, building_name, section_type,
-                fmt(B_val), fmt(D_val), fmt(R_val),
-                fmt(h_design), fmt(V_design), fmt(A_design), fmt(R_hyd), fmt(chi),
-                Q_inc if Q_inc == "—" else fmt(Q_inc),
-                h_inc if h_inc == "—" else fmt(h_inc),
-                V_inc if V_inc == "—" else fmt(V_inc),
-                fmt(Fb_surcharge), fmt(H_total_val),
-                fmt(Fb_cl_d),
-                Fb_cl_i if Fb_cl_i == "—" else fmt(Fb_cl_i),
-                fmt_pct(Fb_pct_d),
-                Fb_pct_i if Fb_pct_i == "—" else fmt_pct(Fb_pct_i),
-                status_text]
+        return BatchCalculationService._extract_result_row(self, seq, segment, building_name, section_type, result, use_increase)
 
     # ================================================================
     # 详细报告（与原版一致，按断面类型分发）
@@ -3816,38 +3248,14 @@ class BatchPanel(QWidget):
                 self.input_table.setItem(row_idx, col, item)
         self._apply_row_hidden_meta(row_idx, rect_meta)
         self.input_table.blockSignals(False)
+        self._remember_current_input_cell()
+        self._notify_input_changed()
 
     # ================================================================
     # 辅助函数
     # ================================================================
     def _map_section_type(self, raw_type):
-        """将粘贴的断面类型简写映射为有效类型（与原版一致）"""
-        raw_type = normalize_section_type_name(raw_type)
-        mapping = {
-            "梯形": "明渠-梯形", "复式梯形": "明渠-复式梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
-            "明渠U形": "明渠-U形", "U形明渠": "明渠-U形",
-            "U形": "渡槽-U形", "U形渡槽": "渡槽-U形", "矩形渡槽": "渡槽-矩形",
-            "平底圆形": "隧洞-平底圆形", "平底圆形隧洞": "隧洞-平底圆形", "隧洞平底圆形": "隧洞-平底圆形",
-            "圆形隧洞": "隧洞-圆形", "圆拱直墙": "隧洞-圆拱直墙型", "圆拱直墙型": "隧洞-圆拱直墙型",
-            "马蹄形Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形Ⅱ型": "隧洞-马蹄形Ⅱ型",
-            "马蹄形I型": "隧洞-马蹄形Ⅰ型", "马蹄形II型": "隧洞-马蹄形Ⅱ型",
-            "暗涵": "暗涵-矩形", "暗涵-矩形": "暗涵-矩形", "暗渠": "暗涵-矩形", "矩形暗渠": "暗涵-矩形",
-            "矩形暗涵": "暗涵-矩形",
-            "暗涵-圆拱直墙型": "暗涵-圆拱直墙型", "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
-            "充水渠": "泄水渠与陡坡", "泄水渠": "泄水渠与陡坡", "泄水渠与陡坡": "泄水渠与陡坡",
-            "陡坡": "泄水渠与陡坡", "泄槽": "泄水渠与陡坡", "陡槽": "泄水渠与陡坡",
-            "泄水渠及陡坡": "泄水渠与陡坡",
-            "退水闸": "退水闸",
-        }
-        if raw_type in mapping:
-            return mapping[raw_type]
-        if raw_type in SECTION_TYPES:
-            return raw_type
-        # 模糊匹配
-        for key, val in mapping.items():
-            if key in raw_type:
-                return val
-        return None
+        return BatchCalculationService._map_section_type(self, raw_type)
 
     def _apply_section_type_change(self, row, new_type):
         """结构形式变更后自动填充默认值"""
@@ -3856,7 +3264,7 @@ class BatchPanel(QWidget):
         seq_item = self.input_table.item(row, COL_SEQ)
         seq = seq_item.text().strip() if seq_item else str(row + 1)
 
-        self.input_table.blockSignals(True)
+        was_blocked = self.input_table.blockSignals(True)
         if not is_rect_culvert_section_type(new_type):
             self._set_rect_culvert_manual_h(row, None)
 
@@ -3875,7 +3283,7 @@ class BatchPanel(QWidget):
         if "分水" in new_type:
             for i in range(COL_SLOPE, COL_THETA + 1):
                 self.input_table.setItem(row, i, QTableWidgetItem(""))
-            self.input_table.blockSignals(False)
+            self.input_table.blockSignals(was_blocked)
             InfoBar.info("提示", f"序号{seq}已设为{new_type}（流量段分界点）\n请确认下一行的流量段编号已正确递增",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
@@ -3903,7 +3311,7 @@ class BatchPanel(QWidget):
             for col, val in defaults.items():
                 self.input_table.setItem(row, col, QTableWidgetItem(val))
 
-        self.input_table.blockSignals(False)
+        self.input_table.blockSignals(was_blocked)
 
     def _collect_duplicate_building_groups(self, input_rows):
         """按相邻关系整理建筑物分组，供重名校验与导入提示共用。"""
@@ -4103,20 +3511,19 @@ class BatchPanel(QWidget):
                 return
             self._push_undo_snapshot()
             updated_count = 0
-            self.input_table.blockSignals(True)
-            for r in range(self.input_table.rowCount()):
-                seg_item = self.input_table.item(r, COL_SEGMENT)
-                seg_val = seg_item.text().strip() if seg_item else ""
-                if not seg_val:
-                    continue
-                try:
-                    segment = int(seg_val)
-                    if 1 <= segment <= len(flow_values):
-                        self.input_table.setItem(r, COL_Q, QTableWidgetItem(str(flow_values[segment - 1])))
-                        updated_count += 1
-                except (ValueError, IndexError):
-                    continue
-            self.input_table.blockSignals(False)
+            with self._batch_input_update():
+                for r in range(self.input_table.rowCount()):
+                    seg_item = self.input_table.item(r, COL_SEGMENT)
+                    seg_val = seg_item.text().strip() if seg_item else ""
+                    if not seg_val:
+                        continue
+                    try:
+                        segment = int(seg_val)
+                        if 1 <= segment <= len(flow_values):
+                            self.input_table.setItem(r, COL_Q, QTableWidgetItem(str(flow_values[segment - 1])))
+                            updated_count += 1
+                    except (ValueError, IndexError):
+                        continue
             InfoBar.success("完成", f"已将流量值应用到 {updated_count} 行数据\n流量段1~{len(flow_values)}: {flow_values}",
                            parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
         except ValueError as e:
@@ -4142,11 +3549,7 @@ class BatchPanel(QWidget):
         return parse_station_input(self.start_station_edit.text())
 
     def _sf(self, val, default=0.0):
-        if not val: return default
-        s = str(val).strip()
-        if not s: return default
-        try: return float(s)
-        except ValueError: return default
+        return BatchCalculationService._sf(self, val, default)
 
     def _serialize_manual_qmax_snapshot(self) -> str:
         """把手工 Q加大 映射规范化成快照文本。"""
@@ -4154,26 +3557,10 @@ class BatchPanel(QWidget):
         return repr(sorted(manual_map.items()))
 
     def _get_manual_qmax_for_segment(self, segment_value):
-        """按流量段编号获取手工 Q加大。"""
-        try:
-            segment_num = int(str(segment_value).strip())
-        except (TypeError, ValueError):
-            return None, None
-        manual_map = getattr(self, "_manual_qmax_by_segment", {}) or {}
-        return segment_num, manual_map.get(segment_num)
+        return BatchCalculationService._get_manual_qmax_for_segment(self, segment_value)
 
     def _resolve_manual_increase_percent_for_segment(self, segment_value, design_q: float):
-        """把手工 Q加大 反算为现有内核仍可复用的加大比例。"""
-        segment_num, manual_qmax = self._get_manual_qmax_for_segment(segment_value)
-        if segment_num is None or manual_qmax is None:
-            return None, None
-        if manual_qmax < design_q:
-            raise ValueError(
-                f"第{segment_num}段手工Q加大({manual_qmax:.3f})不能小于设计流量 Q({design_q:.3f})"
-            )
-        if math.isclose(manual_qmax, design_q, rel_tol=1e-9, abs_tol=1e-9):
-            return 0.0, manual_qmax
-        return calculate_increase_percent_from_q(design_q, manual_qmax), manual_qmax
+        return BatchCalculationService._resolve_manual_increase_percent_for_segment(self, segment_value, design_q)
 
     def _set_excel_import_session_active(self, active: bool):
         self._excel_import_session_active = bool(active)
@@ -4197,9 +3584,7 @@ class BatchPanel(QWidget):
         return bool(item and item.data(_EXCEL_IMPORTED_ROW_ROLE))
 
     def _should_preserve_explicit_bottom_width(self, section_type: str, b_value: float) -> bool:
-        if b_value <= 0:
-            return False
-        return "明渠-梯形" in section_type or "明渠-矩形" in section_type or is_fill_channel_section_type(section_type)
+        return BatchCalculationService._should_preserve_explicit_bottom_width(self, section_type, b_value)
 
     def _should_preserve_imported_dimensions(self, row_idx: int, section_type: str, b_value: float) -> bool:
         if b_value <= 0:
@@ -4209,41 +3594,10 @@ class BatchPanel(QWidget):
         return self._is_row_excel_imported(row_idx)
 
     def _annotate_rect_aqueduct_imported_b_result(self, result: dict, manual_b: float, imported_ratio: float):
-        if not isinstance(result, dict):
-            return result
-
-        imported_ratio_val = imported_ratio if imported_ratio and imported_ratio > 0 else None
-        result['imported_depth_width_ratio'] = imported_ratio_val
-        result.setdefault('constraint_warnings', [])
-
-        if not result.get('success'):
-            result.setdefault('used_manual_b', False)
-            result.setdefault('preserved_manual_b', False)
-            return result
-
-        result['used_manual_b'] = True
-        result['preserved_manual_b'] = True
-
-        warnings = list(result.get('constraint_warnings') or [])
-        actual_ratio = result.get('depth_width_ratio')
-        if (imported_ratio_val is not None
-                and isinstance(actual_ratio, (int, float))
-                and abs(actual_ratio - imported_ratio_val) > _IMPORTED_RATIO_WARNING_TOLERANCE):
-            warnings.append(
-                f"导入 H/B={imported_ratio_val:.3f} 仅作参考，已按导入底宽 B={manual_b:.3f} m 锁定计算；"
-                f"实际 H/B={actual_ratio:.3f}。"
-            )
-        result['constraint_warnings'] = warnings
-        return result
+        return BatchCalculationService._annotate_rect_aqueduct_imported_b_result(self, result, manual_b, imported_ratio)
 
     def _normalize_row(self, row, length):
-        row = list(row) if row else []
-        if length == len(INPUT_HEADERS) and len(row) == _LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS:
-            # 旧项目中没有“暗涵高宽比H/B”和“暗涵高度H”两列，同时 H直/拉杆高度仍在末尾。
-            row = _map_input_row_by_header_order(row, _INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS)
-        while len(row) < length:
-            row.append("")
-        return row[:length]
+        return BatchCalculationService._normalize_row(self, row, length)
 
     def _normalize_project_input_row(self, row, source_headers=None):
         """按项目保存时的表头顺序恢复输入行，兼容旧工程列顺序。"""
@@ -4662,16 +4016,14 @@ class BatchPanel(QWidget):
                 previous_warning.close()
                 self._missing_material_import_bar = None
             self._push_undo_snapshot()
-            self._undo_group += 1
-            try:
+            with self._batch_input_update():
                 self._clear_input(force=True)
                 for record in mapped_records:
                     self._add_row(record["mapped"])
                     self._mark_row_as_excel_imported(self.input_table.rowCount() - 1, not is_sample)
                 self._auto_detect_flow_segments()
                 self._manual_qmax_by_segment = dict(manual_qmax_by_segment)
-            finally:
-                self._undo_group -= 1
+                self._set_excel_import_session_active(not is_sample)
             auto_resize_table(self.input_table)
             self._is_sample_data = is_sample
             self._set_excel_import_session_active(not is_sample)
@@ -5123,7 +4475,7 @@ class BatchPanel(QWidget):
         try:
             # 恢复渠道基础信息
             channel_name = d.get("channel_name", "")
-            if channel_name:
+            if "channel_name" in d:
                 self.channel_name_edit.setText(channel_name)
             
             channel_level = d.get("channel_level", "")
@@ -5133,16 +4485,16 @@ class BatchPanel(QWidget):
                     self.channel_level_combo.setCurrentIndex(idx)
             
             start_wl = d.get("start_water_level", "")
-            if start_wl:
+            if "start_water_level" in d:
                 self.start_wl_edit.setText(start_wl)
             
             start_station = d.get("start_station", "")
-            if start_station:
+            if "start_station" in d:
                 self.start_station_edit.setText(start_station)
             
             # 恢复流量段设置
             flow_segments = d.get("flow_segments", "")
-            if flow_segments:
+            if "flow_segments" in d:
                 self.flow_segments_edit.setText(flow_segments)
             
             # 恢复计算选项
@@ -5162,9 +4514,9 @@ class BatchPanel(QWidget):
             input_rows = d.get("input_rows", [])
             input_header_order = d.get("input_header_order")
             input_row_meta = d.get("input_row_meta", []) or []
+            self.input_table.setRowCount(0)
             if input_rows:
                 # 清空现有数据
-                self.input_table.setRowCount(0)
                 self.input_table.setRowCount(len(input_rows))
 
                 for row_idx, row_data in enumerate(input_rows):
@@ -5240,6 +4592,11 @@ class BatchPanel(QWidget):
             # 标记为非示例数据
             self._is_sample_data = False
             self._set_excel_import_session_active(False)
+            self._table_undo_stack.clear()
+            self._table_redo_stack.clear()
+            self._pre_edit_snapshot = None
+            self._pre_edit_cell_value = None
+            self._undo_group = 0
             
         finally:
             self._loading_project = old_loading
@@ -5248,6 +4605,18 @@ class BatchPanel(QWidget):
 # ============================================================
 # 断面参数输入弹窗（与原版SectionParameterDialog一致）
 # ============================================================
+class BatchEditor(BatchPanel):
+    """合并工作区使用的编辑组件，保留旧面板兼容接口以便逐步迁移。"""
+
+    def _init_ui(self):
+        self.input_component = QWidget(self)
+        self.result_component = QWidget(self)
+        self._build_input_area(self.input_component)
+        self._build_result_area(self.result_component)
+        # 工作区会重新挂接可见控件，未嵌入的辅助设置容器不能遮挡父页面。
+        self.hide()
+
+
 class SectionParameterDialog(QDialog):
     """断面参数输入弹窗 - 根据断面类型显示不同的参数输入界面"""
 

@@ -1,0 +1,209 @@
+{
+  "date": "2026-10-11",
+  "scope": "工程持久化、恢复事务、后台自动保存、导入替身隔离",
+  "native_packaged_acceptance": false,
+  "test_runs": [
+    {
+      "name": "persistence",
+      "files": [
+        "test_project_codec_unit.py",
+        "test_persistence_atomic_services_unit.py",
+        "test_project_atomic_save_unit.py",
+        "test_project_transaction_async_unit.py",
+        "test_project_lazy_save_unit.py",
+        "test_case_manager.py",
+        "test_pressure_pipe_project_save_unit.py",
+        "test_pressure_pipe_result_persistence_unit.py",
+        "test_pressure_pipe_persistence_with_long_unit.py",
+        "test_app_panel_registry_unit.py",
+        "test_report_meta_pressure_pipe_unit.py"
+      ],
+      "command": [
+        "D:\\V1.0\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests\\test_project_codec_unit.py",
+        "tests\\test_persistence_atomic_services_unit.py",
+        "tests\\test_project_atomic_save_unit.py",
+        "tests\\test_project_transaction_async_unit.py",
+        "tests\\test_project_lazy_save_unit.py",
+        "tests\\test_case_manager.py",
+        "tests\\test_pressure_pipe_project_save_unit.py",
+        "tests\\test_pressure_pipe_result_persistence_unit.py",
+        "tests\\test_pressure_pipe_persistence_with_long_unit.py",
+        "tests\\test_app_panel_registry_unit.py",
+        "tests\\test_report_meta_pressure_pipe_unit.py",
+        "--basetemp",
+        "D:\\V1.0\\.tmp_persistence_final_runs\\persistence",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 7.301,
+      "counts": {
+        "passed": 97
+      },
+      "output_tail": "........................................................................ [ 74%]\n.........................                                                [100%]\n97 passed in 6.33s\n"
+    },
+    {
+      "name": "import_order_forward",
+      "files": [
+        "test_import_state_guard_unit.py",
+        "test_pressure_pipe_export_longitudinal_nodes_unit.py",
+        "test_pressure_pipe_chain_apply_unit.py",
+        "test_pressure_pipe_export_results_unit.py",
+        "test_batch_panel_dialog_parent_unit.py",
+        "test_water_profile_building_plan_unit.py",
+        "test_water_profile_batch_sync_unit.py",
+        "test_water_profile_coord_precision_unit.py",
+        "test_water_profile_optional_name_notice_unit.py",
+        "test_water_profile_transition_ready_unit.py",
+        "test_app_panel_registry_unit.py",
+        "test_project_lazy_save_unit.py",
+        "test_water_profile_package_imports_unit.py"
+      ],
+      "command": [
+        "D:\\V1.0\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests\\test_import_state_guard_unit.py",
+        "tests\\test_pressure_pipe_export_longitudinal_nodes_unit.py",
+        "tests\\test_pressure_pipe_chain_apply_unit.py",
+        "tests\\test_pressure_pipe_export_results_unit.py",
+        "tests\\test_batch_panel_dialog_parent_unit.py",
+        "tests\\test_water_profile_building_plan_unit.py",
+        "tests\\test_water_profile_batch_sync_unit.py",
+        "tests\\test_water_profile_coord_precision_unit.py",
+        "tests\\test_water_profile_optional_name_notice_unit.py",
+        "tests\\test_water_profile_transition_ready_unit.py",
+        "tests\\test_app_panel_registry_unit.py",
+        "tests\\test_project_lazy_save_unit.py",
+        "tests\\test_water_profile_package_imports_unit.py",
+        "--basetemp",
+        "D:\\V1.0\\.tmp_persistence_final_runs\\import_order_forward",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 9.949,
+      "counts": {
+        "passed": 226
+      },
+      "output_tail": "........................................................................ [ 31%]\n........................................................................ [ 63%]\n........................................................................ [ 95%]\n..........                                                               [100%]\n226 passed in 8.84s\n"
+    },
+    {
+      "name": "import_order_reverse",
+      "files": [
+        "test_water_profile_package_imports_unit.py",
+        "test_project_lazy_save_unit.py",
+        "test_app_panel_registry_unit.py",
+        "test_water_profile_transition_ready_unit.py",
+        "test_water_profile_optional_name_notice_unit.py",
+        "test_water_profile_coord_precision_unit.py",
+        "test_water_profile_batch_sync_unit.py",
+        "test_water_profile_building_plan_unit.py",
+        "test_batch_panel_dialog_parent_unit.py",
+        "test_pressure_pipe_export_results_unit.py",
+        "test_pressure_pipe_chain_apply_unit.py",
+        "test_pressure_pipe_export_longitudinal_nodes_unit.py",
+        "test_import_state_guard_unit.py"
+      ],
+      "command": [
+        "D:\\V1.0\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests\\test_water_profile_package_imports_unit.py",
+        "tests\\test_project_lazy_save_unit.py",
+        "tests\\test_app_panel_registry_unit.py",
+        "tests\\test_water_profile_transition_ready_unit.py",
+        "tests\\test_water_profile_optional_name_notice_unit.py",
+        "tests\\test_water_profile_coord_precision_unit.py",
+        "tests\\test_water_profile_batch_sync_unit.py",
+        "tests\\test_water_profile_building_plan_unit.py",
+        "tests\\test_batch_panel_dialog_parent_unit.py",
+        "tests\\test_pressure_pipe_export_results_unit.py",
+        "tests\\test_pressure_pipe_chain_apply_unit.py",
+        "tests\\test_pressure_pipe_export_longitudinal_nodes_unit.py",
+        "tests\\test_import_state_guard_unit.py",
+        "--basetemp",
+        "D:\\V1.0\\.tmp_persistence_final_runs\\import_order_reverse",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 10.741,
+      "counts": {
+        "passed": 226
+      },
+      "output_tail": "........................................................................ [ 31%]\n........................................................................ [ 63%]\n........................................................................ [ 95%]\n..........                                                               [100%]\n226 passed in 9.65s\n"
+    },
+    {
+      "name": "native_qt_import_isolation_regression",
+      "files": [
+        "test_water_profile_coord_precision_unit.py",
+        "test_explicit_zero_turn_radius_unit.py",
+        "test_pressure_pipe_window_override_unit.py",
+        "test_profile_state_architecture.py",
+        "test_water_profile_state_async_unit.py",
+        "test_import_state_guard_unit.py"
+      ],
+      "command": [
+        "D:\\V1.0\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests\\test_water_profile_coord_precision_unit.py",
+        "tests\\test_explicit_zero_turn_radius_unit.py",
+        "tests\\test_pressure_pipe_window_override_unit.py",
+        "tests\\test_profile_state_architecture.py",
+        "tests\\test_water_profile_state_async_unit.py",
+        "tests\\test_import_state_guard_unit.py",
+        "--basetemp",
+        "D:\\V1.0\\.tmp_persistence_final_runs\\native_qt_import_isolation_regression",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 6.825,
+      "counts": {
+        "passed": 119
+      },
+      "output_tail": "........................................................................ [ 60%]\n...............................................                          [100%]\n119 passed in 6.02s\n"
+    },
+    {
+      "name": "report_failure_feedback_final",
+      "files": [
+        "test_project_transaction_async_unit.py",
+        "test_report_meta_pressure_pipe_unit.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.67,
+      "counts": {
+        "passed": 15
+      },
+      "output_tail": "15 passed in 0.67s"
+    }
+  ],
+  "all_passed": true,
+  "verified_behaviors": [
+    "未来工程版本和损坏关键块在改变界面前拒绝",
+    "旧旁文件只在工程未内嵌时显式读取",
+    "管理数据和报告先修改再失败仍回滚",
+    "同版本未知顶层字段读写保留",
+    "另存为不读取旧旁文件",
+    "后台快照写入不阻塞界面事件且旧修订不清脏",
+    "工程旁文件独立工况共用原子JSON写入",
+    "坏工况可诊断且正常工况仍可用",
+    "关闭超时保留窗口和自动保存计时器",
+    "9个历史替身测试文件正逆序并与真实Qt测试联跑"
+  ],
+  "environment_notes": [
+    "默认系统临时目录访问失败，采用工程内专用临时目录；子目录的父目录已先创建。"
+  ],
+  "implementation_notes": [
+    "原子写入服务保持现有JSON结构和文件名；独立工况库仍独立",
+    "主程序启动不读取全局默认旁文件；旧独立Manager构造行为保留",
+    "报告信息纯模型与界面分离，缺失报告块使用干净工程默认；模块计算目的等个人偏好保持原机制",
+    "真实Qt扩展的延迟注册属性与模块缓存不在导入守卫中清除"
+  ],
+  "cleanup": "本轮测试目录已由主任务逐个核对绝对路径，并以不使用Force的单目录原生删除完成；仅保留改动前源码归档和基线哈希。"
+}

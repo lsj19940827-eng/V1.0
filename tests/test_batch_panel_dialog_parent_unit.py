@@ -3,6 +3,7 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -136,6 +137,7 @@ def _install_batch_panel_import_stubs():
     sys.modules["矩形暗涵设计"] = culvert_mod
 
 
+@isolated_imports
 def _load_batch_panel_module():
     patched_names = [
         "PySide6",
@@ -324,7 +326,7 @@ def _make_input_row(module, *, section_type, building_name="穿路段", q="1.2",
     row[6] = q
     row[7] = n
     row[8] = slope
-    row[13] = d
+    row[module.COL_D] = d
     return row
 
 
@@ -335,6 +337,7 @@ def _make_duplicate_row(module, *, seq, building_name, section_type, segment="1"
     return row
 
 
+@isolated_imports
 def test_import_prompt_uses_visible_host_parent(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -375,6 +378,7 @@ def test_import_prompt_uses_visible_host_parent(monkeypatch):
     assert panel._has_opened_template is True
 
 
+@isolated_imports
 def test_sample_overwrite_prompt_uses_visible_host_parent(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -417,6 +421,7 @@ def test_sample_overwrite_prompt_uses_visible_host_parent(monkeypatch):
     assert captured["yes_text"] == "覆盖导入"
 
 
+@isolated_imports
 def test_batch_calculate_routes_exception_details_to_visible_host_summary(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -439,6 +444,7 @@ def test_batch_calculate_routes_exception_details_to_visible_host_summary(monkey
 
     row = _make_input_row(module, section_type="明渠-梯形", n="", slope="")
     panel._get_all_input_data = lambda: [row]
+    panel.input_table = _FakeInputTable(rows=1)
     panel._validate_duplicate_buildings = lambda _rows: True
     panel._clear_results = lambda: panel.result_table.setRowCount(0)
     panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
@@ -475,6 +481,7 @@ def test_batch_calculate_routes_exception_details_to_visible_host_summary(monkey
     assert "plain_info_calls" not in captured
 
 
+@isolated_imports
 def test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placeholder(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -495,6 +502,7 @@ def test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placehol
 
     row = _make_input_row(module, section_type="定向钻", n="", slope="")
     panel._get_all_input_data = lambda: [row]
+    panel.input_table = _FakeInputTable(rows=1)
     panel._validate_duplicate_buildings = lambda _rows: True
     panel._clear_results = lambda: panel.result_table.setRowCount(0)
     panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
@@ -539,6 +547,7 @@ def test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placehol
     assert "plain_info_calls" not in captured
 
 
+@isolated_imports
 def test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -560,6 +569,7 @@ def test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row(monke
     row = _make_input_row(module, section_type="倒虹吸", n="", slope="", d="1.4")
     row[module.COL_PIPE_MATERIAL] = "HDPE管"
     panel._get_all_input_data = lambda: [row]
+    panel.input_table = _FakeInputTable(rows=1)
     panel._validate_duplicate_buildings = lambda _rows: True
     panel._clear_results = lambda: panel.result_table.setRowCount(0)
     panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
@@ -603,6 +613,7 @@ def test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row(monke
     assert "plain_info_calls" not in captured
 
 
+@isolated_imports
 def test_batch_import_builds_warning_for_unsupported_pccp_pressure_pipe_material():
     module = _load_batch_panel_module()
 
@@ -629,6 +640,7 @@ def test_batch_import_builds_warning_for_unsupported_pccp_pressure_pipe_material
     assert "不会阻断导入" in message
 
 
+@isolated_imports
 def test_duplicate_classifier_allows_same_named_pressure_pipe_in_branch_pressurized_chain():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -649,6 +661,7 @@ def test_duplicate_classifier_allows_same_named_pressure_pipe_in_branch_pressuri
     assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is True
 
 
+@isolated_imports
 def test_duplicate_classifier_blocks_same_named_pressure_pipe_when_chain_is_broken(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -677,6 +690,7 @@ def test_duplicate_classifier_blocks_same_named_pressure_pipe_when_chain_is_brok
     assert "请修改建筑物名称以区分后重试" in captured["content"]
 
 
+@isolated_imports
 def test_duplicate_classifier_keeps_non_pressure_pipe_duplicates_blocked():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -695,6 +709,7 @@ def test_duplicate_classifier_keeps_non_pressure_pipe_duplicates_blocked():
     assert list(buckets["allowed_chain_duplicates"].keys()) == []
 
 
+@isolated_imports
 def test_duplicate_classifier_allows_same_named_tunnel_across_diversion_gate():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -714,6 +729,7 @@ def test_duplicate_classifier_allows_same_named_tunnel_across_diversion_gate():
     assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is True
 
 
+@isolated_imports
 def test_duplicate_classifier_allows_same_named_tunnel_across_all_gate_like_sections():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -735,6 +751,7 @@ def test_duplicate_classifier_allows_same_named_tunnel_across_all_gate_like_sect
         assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is True
 
 
+@isolated_imports
 def test_duplicate_classifier_blocks_same_named_tunnel_when_non_gate_breaks_chain():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -753,6 +770,7 @@ def test_duplicate_classifier_blocks_same_named_tunnel_when_non_gate_breaks_chai
     assert list(buckets["allowed_chain_duplicates"].keys()) == []
 
 
+@isolated_imports
 def test_duplicate_classifier_keeps_non_tunnel_duplicates_blocked_across_gate():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -771,6 +789,7 @@ def test_duplicate_classifier_keeps_non_tunnel_duplicates_blocked_across_gate():
     assert list(buckets["allowed_chain_duplicates"].keys()) == []
 
 
+@isolated_imports
 def test_duplicate_warning_skips_allowed_chain_duplicates(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -794,6 +813,7 @@ def test_duplicate_warning_skips_allowed_chain_duplicates(monkeypatch):
     assert "warning_calls" not in captured
 
 
+@isolated_imports
 def test_get_template_path_returns_chating_sample_file():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -807,6 +827,7 @@ def test_get_template_path_returns_chating_sample_file():
     assert template_path == sample_path
 
 
+@isolated_imports
 def test_get_template_path_returns_hezuo_sample_file():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -820,6 +841,7 @@ def test_get_template_path_returns_hezuo_sample_file():
     assert template_path == sample_path
 
 
+@isolated_imports
 def test_get_template_path_returns_ganjiagou_sample_file():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -833,6 +855,7 @@ def test_get_template_path_returns_ganjiagou_sample_file():
     assert template_path == sample_path
 
 
+@isolated_imports
 def test_get_template_path_returns_jiangjiaba_sample_file():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -846,6 +869,7 @@ def test_get_template_path_returns_jiangjiaba_sample_file():
     assert template_path == sample_path
 
 
+@isolated_imports
 def test_get_template_path_returns_saijin_sample_file():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel
@@ -859,6 +883,7 @@ def test_get_template_path_returns_saijin_sample_file():
     assert template_path == sample_path
 
 
+@isolated_imports
 def test_get_template_path_returns_suxi_sample_file():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel

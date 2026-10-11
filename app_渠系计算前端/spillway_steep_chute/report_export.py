@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """泄水渠与陡坡文档和表格导出函数。"""
 
+from version import APP_VERSION
+
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -8,7 +10,7 @@ from typing import Any
 from docx import Document
 from openpyxl import Workbook
 
-from app_渠系计算前端.export_utils import create_engineering_report_doc
+from app_渠系计算前端.export_utils import create_engineering_report_doc, doc_apply_plain_table_style
 from app_渠系计算前端.report_meta import load_meta
 
 from .models import normalize_result
@@ -114,6 +116,7 @@ def _append_word_table(document: Document, headers: list[str], rows: list[list[A
         cells = table.add_row().cells
         for idx, value in enumerate(row):
             cells[idx].text = _text(value)
+    doc_apply_plain_table_style(table, repeat_header=True)
 
 
 def _append_word_paragraph(document: Document, text: Any, style: str | None = None) -> None:
@@ -451,7 +454,7 @@ def export_spillway_steep_chute_word(
         calc_content_desc=content_desc,
         calc_purpose=calc_purpose,
         references=list(references or []),
-        calc_program_text=f"渠系建筑物水力计算系统 V1.0\n{content_desc}",
+        calc_program_text=f"渠系建筑物水力计算系统 V{APP_VERSION}\n{content_desc}",
     )
     document.add_page_break()
     for case in cases:

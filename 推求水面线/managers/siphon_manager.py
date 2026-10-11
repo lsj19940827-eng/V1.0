@@ -6,6 +6,7 @@
 """
 
 import json
+from atomic_json import atomic_write_json
 import os
 from datetime import datetime
 from typing import Dict, Optional, Any, List
@@ -72,7 +73,7 @@ class SiphonManager:
     # 进程内临时确认态（仅当前程序运行有效，不落盘）
     _runtime_confirmed: Dict[str, set] = {}
     
-    def __init__(self, project_path: str = None):
+    def __init__(self, project_path: str = None, *, load_existing: bool = True):
         """
         初始化管理器
         
@@ -88,7 +89,7 @@ class SiphonManager:
         }
         
         # 尝试加载现有配置
-        if self._config_path and os.path.exists(self._config_path):
+        if load_existing and self._config_path and os.path.exists(self._config_path):
             self.load_config()
 
     def _runtime_key(self) -> str:
@@ -146,60 +147,35 @@ class SiphonManager:
         base_name = os.path.splitext(project_path)[0]
         return base_name + ".siphon.json"
     
-    def set_project_path(self, project_path: str):
-        """设置项目路径并重新加载配置"""
+    def bind_project_path(self, project_path: str):
+        """只绑定持久化路径，不读取或改变当前工程数据。"""
         self._project_path = project_path
-        self._config_path = self._get_config_path(project_path)
-        if os.path.exists(self._config_path):
+        self._config_path = self._get_config_path(project_path) if project_path else None
+
+    def set_project_path(self, project_path: str):
+        """旧独立调用兼容入口：显式绑定并载入历史旁文件。"""
+        self.bind_project_path(project_path)
+        if self._config_path and os.path.exists(self._config_path):
             self.load_config()
         else:
-            self._config = {
-                "version": "1.0",
-                "last_modified": "",
-                "siphons": {}
-            }
-    
+            self._config = {'version': '1.0', 'last_modified': '', 'siphons': {}}
+
     def load_config(self) -> Dict[str, Any]:
-        """
-        加载配置文件
-        
-        Returns:
-            配置字典
-        """
+        """完整读取并校验后提交；失败抛出，保留内存中的当前数据。"""
         if not self._config_path or not os.path.exists(self._config_path):
             return self._config
-        
-        try:
-            with open(self._config_path, 'r', encoding='utf-8') as f:
-                self._config = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"加载倒虹吸配置失败: {e}")
-            self._config = {
-                "version": "1.0",
-                "last_modified": "",
-                "siphons": {}
-            }
-        
+        with open(self._config_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.from_dict(payload)
         return self._config
-    
+
     def save_config(self):
-        """保存配置到文件"""
+        """统一原子保存；失败交由界面显示，不吞掉持久化错误。"""
         if not self._config_path:
             return
-        
         self._config["last_modified"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        try:
-            # 确保目录存在
-            config_dir = os.path.dirname(self._config_path)
-            if config_dir and not os.path.exists(config_dir):
-                os.makedirs(config_dir)
-            
-            with open(self._config_path, 'w', encoding='utf-8') as f:
-                json.dump(self._config, f, ensure_ascii=False, indent=2)
-        except IOError as e:
-            print(f"保存倒虹吸配置失败: {e}")
-    
+        atomic_write_json(self._config_path, self._config)
+
     def get_siphon_config(self, siphon_name: str) -> Optional[SiphonConfig]:
         """
         获取指定倒虹吸的配置
@@ -352,11 +328,17 @@ class SiphonManager:
         return copy.deepcopy(self._config)
 
     def from_dict(self, data: Dict[str, Any]):
-        """从字典恢复 manager 内部数据（用于从 .qxproj 加载）"""
-        if not data or not isinstance(data, dict):
-            return
+        """先校验再替换，避免坏数据局部覆盖当前工程。"""
         import copy
-        self._config = copy.deepcopy(data)
+        if not isinstance(data, dict):
+            raise ValueError("倒虹吸管理数据必须是 JSON 对象。")
+        payload = copy.deepcopy(data)
+        for key in ('siphons',):
+            bucket = payload.setdefault(key, {})
+            if not isinstance(bucket, dict) or any(not isinstance(item, dict) for item in bucket.values()):
+                raise ValueError(f"倒虹吸管理数据 {key} 必须由 JSON 对象组成。")
+        payload.setdefault("version", "1.0")
+        self._config = payload
 
     @property
     def config_path(self) -> str:

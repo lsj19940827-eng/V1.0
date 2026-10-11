@@ -3,6 +3,7 @@
 
 import importlib.util
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from contextlib import contextmanager
 from copy import deepcopy
@@ -18,6 +19,8 @@ from 推求水面线.models.enums import StructureType as RealStructureType
 
 
 def _install_panel_import_stubs():
+    # 先完成正式纯模型初始化，避免独立运行时让残缺替身参与包级别名注册。
+    importlib.import_module("推求水面线.models")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -100,6 +103,7 @@ def _install_panel_import_stubs():
 
     batch_mod = types.ModuleType("app_渠系计算前端.batch.panel")
     batch_mod.BatchPanel = type("BatchPanel", (), {})
+    batch_mod.BatchEditor = batch_mod.BatchPanel
     batch_mod.format_station_display = lambda value: str(value)
     batch_mod.parse_station_input = lambda value: 0.0
     sys.modules["app_渠系计算前端.batch.panel"] = batch_mod
@@ -137,6 +141,7 @@ def _install_panel_import_stubs():
     sys.modules["shared.shared_data_manager"] = shared_mod
 
 
+@isolated_imports
 def _load_panel_module():
     patched_names = [
         "PySide6",
@@ -616,6 +621,7 @@ def _fake_batch_update(_table):
     yield
 
 
+@isolated_imports
 def test_add_node_row_preserves_source_coordinate_text_in_payload():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -633,6 +639,7 @@ def test_add_node_row_preserves_source_coordinate_text_in_payload():
     assert payload["_from_table1_source"] is True
 
 
+@isolated_imports
 def test_update_table_from_nodes_full_impl_keeps_exact_source_coordinate_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -653,6 +660,7 @@ def test_update_table_from_nodes_full_impl_keeps_exact_source_coordinate_text():
     assert payload[module.SOURCE_COORD_Y_ROLE_KEY] == "3377745.982674"
 
 
+@isolated_imports
 def test_update_table_from_nodes_full_impl_marks_negative_curve_check_values_red():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -671,6 +679,7 @@ def test_update_table_from_nodes_full_impl_marks_negative_curve_check_values_red
     assert panel.node_table.item(1, 17).foreground is None
 
 
+@isolated_imports
 def test_calculation_completion_notice_warns_once_for_negative_curve_checks():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -704,6 +713,7 @@ def test_calculation_completion_notice_warns_once_for_negative_curve_checks():
     assert "-0.000" not in warning_text
 
 
+@isolated_imports
 def test_negative_curve_check_notice_limits_long_lists():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -721,6 +731,7 @@ def test_negative_curve_check_notice_limits_long_lists():
     assert "等6处" in notice
 
 
+@isolated_imports
 def test_curve_check_formula_header_mapping_is_preserved():
     formula_dialog_text = Path("app_渠系计算前端/water_profile/formula_dialog.py").read_text(encoding="utf-8")
 
@@ -729,6 +740,7 @@ def test_curve_check_formula_header_mapping_is_preserved():
     assert '"复核总长度"' in formula_dialog_text
 
 
+@isolated_imports
 def test_neighbor_precision_uses_higher_decimal_count_from_source_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -753,6 +765,7 @@ def test_neighbor_precision_uses_higher_decimal_count_from_source_rows():
     assert fallback_precision == 6
 
 
+@isolated_imports
 def test_apply_node_table_text_snapshot_refreshes_source_coordinate_payload():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -786,6 +799,7 @@ def test_apply_node_table_text_snapshot_refreshes_source_coordinate_payload():
     assert payload[module.SOURCE_COORD_Y_ROLE_KEY] == "3377745.982674"
 
 
+@isolated_imports
 def test_build_nodes_from_table_reads_source_coordinate_text_without_rounding():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -835,6 +849,7 @@ def test_build_nodes_from_table_reads_source_coordinate_text_without_rounding():
     assert nodes[0].y == 3377745.982674
 
 
+@isolated_imports
 def test_build_nodes_from_table_prefers_ip_cell_metadata_for_special_entry_exit_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -885,6 +900,7 @@ def test_build_nodes_from_table_prefers_ip_cell_metadata_for_special_entry_exit_
     assert nodes[0].display_ip_number is None
 
 
+@isolated_imports
 def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_unnamed_pressure_pipe_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -906,6 +922,7 @@ def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_unnamed_pres
     assert payload["_pressure_pipe_row_identity"]
 
 
+@isolated_imports
 def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_named_tail_pressure_row_override():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -941,6 +958,7 @@ def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_named_tail_p
     assert payload["_pressure_pipe_row_identity"] == "flow1-row1"
 
 
+@isolated_imports
 def test_build_nodes_from_table_preserves_unnamed_pressure_pipe_display_loss_without_double_counting():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -988,6 +1006,7 @@ def test_build_nodes_from_table_preserves_unnamed_pressure_pipe_display_loss_wit
     assert getattr(nodes[0], "_pressure_pipe_display_loss", 0.0) == 0.0315
 
 
+@isolated_imports
 def test_build_nodes_from_table_preserves_explicit_zero_turn_radius_for_pressure_pipe():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1038,6 +1057,7 @@ def test_build_nodes_from_table_preserves_explicit_zero_turn_radius_for_pressure
     assert getattr(nodes[1], "turn_radius_is_explicit", False) is True
 
 
+@isolated_imports
 def test_build_nodes_from_table_restores_compound_trapezoid_hidden_params():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1101,6 +1121,7 @@ def test_build_nodes_from_table_restores_compound_trapezoid_hidden_params():
     assert nodes[0].section_params["h1"] == 1.2
 
 
+@isolated_imports
 def test_build_nodes_from_table_defaults_blank_turn_radius_to_zero_for_regular_row():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1140,6 +1161,7 @@ def test_build_nodes_from_table_defaults_blank_turn_radius_to_zero_for_regular_r
     assert getattr(nodes[1], "turn_radius_is_explicit", False) is False
 
 
+@isolated_imports
 def test_import_from_batch_defaults_blank_turn_radius_text_to_zero():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1158,6 +1180,7 @@ def test_import_from_batch_defaults_blank_turn_radius_text_to_zero():
     assert panel.turn_radius_edit.text() == ""
 
 
+@isolated_imports
 def test_import_from_batch_keeps_turn_radius_entry_blank_for_mixed_positive_values():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1174,6 +1197,7 @@ def test_import_from_batch_keeps_turn_radius_entry_blank_for_mixed_positive_valu
     assert panel.node_table.item(1, 7).text() == "40"
 
 
+@isolated_imports
 def test_import_from_batch_sets_turn_radius_entry_for_uniform_positive_values():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1188,6 +1212,7 @@ def test_import_from_batch_sets_turn_radius_entry_for_uniform_positive_values():
     assert panel.turn_radius_edit.text() == "30.0"
 
 
+@isolated_imports
 def test_choose_roughness_value_returns_selected_value_and_sets_chinese_button_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1211,6 +1236,7 @@ def test_choose_roughness_value_returns_selected_value_and_sets_chinese_button_t
     ]
 
 
+@isolated_imports
 def test_choose_roughness_value_returns_none_when_dialog_cancelled():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1225,6 +1251,7 @@ def test_choose_roughness_value_returns_none_when_dialog_cancelled():
     assert value is None
 
 
+@isolated_imports
 def test_import_from_batch_applies_confirmed_general_roughness_to_current_import_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1251,6 +1278,7 @@ def test_import_from_batch_applies_confirmed_general_roughness_to_current_import
         ("有压管道", 18.5),
     ],
 )
+@isolated_imports
 def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_special_rows(
     structure_text,
     expected_angle,
@@ -1409,6 +1437,7 @@ def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_
         RealStructureType.PRESSURE_PIPE,
     ],
 )
+@isolated_imports
 def test_real_calculate_all_preserves_nonzero_turn_angle_for_special_rows(structure_type):
     calculator = RealWaterProfileCalculator(
         RealProjectSettings(
@@ -1429,6 +1458,7 @@ def test_real_calculate_all_preserves_nonzero_turn_angle_for_special_rows(struct
     assert special_node.arc_length > 0.0
 
 
+@isolated_imports
 def test_calculate_after_roundtrip_refresh_does_not_zero_special_turn_angle_again():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1496,6 +1526,7 @@ def test_calculate_after_roundtrip_refresh_does_not_zero_special_turn_angle_agai
     assert special_node.arc_length > 0.0
 
 
+@isolated_imports
 def test_real_calculate_all_keeps_auxiliary_rows_zero_after_special_turn_preservation():
     calculator = RealWaterProfileCalculator(
         RealProjectSettings(
@@ -1522,6 +1553,7 @@ def test_real_calculate_all_keeps_auxiliary_rows_zero_after_special_turn_preserv
     assert auto_channel_node.arc_length == 0.0
 
 
+@isolated_imports
 def test_import_from_batch_keeps_general_roughness_rows_unchanged_when_dialog_cancelled():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1539,6 +1571,7 @@ def test_import_from_batch_keeps_general_roughness_rows_unchanged_when_dialog_ca
     assert panel.node_table.item(1, 24).text() == "0.0140"
 
 
+@isolated_imports
 def test_import_from_batch_prompts_general_roughness_before_writing_table_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1563,6 +1596,7 @@ def test_import_from_batch_prompts_general_roughness_before_writing_table_rows()
     assert captured["row_count_when_prompted"] == 0
 
 
+@isolated_imports
 def test_import_from_batch_only_collects_channel_structure_roughness_candidates():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1594,6 +1628,7 @@ def test_import_from_batch_only_collects_channel_structure_roughness_candidates(
     assert pressure_pipe_pairs == [("管道", "")]
 
 
+@isolated_imports
 def test_import_from_batch_applies_uniform_general_roughness_without_showing_dialog():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1612,6 +1647,7 @@ def test_import_from_batch_applies_uniform_general_roughness_without_showing_dia
     assert panel.node_table.item(1, 24).text() == "0.0140"
 
 
+@isolated_imports
 def test_import_from_batch_applies_confirmed_channel_roughness_to_whitelist_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1633,6 +1669,7 @@ def test_import_from_batch_applies_confirmed_channel_roughness_to_whitelist_rows
     assert panel.node_table.item(3, 24).text() == "0.0160"
 
 
+@isolated_imports
 def test_import_from_batch_keeps_channel_roughness_rows_unchanged_when_dialog_cancelled():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1652,6 +1689,7 @@ def test_import_from_batch_keeps_channel_roughness_rows_unchanged_when_dialog_ca
     assert panel.node_table.item(2, 24).text() == "0.0150"
 
 
+@isolated_imports
 def test_import_from_batch_excludes_siphon_from_channel_candidates_but_keeps_siphon_overview():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1672,6 +1710,7 @@ def test_import_from_batch_excludes_siphon_from_channel_candidates_but_keeps_sip
     assert captured.siphon_pairs == [("倒虹吸甲", 0.016)]
 
 
+@isolated_imports
 def test_import_from_batch_excludes_pressure_pipe_gate_and_other_non_channel_structures():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1701,6 +1740,7 @@ def test_import_from_batch_excludes_pressure_pipe_gate_and_other_non_channel_str
     assert captured.pressure_pipe_pairs == [("有压管甲", "钢管")]
 
 
+@isolated_imports
 def test_update_table_from_nodes_full_impl_preserves_explicit_zero_turn_radius_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1720,6 +1760,7 @@ def test_update_table_from_nodes_full_impl_preserves_explicit_zero_turn_radius_t
     assert panel.node_table.item(0, 7).text() == "0"
 
 
+@isolated_imports
 def test_update_table_from_nodes_inner_preserves_explicit_zero_turn_radius_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1739,6 +1780,7 @@ def test_update_table_from_nodes_inner_preserves_explicit_zero_turn_radius_text(
     assert panel.node_table.item(0, 7).text() == "0"
 
 
+@isolated_imports
 def test_recalculate_geometry_impl_preserves_explicit_zero_turn_radius_for_pressure_pipe():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1803,6 +1845,7 @@ def test_recalculate_geometry_impl_preserves_explicit_zero_turn_radius_for_press
     assert panel.node_table.item(1, 7).text() == "0"
 
 
+@isolated_imports
 def test_recalculate_geometry_impl_ignores_stale_in_out_before_geometry_for_special_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1879,6 +1922,7 @@ def test_recalculate_geometry_impl_ignores_stale_in_out_before_geometry_for_spec
     assert panel.node_table.item(0, 8).text() == "18.5000"
 
 
+@isolated_imports
 def test_apply_pressure_pipe_turn_radius_payload_skips_explicit_zero_rows_without_force_override():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1903,6 +1947,7 @@ def test_apply_pressure_pipe_turn_radius_payload_skips_explicit_zero_rows_withou
     assert panel.node_table.item(0, 7).text() == "0"
 
 
+@isolated_imports
 def test_siphon_result_turn_radius_writeback_preserves_explicit_middle_ip_without_override():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1925,6 +1970,7 @@ def test_siphon_result_turn_radius_writeback_preserves_explicit_middle_ip_withou
     assert should_write is False
 
 
+@isolated_imports
 def test_siphon_result_turn_radius_writeback_allows_confirmed_override_and_blank_middle_ip():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -1965,6 +2011,7 @@ def test_siphon_result_turn_radius_writeback_allows_confirmed_override_and_blank
     ) is False
 
 
+@isolated_imports
 def test_apply_pressure_pipe_manager_tunnel_config_to_group_prefers_table1_values():
     module = _load_panel_module()
     rows = [
@@ -2001,6 +2048,7 @@ def test_apply_pressure_pipe_manager_tunnel_config_to_group_prefers_table1_value
     assert rows[1].roughness == 0.018
 
 
+@isolated_imports
 def test_apply_pressure_pipe_dialog_payloads_skips_tunnel_backfill_chain():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2031,6 +2079,7 @@ def test_apply_pressure_pipe_dialog_payloads_skips_tunnel_backfill_chain():
     assert lock_calls == ["locked"]
 
 
+@isolated_imports
 def test_insert_transitions_preserves_explicit_zero_turn_radius_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2133,6 +2182,7 @@ def test_insert_transitions_preserves_explicit_zero_turn_radius_text():
             sys.modules[dialog_module_name] = saved_dialog_module
 
 
+@isolated_imports
 def test_insert_transitions_defaults_blank_turn_radius_text_to_zero():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2234,6 +2284,7 @@ def test_insert_transitions_defaults_blank_turn_radius_text_to_zero():
             sys.modules[dialog_module_name] = saved_dialog_module
 
 
+@isolated_imports
 def test_insert_transitions_syncs_prepared_nodes_back_to_panel_state():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2354,6 +2405,7 @@ def test_insert_transitions_syncs_prepared_nodes_back_to_panel_state():
             sys.modules[dialog_module_name] = saved_dialog_module
 
 
+@isolated_imports
 def test_update_table_from_nodes_full_impl_hides_row_level_pressure_pipe_loss_outside_xxpipe():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2376,6 +2428,7 @@ def test_update_table_from_nodes_full_impl_hides_row_level_pressure_pipe_loss_ou
     assert module.PRESSURE_PIPE_ROW_ID_ROLE_KEY not in payload
 
 
+@isolated_imports
 def test_build_nodes_from_table_ignores_row_level_pressure_pipe_display_loss_outside_xxpipe():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2423,6 +2476,7 @@ def test_build_nodes_from_table_ignores_row_level_pressure_pipe_display_loss_out
     assert getattr(nodes[0], "_pressure_pipe_display_loss", 0.0) == 0.0
 
 
+@isolated_imports
 def test_import_from_batch_persists_use_increase_payload_for_open_channel_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2457,6 +2511,7 @@ def test_import_from_batch_persists_use_increase_payload_for_open_channel_rows()
     assert payload[module.USE_INCREASE_ROLE_KEY] is False
 
 
+@isolated_imports
 def test_import_from_batch_preserves_explicit_zero_turn_radius_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2500,6 +2555,7 @@ def test_import_from_batch_preserves_explicit_zero_turn_radius_text():
     assert panel.turn_radius_edit.text() == ""
 
 
+@isolated_imports
 def test_import_from_batch_persists_pressure_pipe_row_identity_for_pressure_like_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2564,6 +2620,7 @@ def test_import_from_batch_persists_pressure_pipe_row_identity_for_pressure_like
     assert nodes[0].pressure_pipe_row_identity == "flow1-row1"
 
 
+@isolated_imports
 def test_auto_calc_turn_radius_falls_back_to_unified_default_value():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2607,6 +2664,7 @@ def test_auto_calc_turn_radius_falls_back_to_unified_default_value():
     assert panel.turn_radius_edit.text() == "20.0"
 
 
+@isolated_imports
 def test_build_settings_keeps_blank_turn_radius_at_zero():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2643,6 +2701,7 @@ def test_build_settings_keeps_blank_turn_radius_at_zero():
     assert settings.turn_radius == 0.0
 
 
+@isolated_imports
 def test_apply_pending_turn_radius_updates_only_real_source_rows_after_confirm():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2676,6 +2735,7 @@ def test_apply_pending_turn_radius_updates_only_real_source_rows_after_confirm()
     assert len(info_calls) == 1
 
 
+@isolated_imports
 def test_apply_pending_turn_radius_rejects_invalid_value():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2703,6 +2763,7 @@ def test_apply_pending_turn_radius_rejects_invalid_value():
     assert len(warning_calls) == 1
 
 
+@isolated_imports
 def test_import_from_batch_roundtrips_use_increase_into_rebuilt_nodes():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2756,6 +2817,7 @@ def test_import_from_batch_roundtrips_use_increase_into_rebuilt_nodes():
     assert nodes[0].section_params["use_increase"] is False
 
 
+@isolated_imports
 def test_import_from_batch_roundtrips_directional_drill_as_pressure_pipe_like():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2817,6 +2879,7 @@ def test_import_from_batch_roundtrips_directional_drill_as_pressure_pipe_like():
     assert nodes[0].is_pressure_pipe is True
 
 
+@isolated_imports
 def test_hydraulic_inputs_and_geometry_keep_precision_through_table_roundtrip():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2845,6 +2908,7 @@ def test_hydraulic_inputs_and_geometry_keep_precision_through_table_roundtrip():
     assert panel.node_table.item(0, 14).text() == '1+000.000'
 
 
+@isolated_imports
 def test_precise_table_snapshot_does_not_override_a_changed_cell():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2865,11 +2929,13 @@ def test_precise_table_snapshot_does_not_override_a_changed_cell():
     assert restored.flow == 3.0123
 
 
+@isolated_imports
 def test_shared_station_formatter_carries_rounding_across_kilometres():
     assert RealProjectSettings.format_station(999.9996, '茶支') == '茶支1+000.000'
     assert RealProjectSettings.format_station(1234.5674, '茶支') == '茶支1+234.567'
 
 
+@isolated_imports
 def test_initial_batch_import_preserves_calculated_values_before_first_recalculation():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
@@ -2893,6 +2959,7 @@ def test_initial_batch_import_preserves_calculated_values_before_first_recalcula
     assert node.section_params['R'] == result.R_hydraulic
 
 
+@isolated_imports
 def test_flow_selector_and_restored_max_flow_do_not_truncate_user_values():
     module = _load_panel_module()
     flows = [2.87654321, 0.00000001, 3.0]

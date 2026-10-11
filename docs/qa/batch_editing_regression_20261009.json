@@ -1,0 +1,481 @@
+{
+  "started_at": "2026-10-09 15:39:12",
+  "runs": [
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "exit_code": 0,
+      "seconds": 16.790357500009122,
+      "summary": "23 passed in 15.52s",
+      "passed": 23
+    },
+    {
+      "file": "tests/test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "seconds": 4.809536100001424,
+      "summary": "23 passed in 3.79s",
+      "passed": 23
+    },
+    {
+      "file": "tests/test_project_atomic_save_unit.py",
+      "exit_code": 0,
+      "seconds": 0.6933597000024747,
+      "summary": "4 passed in 0.17s",
+      "passed": 4
+    },
+    {
+      "file": "tests/test_table_interaction_performance_unit.py",
+      "exit_code": 0,
+      "seconds": 4.406990100003895,
+      "summary": "12 passed in 3.49s",
+      "passed": 12
+    },
+    {
+      "file": "tests/test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "seconds": 1.1516139000013936,
+      "summary": "1 passed in 0.38s",
+      "passed": 1
+    },
+    {
+      "file": "tests/test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "seconds": 16.067914200000814,
+      "summary": "43 passed in 14.55s",
+      "passed": 43
+    },
+    {
+      "file": "tests/test_batch_manual_qmax_excel_unit.py",
+      "exit_code": 0,
+      "seconds": 4.124235900002532,
+      "summary": "9 passed in 3.27s",
+      "passed": 9
+    },
+    {
+      "file": "tests/test_batch_compound_trapezoid_unit.py",
+      "exit_code": 0,
+      "seconds": 2.144497899993439,
+      "summary": "1 passed in 1.29s",
+      "passed": 1
+    },
+    {
+      "file": "tests/test_batch_panel_dialog_parent_unit.py",
+      "exit_code": 1,
+      "seconds": 2.3099244000040926,
+      "summary": "3 failed, 17 passed in 1.67s",
+      "passed": 17,
+      "failure_output": "..FFF...............                                                     [100%]\n================================== FAILURES ===================================\n____ test_batch_calculate_routes_exception_details_to_visible_host_summary ____\ntests\\test_batch_panel_dialog_parent_unit.py:470: in test_batch_calculate_routes_exception_details_to_visible_host_summary\n    BatchPanel._batch_calculate(panel)\napp_渠系计算前端\\batch\\panel.py:2402: in _batch_calculate\n    current_snapshot = self._make_calc_snapshot(input_rows)\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\napp_渠系计算前端\\batch\\panel.py:2254: in _make_calc_snapshot\n    repr([self._collect_row_hidden_meta(r) for r in range(self.input_table.rowCount())]),\n                                                          ^^^^^^^^^^^^^^^^\nE   AttributeError: 'BatchPanel' object has no attribute 'input_table'. Did you mean: 'result_table'?\n_ test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placeholder _\ntests\\test_batch_panel_dialog_parent_unit.py:529: in test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placeholder\n    BatchPanel._batch_calculate(panel)\napp_渠系计算前端\\batch\\panel.py:2402: in _batch_calculate\n    current_snapshot = self._make_calc_snapshot(input_rows)\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\napp_渠系计算前端\\batch\\panel.py:2254: in _make_calc_snapshot\n    repr([self._collect_row_hidden_meta(r) for r in range(self.input_table.rowCount())]),\n                                                          ^^^^^^^^^^^^^^^^\nE   AttributeError: 'BatchPanel' object has no attribute 'input_table'. Did you mean: 'result_table'?\n___ test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row ____\ntests\\test_batch_panel_dialog_parent_unit.py:594: in test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row\n    BatchPanel._batch_calculate(panel)\napp_渠系计算前端\\batch\\panel.py:2402: in _batch_calculate\n    current_snapshot = self._make_calc_snapshot(input_rows)\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\napp_渠系计算前端\\batch\\panel.py:2254: in _make_calc_snapshot\n    repr([self._collect_row_hidden_meta(r) for r in range(self.input_table.rowCount())]),\n                                                          ^^^^^^^^^^^^^^^^\nE   AttributeError: 'BatchPanel' object has no attribute 'input_table'. Did you mean: 'result_table'?\n=========================== short test summary info ===========================\nFAILED tests/test_batch_panel_dialog_parent_unit.py::test_batch_calculate_routes_exception_details_to_visible_host_summary\nFAILED tests/test_batch_panel_dialog_parent_unit.py::test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placeholder\nFAILED tests/test_batch_panel_dialog_parent_unit.py::test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row\n3 failed, 17 passed in 1.67s\n\n"
+    },
+    {
+      "file": "tests/test_culvert_arch_panel_batch_unit.py",
+      "exit_code": 1,
+      "seconds": 2.638839500010363,
+      "summary": "1 failed, 27 passed in 1.82s",
+      "passed": 27,
+      "failure_output": "...........F................                                             [100%]\n================================== FAILURES ===================================\n___ test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height ____\ntests\\test_culvert_arch_panel_batch_unit.py:291: in test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height\n    BatchPanel._update_table_row(\napp_渠系计算前端\\batch\\panel.py:3897: in _update_table_row\n    self._remember_current_input_cell()\napp_渠系计算前端\\batch\\panel.py:1338: in _remember_current_input_cell\n    row, col = self.input_table.currentRow(), self.input_table.currentColumn()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AttributeError: '_FakeTable' object has no attribute 'currentRow'\n=========================== short test summary info ===========================\nFAILED tests/test_culvert_arch_panel_batch_unit.py::test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height\n1 failed, 27 passed in 1.82s\n\n"
+    },
+    {
+      "file": "tests/test_tunnel_arch_wall_height_panel_batch_unit.py",
+      "exit_code": 1,
+      "seconds": 2.5870685999980196,
+      "summary": "1 failed, 6 passed in 1.75s",
+      "passed": 6,
+      "failure_output": "....F..                                                                  [100%]\n================================== FAILURES ===================================\n_______ test_batch_panel_update_table_row_writes_back_arch_wall_height ________\ntests\\test_tunnel_arch_wall_height_panel_batch_unit.py:145: in test_batch_panel_update_table_row_writes_back_arch_wall_height\n    BatchPanel._update_table_row(\napp_渠系计算前端\\batch\\panel.py:3897: in _update_table_row\n    self._remember_current_input_cell()\napp_渠系计算前端\\batch\\panel.py:1338: in _remember_current_input_cell\n    row, col = self.input_table.currentRow(), self.input_table.currentColumn()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AttributeError: '_FakeTable' object has no attribute 'currentRow'\n=========================== short test summary info ===========================\nFAILED tests/test_tunnel_arch_wall_height_panel_batch_unit.py::test_batch_panel_update_table_row_writes_back_arch_wall_height\n1 failed, 6 passed in 1.75s\n\n"
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py",
+      "exit_code": 1,
+      "seconds": 2.8474287999997614,
+      "summary": "1 failed, 8 passed in 2.00s",
+      "passed": 8,
+      "failure_output": ".....F...                                                                [100%]\n================================== FAILURES ===================================\n____ test_batch_panel_update_table_row_writes_back_flat_bottom_dimensions _____\ntests\\test_tunnel_flat_bottom_circular_panel_batch_unit.py:306: in test_batch_panel_update_table_row_writes_back_flat_bottom_dimensions\n    BatchPanel._update_table_row(\napp_渠系计算前端\\batch\\panel.py:3897: in _update_table_row\n    self._remember_current_input_cell()\napp_渠系计算前端\\batch\\panel.py:1338: in _remember_current_input_cell\n    row, col = self.input_table.currentRow(), self.input_table.currentColumn()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AttributeError: '_FakeTable' object has no attribute 'currentRow'\n=========================== short test summary info ===========================\nFAILED tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py::test_batch_panel_update_table_row_writes_back_flat_bottom_dimensions\n1 failed, 8 passed in 2.00s\n\n"
+    },
+    {
+      "file": "tests/test_water_profile_batch_sync_unit.py",
+      "exit_code": 0,
+      "seconds": 1.742731600010302,
+      "summary": "11 passed in 1.07s",
+      "passed": 11
+    },
+    {
+      "file": "tests/test_water_profile_init_shared_batch_results_unit.py",
+      "exit_code": 0,
+      "seconds": 3.587955199996941,
+      "summary": "3 passed in 2.62s",
+      "passed": 3
+    },
+    {
+      "file": "tests/test_water_profile_transition_ready_unit.py",
+      "exit_code": 0,
+      "seconds": 2.002553700003773,
+      "summary": "40 passed in 1.23s",
+      "passed": 40
+    },
+    {
+      "file": "tests/test_water_profile_transition_qxproj_roundtrip_unit.py",
+      "exit_code": 0,
+      "seconds": 6.0518914999993285,
+      "summary": "6 passed in 4.84s",
+      "passed": 6
+    },
+    {
+      "file": "tests/test_case_tag_navigator_ui_unit.py",
+      "exit_code": 0,
+      "seconds": 2.2799067000014475,
+      "summary": "10 passed in 1.49s",
+      "passed": 10
+    },
+    {
+      "file": "tests/test_case_detail_toggle_unit.py",
+      "exit_code": 1,
+      "seconds": 0.7468899999948917,
+      "summary": "2 failed in 0.20s",
+      "passed": 0,
+      "failure_output": "FF                                                                       [100%]\n================================== FAILURES ===================================\n_______________ test_open_channel_reads_detail_toggle_per_case ________________\ntests\\test_case_detail_toggle_unit.py:89: in test_open_channel_reads_detail_toggle_per_case\n    mod = importlib.import_module(\nF:\\装机必备软件\\Python\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<frozen importlib._bootstrap>:1387: in _gcd_import\n    ???\n<frozen importlib._bootstrap>:1360: in _find_and_load\n    ???\n<frozen importlib._bootstrap>:1310: in _find_and_load_unlocked\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\n<frozen importlib._bootstrap>:1387: in _gcd_import\n    ???\n<frozen importlib._bootstrap>:1360: in _find_and_load\n    ???\n<frozen importlib._bootstrap>:1310: in _find_and_load_unlocked\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\n<frozen importlib._bootstrap>:1387: in _gcd_import\n    ???\n<frozen importlib._bootstrap>:1360: in _find_and_load\n    ???\n<frozen importlib._bootstrap>:1324: in _find_and_load_unlocked\n    ???\nE   ModuleNotFoundError: No module named '渠系断面设计'\n_________________ test_aqueduct_reads_detail_toggle_per_case __________________\ntests\\test_case_detail_toggle_unit.py:103: in test_aqueduct_reads_detail_toggle_per_case\n    mod = importlib.import_module(\nF:\\装机必备软件\\Python\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<frozen importlib._bootstrap>:1387: in _gcd_import\n    ???\n<frozen importlib._bootstrap>:1360: in _find_and_load\n    ???\n<frozen importlib._bootstrap>:1310: in _find_and_load_unlocked\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\n<frozen importlib._bootstrap>:1387: in _gcd_import\n    ???\n<frozen importlib._bootstrap>:1360: in _find_and_load\n    ???\n<frozen importlib._bootstrap>:1310: in _find_and_load_unlocked\n    ???\n<frozen importlib._bootstrap>:488: in _call_with_frames_removed\n    ???\n<frozen importlib._bootstrap>:1387: in _gcd_import\n    ???\n<frozen importlib._bootstrap>:1360: in _find_and_load\n    ???\n<frozen importlib._bootstrap>:1324: in _find_and_load_unlocked\n    ???\nE   ModuleNotFoundError: No module named '渠系断面设计'\n=========================== short test summary info ===========================\nFAILED tests/test_case_detail_toggle_unit.py::test_open_channel_reads_detail_toggle_per_case\nFAILED tests/test_case_detail_toggle_unit.py::test_aqueduct_reads_detail_toggle_per_case\n2 failed in 0.20s\n\n"
+    },
+    {
+      "file": "tests/test_multi_case_panel_smoke_unit.py",
+      "exit_code": 0,
+      "seconds": 13.536067599998205,
+      "summary": "63 passed in 12.47s",
+      "passed": 63
+    },
+    {
+      "file": "tests/test_pressure_pipe_first_entry_unit.py",
+      "exit_code": 0,
+      "seconds": 4.26428339999984,
+      "summary": "4 passed in 3.48s",
+      "passed": 4
+    },
+    {
+      "file": "tests/test_pressure_pipe_project_save_unit.py",
+      "exit_code": 0,
+      "seconds": 1.4587246000010055,
+      "summary": "3 passed in 0.71s",
+      "passed": 3
+    },
+    {
+      "file": "tests/test_batch_spillway_increase_chain_unit.py",
+      "exit_code": 0,
+      "seconds": 6.35391360000358,
+      "summary": "7 passed in 5.30s",
+      "passed": 7
+    }
+  ],
+  "user_autosave_sha256_before": "6a1cbb0bb03d2b55dc7e975f0db82753881902bb57b3db298bb73b85b97388ed",
+  "user_autosave_sha256_after": "6a1cbb0bb03d2b55dc7e975f0db82753881902bb57b3db298bb73b85b97388ed",
+  "completed_at": "2026-10-09 15:58:08",
+  "repair_runs": [
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "exit_code": 1,
+      "seconds": 14.953828300000168,
+      "summary": "1 failed, 23 passed in 13.82s",
+      "passed": 23,
+      "failure_output": "...........F............                                                 [100%]\n================================== FAILURES ===================================\n_ test_type_dialog_notifies_after_defaults_and_hidden_parameters_are_committed _\ntests\\test_batch_editing_lifecycle_unit.py:217: in test_type_dialog_notifies_after_defaults_and_hidden_parameters_are_committed\n    assert panel._get_rect_culvert_manual_h(0) is None\nE   assert 4.123456789 is None\nE    +  where 4.123456789 = _get_rect_culvert_manual_h(0)\nE    +    where _get_rect_culvert_manual_h = <app_渠系计算前端.batch.panel.BatchPanel(0x2228182d760) at 0x00000222869ACB40>._get_rect_culvert_manual_h\n=========================== short test summary info ===========================\nFAILED tests/test_batch_editing_lifecycle_unit.py::test_type_dialog_notifies_after_defaults_and_hidden_parameters_are_committed\n1 failed, 23 passed in 13.82s\n\n"
+    },
+    {
+      "file": "tests/test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "seconds": 14.552267999999458,
+      "summary": "43 passed in 13.23s",
+      "passed": 43
+    },
+    {
+      "file": "tests/test_batch_panel_dialog_parent_unit.py",
+      "exit_code": 1,
+      "seconds": 1.7753321000054711,
+      "summary": "1 failed, 19 passed in 1.00s",
+      "passed": 19,
+      "failure_output": "....F...............                                                     [100%]\n================================== FAILURES ===================================\n___ test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row ____\ntests\\test_batch_panel_dialog_parent_unit.py:603: in test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row\n    assert result[\"D\"] == 1.4\nE   assert 0.0 == 1.4\n=========================== short test summary info ===========================\nFAILED tests/test_batch_panel_dialog_parent_unit.py::test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row\n1 failed, 19 passed in 1.00s\n\n"
+    },
+    {
+      "file": "tests/test_culvert_arch_panel_batch_unit.py",
+      "exit_code": 0,
+      "seconds": 2.5540041999920504,
+      "summary": "28 passed in 1.69s",
+      "passed": 28
+    },
+    {
+      "file": "tests/test_tunnel_arch_wall_height_panel_batch_unit.py",
+      "exit_code": 0,
+      "seconds": 2.2112952999887057,
+      "summary": "7 passed in 1.49s",
+      "passed": 7
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py",
+      "exit_code": 0,
+      "seconds": 2.6323935000109486,
+      "summary": "9 passed in 1.78s",
+      "passed": 9
+    },
+    {
+      "file": "tests/test_case_detail_toggle_unit.py",
+      "exit_code": 1,
+      "seconds": 1.639101299995673,
+      "summary": "1 failed, 1 passed in 0.93s",
+      "passed": 1,
+      "failure_output": ".F                                                                       [100%]\n================================== FAILURES ===================================\n_________________ test_aqueduct_reads_detail_toggle_per_case __________________\ntests\\test_case_detail_toggle_unit.py:109: in test_aqueduct_reads_detail_toggle_per_case\n    panel_cls._display_all_results(dummy)\napp_渠系计算前端\\aqueduct\\panel.py:1356: in _display_all_results\n    self._panel_key,\n    ^^^^^^^^^^^^^^^\nE   AttributeError: '_Dummy' object has no attribute '_panel_key'\n=========================== short test summary info ===========================\nFAILED tests/test_case_detail_toggle_unit.py::test_aqueduct_reads_detail_toggle_per_case\n1 failed, 1 passed in 0.93s\n\n"
+    },
+    {
+      "file": "tests/test_batch_manual_qmax_excel_unit.py",
+      "exit_code": 0,
+      "seconds": 4.010122299994691,
+      "summary": "9 passed in 3.03s",
+      "passed": 9
+    },
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "exit_code": 0,
+      "seconds": 18.774850400004652,
+      "summary": "24 passed in 17.21s",
+      "passed": 24
+    },
+    {
+      "file": "tests/test_batch_panel_dialog_parent_unit.py",
+      "exit_code": 0,
+      "seconds": 1.5731916000077035,
+      "summary": "20 passed in 0.96s",
+      "passed": 20
+    },
+    {
+      "file": "tests/test_case_detail_toggle_unit.py",
+      "exit_code": 0,
+      "seconds": 1.6815466999978526,
+      "summary": "2 passed in 0.85s",
+      "passed": 2
+    },
+    {
+      "file": "tests/test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "seconds": 16.323863800003892,
+      "summary": "43 passed in 14.95s",
+      "passed": 43
+    },
+    {
+      "file": "tests/test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "seconds": 4.984820400000899,
+      "summary": "24 passed in 4.05s",
+      "passed": 24
+    },
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "exit_code": 0,
+      "seconds": 24.57454780000262,
+      "summary": "26 passed in 23.17s",
+      "passed": 26
+    },
+    {
+      "file": "tests/test_water_profile_batch_sync_unit.py",
+      "exit_code": 0,
+      "seconds": 1.645390799996676,
+      "summary": "11 passed in 1.00s",
+      "passed": 11
+    },
+    {
+      "file": "tests/test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "seconds": 5.80510779999895,
+      "summary": "24 passed in 4.73s",
+      "passed": 24
+    },
+    {
+      "file": "tests/test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "seconds": 19.502953400005936,
+      "summary": "43 passed in 18.18s",
+      "passed": 43
+    },
+    {
+      "file": "tests/test_water_profile_transition_qxproj_roundtrip_unit.py",
+      "exit_code": 0,
+      "seconds": 6.0175736000092,
+      "summary": "6 passed in 5.03s",
+      "passed": 6
+    }
+  ],
+  "final_results": [
+    {
+      "file": "tests/test_batch_editing_lifecycle_unit.py",
+      "exit_code": 0,
+      "seconds": 24.57454780000262,
+      "summary": "26 passed in 23.17s",
+      "passed": 26
+    },
+    {
+      "file": "tests/test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "seconds": 5.80510779999895,
+      "summary": "24 passed in 4.73s",
+      "passed": 24
+    },
+    {
+      "file": "tests/test_project_atomic_save_unit.py",
+      "exit_code": 0,
+      "seconds": 0.6933597000024747,
+      "summary": "4 passed in 0.17s",
+      "passed": 4
+    },
+    {
+      "file": "tests/test_table_interaction_performance_unit.py",
+      "exit_code": 0,
+      "seconds": 4.406990100003895,
+      "summary": "12 passed in 3.49s",
+      "passed": 12
+    },
+    {
+      "file": "tests/test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "seconds": 1.1516139000013936,
+      "summary": "1 passed in 0.38s",
+      "passed": 1
+    },
+    {
+      "file": "tests/test_batch_import_dimension_preserve_unit.py",
+      "exit_code": 0,
+      "seconds": 19.502953400005936,
+      "summary": "43 passed in 18.18s",
+      "passed": 43
+    },
+    {
+      "file": "tests/test_batch_manual_qmax_excel_unit.py",
+      "exit_code": 0,
+      "seconds": 4.010122299994691,
+      "summary": "9 passed in 3.03s",
+      "passed": 9
+    },
+    {
+      "file": "tests/test_batch_compound_trapezoid_unit.py",
+      "exit_code": 0,
+      "seconds": 2.144497899993439,
+      "summary": "1 passed in 1.29s",
+      "passed": 1
+    },
+    {
+      "file": "tests/test_batch_panel_dialog_parent_unit.py",
+      "exit_code": 0,
+      "seconds": 1.5731916000077035,
+      "summary": "20 passed in 0.96s",
+      "passed": 20
+    },
+    {
+      "file": "tests/test_culvert_arch_panel_batch_unit.py",
+      "exit_code": 0,
+      "seconds": 2.5540041999920504,
+      "summary": "28 passed in 1.69s",
+      "passed": 28
+    },
+    {
+      "file": "tests/test_tunnel_arch_wall_height_panel_batch_unit.py",
+      "exit_code": 0,
+      "seconds": 2.2112952999887057,
+      "summary": "7 passed in 1.49s",
+      "passed": 7
+    },
+    {
+      "file": "tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py",
+      "exit_code": 0,
+      "seconds": 2.6323935000109486,
+      "summary": "9 passed in 1.78s",
+      "passed": 9
+    },
+    {
+      "file": "tests/test_water_profile_batch_sync_unit.py",
+      "exit_code": 0,
+      "seconds": 1.645390799996676,
+      "summary": "11 passed in 1.00s",
+      "passed": 11
+    },
+    {
+      "file": "tests/test_water_profile_init_shared_batch_results_unit.py",
+      "exit_code": 0,
+      "seconds": 3.587955199996941,
+      "summary": "3 passed in 2.62s",
+      "passed": 3
+    },
+    {
+      "file": "tests/test_water_profile_transition_ready_unit.py",
+      "exit_code": 0,
+      "seconds": 2.002553700003773,
+      "summary": "40 passed in 1.23s",
+      "passed": 40
+    },
+    {
+      "file": "tests/test_water_profile_transition_qxproj_roundtrip_unit.py",
+      "exit_code": 0,
+      "seconds": 6.0175736000092,
+      "summary": "6 passed in 5.03s",
+      "passed": 6
+    },
+    {
+      "file": "tests/test_case_tag_navigator_ui_unit.py",
+      "exit_code": 0,
+      "seconds": 2.2799067000014475,
+      "summary": "10 passed in 1.49s",
+      "passed": 10
+    },
+    {
+      "file": "tests/test_case_detail_toggle_unit.py",
+      "exit_code": 0,
+      "seconds": 1.6815466999978526,
+      "summary": "2 passed in 0.85s",
+      "passed": 2
+    },
+    {
+      "file": "tests/test_multi_case_panel_smoke_unit.py",
+      "exit_code": 0,
+      "seconds": 13.536067599998205,
+      "summary": "63 passed in 12.47s",
+      "passed": 63
+    },
+    {
+      "file": "tests/test_pressure_pipe_first_entry_unit.py",
+      "exit_code": 0,
+      "seconds": 4.26428339999984,
+      "summary": "4 passed in 3.48s",
+      "passed": 4
+    },
+    {
+      "file": "tests/test_pressure_pipe_project_save_unit.py",
+      "exit_code": 0,
+      "seconds": 1.4587246000010055,
+      "summary": "3 passed in 0.71s",
+      "passed": 3
+    },
+    {
+      "file": "tests/test_batch_spillway_increase_chain_unit.py",
+      "exit_code": 0,
+      "seconds": 6.35391360000358,
+      "summary": "7 passed in 5.30s",
+      "passed": 7
+    }
+  ],
+  "final_passed": 333,
+  "final_failed": 0,
+  "file_count": 22,
+  "source_sha256": {
+    "app_渠系计算前端/batch/panel.py": "74d507d6575d49c3f8627c77e48591f1428abd4eaa8afcd2e0f33cec74be2612",
+    "app_渠系计算前端/water_profile/panel.py": "cda00b0b3ac68a0b00f1ae547a512def102045955e77e9db461779334259f51d",
+    "app_渠系计算前端/project_manager.py": "202589b96f5f72f503cf4032383f969656a25e3b515a45959f9001eefc397122",
+    "app_渠系计算前端/case_manager.py": "211f44ff07e2e641ea0b548d7c9c70d8f4cc934dcae86e00b0ae1d3acb5d9c7a"
+  },
+  "user_autosave_unchanged": true,
+  "repair_notes": [
+    "旧参数回填测试补齐变更通知替身，并保留原尺寸断言和新增通知断言。",
+    "旧批量弹窗测试补齐输入表，并用 COL_D 代替过期的直径列下标；相关计算和快照函数与 HEAD 的 AST 相同。",
+    "工况详略测试改用当前包名，补齐渡槽导航上下文。",
+    "真实界面回归发现清空表格内容后当前索引丢失；恢复选格后连续编辑撤销检查通过。",
+    "截图核对发现后端流量段识别未同步可见文本，增加单向文本同步及两个真实界面边界回归，保持未应用的手动输入。"
+  ],
+  "temporary_directories_remaining": [],
+  "syntax_check": "passed",
+  "git_diff_check": "passed",
+  "verification_environment": {
+    "python": "3.13.3",
+    "PySide6": "6.11.0",
+    "qt_platform": "offscreen",
+    "result_view": "QTextBrowser"
+  },
+  "final_screenshot_review": "Final Qt offscreen screenshot inspected: visible flow text matches pasted values; Chinese labels, frozen columns and horizontal scrolling checked. No desktop/package acceptance."
+}

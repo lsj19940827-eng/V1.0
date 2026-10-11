@@ -5,6 +5,7 @@ import importlib.util
 import math
 import re
 import sys
+from test_support.import_guard import isolated_imports
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -221,6 +222,7 @@ def _install_cad_tools_import_stubs():
     sys.modules["models.enums"] = enums_mod
 
 
+@isolated_imports
 def _load_cad_tools():
     patched_names = [
         "PySide6",
@@ -295,6 +297,7 @@ def _build_panel(nodes):
     return panel
 
 
+@isolated_imports
 def test_building_plan_uses_table3_xy_for_command_position_angle_and_offset(monkeypatch):
     _reset_widget_captures()
     infos = []
@@ -338,6 +341,7 @@ def test_building_plan_uses_table3_xy_for_command_position_angle_and_offset(monk
     assert questions == []
 
 
+@isolated_imports
 def test_building_plan_partial_missing_name_requires_confirmation_and_can_continue(monkeypatch):
     _reset_widget_captures()
     infos = []
@@ -380,6 +384,7 @@ def test_building_plan_partial_missing_name_requires_confirmation_and_can_contin
     assert "\u674e\u5bb6\u6c9f\u5012\u8679\u5438" in lines[0]
 
 
+@isolated_imports
 def test_building_plan_partial_missing_inout_can_cancel_before_parameter_dialog(monkeypatch):
     _reset_widget_captures()
     infos = []
@@ -422,6 +427,7 @@ def test_building_plan_partial_missing_inout_can_cancel_before_parameter_dialog(
     assert dialog_calls == []
 
 
+@isolated_imports
 def test_building_plan_partial_insufficient_coords_can_continue_and_preview_mentions_skipped_count(monkeypatch):
     _reset_widget_captures()
     infos = []
@@ -463,6 +469,7 @@ def test_building_plan_partial_insufficient_coords_can_continue_and_preview_ment
     assert "\u674e\u5bb6\u6c9f\u5012\u8679\u5438" in lines[0]
 
 
+@isolated_imports
 def test_building_plan_all_invalid_shows_grouped_info_details(monkeypatch):
     _reset_widget_captures()
     infos = []

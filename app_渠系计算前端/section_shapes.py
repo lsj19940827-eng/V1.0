@@ -95,6 +95,8 @@ class DimensionSpec:
     show_width: bool = True
     show_height: bool = True
     show_water_depth: bool = True
+    height_x: float | None = None
+    water_depth_x: float | None = None
     extra_horizontal: list[HorizontalDimension] = field(default_factory=list)
     extra_vertical: list[VerticalDimension] = field(default_factory=list)
     extra_texts: list[TextLabel] = field(default_factory=list)
@@ -365,8 +367,10 @@ def build_compound_trapezoid_shape(
     dimensions = DimensionSpec(
         width_label="B2",
         water_label="h",
+        height_x=right_top_x + width_ref * 0.08,
+        water_depth_x=left_top_x - width_ref * 0.15,
         extra_horizontal=[
-            HorizontalDimension(left_platform_x, left_break_x, h1 + dim_offset * 0.6, f"B1={B1:.2f}m"),
+            HorizontalDimension(left_platform_x, left_break_x, h1 - dim_offset * 0.6, f"B1={B1:.2f}m"),
         ],
         extra_vertical=[
             VerticalDimension(left_top_x - width_ref * 0.08, 0.0, h1, f"h1={h1:.2f}m", text_side="left"),
@@ -377,7 +381,13 @@ def build_compound_trapezoid_shape(
             TextLabel((B2 / 2.0 + right_top_x) / 2.0, H * 0.55, f"1:{m3:g}", color="dimgray"),
         ],
     )
-    bounds = _bounds_from_points(outline, max(width_ref * 0.25, 0.3), max(H * 0.35, 0.25))
+    # 复式断面按轮廓及尺寸锚点留边，避免左右统一放大后叠加标注再次扩宽。
+    bounds = (
+        left_top_x - max(width_ref * 0.22, 0.3),
+        right_top_x + max(width_ref * 0.12, 0.3),
+        -max(H * 0.35, 0.25),
+        H + max(H * 0.35, 0.25),
+    )
     return SectionShape(
         kind="compound_trapezoid",
         name="复式梯形",

@@ -20,6 +20,7 @@ from models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
 from models.enums import StructureType
 
 ROOT = Path(__file__).resolve().parents[1]
+_QAPP = None
 
 
 def _make_profile_node(name, structure_type, x, station_mc, section_params, water_depth):
@@ -48,7 +49,9 @@ def _assert_station_tuple(node, expected):
 
 def _get_qapp():
     """获取测试用 Qt 应用实例。"""
-    return QApplication.instance() or QApplication([])
+    global _QAPP
+    _QAPP = QApplication.instance() or QApplication([])
+    return _QAPP
 
 
 def _load_panel_module():
@@ -296,8 +299,17 @@ def test_sample5_jinhuazhai_station_stays_stable_after_table_roundtrip_and_calcu
 
         panel._update_table_from_nodes_full(prepared_nodes, settings.get_station_prefix())
         rebuilt_nodes = panel._build_nodes_from_table()
-        rebuilt_auto_channel = next(node for node in rebuilt_nodes if getattr(node, "is_auto_inserted_channel", False))
-        assert rebuilt_auto_channel.structure_type == StructureType.RECT_CULVERT
+        prepared_auto_channels = [node for node in prepared_nodes if node.is_auto_inserted_channel]
+        rebuilt_auto_channels = [node for node in rebuilt_nodes if node.is_auto_inserted_channel]
+        # 连接段按真实来源选型：样例五首个补段是矩形明渠，实际相邻暗涵仍延续暗涵。
+        assert prepared_auto_channels[0].structure_type == StructureType.MINGQU_RECTANGULAR
+        assert any(node.structure_type == StructureType.RECT_CULVERT for node in prepared_auto_channels)
+        assert [node.structure_type for node in rebuilt_auto_channels] == [
+            node.structure_type for node in prepared_auto_channels
+        ]
+        assert [node.station_MC for node in rebuilt_auto_channels] == pytest.approx([
+            node.station_MC for node in prepared_auto_channels
+        ])
 
         recalculated = WaterProfileCalculator(settings).calculate_all(rebuilt_nodes)
         recalculated_station = recalculated[jinhuazhai_index].station_MC
@@ -316,7 +328,7 @@ def test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition():
         "矩形暗涵",
         0.0,
         0.0,
-        {"B": 2.0},
+        {"B": 2.0, "H_total": 2.0},
         1.0,
     )
     culvert_outlet = _make_profile_node(
@@ -324,7 +336,7 @@ def test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition():
         "矩形暗涵",
         60.0,
         60.0,
-        {"B": 2.0},
+        {"B": 2.0, "H_total": 2.0},
         1.0,
     )
     tunnel_inlet = _make_profile_node(
@@ -358,6 +370,9 @@ def test_rect_culvert_to_tunnel_skips_zero_length_outlet_transition():
     auto_channel_rows = [node for node in prepared_nodes if getattr(node, "is_auto_inserted_channel", False)]
 
     assert len(auto_channel_rows) == 1
+    assert auto_channel_rows[0].structure_type == StructureType.RECT_CULVERT
+    assert auto_channel_rows[0].section_params["B"] == pytest.approx(2.0)
+    assert 0.0 < auto_channel_rows[0].water_depth < 2.0
     assert len(transition_rows) == 1
     assert transition_rows[0].transition_type == "进口"
     assert transition_rows[0].transition_length == pytest.approx(6.0)
@@ -403,8 +418,14 @@ def test_sample5_legacy_auto_channel_payload_still_keeps_jinhuazhai_station_stab
             item.setData(module.Qt.UserRole, payload)
 
         rebuilt_nodes = panel._build_nodes_from_table()
-        rebuilt_auto_channel = next(node for node in rebuilt_nodes if getattr(node, "is_auto_inserted_channel", False))
-        assert rebuilt_auto_channel.structure_type == StructureType.RECT_CULVERT
+        prepared_auto_channels = [node for node in prepared_nodes if node.is_auto_inserted_channel]
+        rebuilt_auto_channels = [node for node in rebuilt_nodes if node.is_auto_inserted_channel]
+        # 缺少辅助元数据时仍须从可见结构文本恢复每种连接段，不能统一退回暗涵。
+        assert prepared_auto_channels[0].structure_type == StructureType.MINGQU_RECTANGULAR
+        assert any(node.structure_type == StructureType.RECT_CULVERT for node in prepared_auto_channels)
+        assert [node.structure_type for node in rebuilt_auto_channels] == [
+            node.structure_type for node in prepared_auto_channels
+        ]
 
         recalculated = WaterProfileCalculator(settings).calculate_all(rebuilt_nodes)
         recalculated_station = recalculated[jinhuazhai_index].station_MC

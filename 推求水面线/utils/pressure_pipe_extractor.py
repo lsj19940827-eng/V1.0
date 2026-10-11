@@ -1523,17 +1523,6 @@ class PressurePipeDataExtractor:
             return default
         return number if number >= 0 else default
 
-    @staticmethod
-    def _resolve_pressure_segment_base_name(group: PressurePipeGroup) -> str:
-        """解析子段基础名称，避免把展示后缀写进 DXF 名称。"""
-        base_name = str(getattr(group, "name", "") or "").strip()
-        if base_name:
-            return base_name
-        for row in list(getattr(group, "rows", []) or []):
-            row_name = str(getattr(row, "name", "") or "").strip()
-            if row_name:
-                return row_name
-        return ""
 
     @staticmethod
     def _build_pressure_segment_from_group(group: PressurePipeGroup) -> PressureSegment:

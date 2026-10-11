@@ -17,6 +17,7 @@ LaTeX 公式渲染器 —— 使用 matplotlib SVG 矢量渲染，在 QWebEngine
 import io
 import re
 import html as html_mod
+from collections import OrderedDict
 
 import matplotlib
 from matplotlib.figure import Figure
@@ -143,7 +144,17 @@ svg { vertical-align: middle; }
 """
 
 # SVG 渲染缓存
-_svg_cache = {}
+# 动态结果公式含不同代入值；限制缓存数量，避免长时间计算后常驻内存持续增长。
+_MAX_SVG_CACHE_ENTRIES = 512
+_svg_cache = OrderedDict()
+
+
+def _cache_svg(cache_key, svg):
+    """缓存最近使用的公式，也记住失败结果以免反复尝试同一无效公式。"""
+    _svg_cache[cache_key] = svg
+    _svg_cache.move_to_end(cache_key)
+    while len(_svg_cache) > _MAX_SVG_CACHE_ENTRIES:
+        _svg_cache.popitem(last=False)
 
 
 def _e(s):
@@ -207,9 +218,9 @@ def render_latex_svg(latex_str, fontsize=14):
         SVG 标签字符串，渲染失败返回 None
     """
     cache_key = (latex_str, fontsize)
-    cached = _svg_cache.get(cache_key)
-    if cached is not None:
-        return cached
+    if cache_key in _svg_cache:
+        _svg_cache.move_to_end(cache_key)
+        return _svg_cache[cache_key]
 
     try:
         with matplotlib.rc_context(_MATH_RC):
@@ -240,10 +251,10 @@ def render_latex_svg(latex_str, fontsize=14):
             # 去掉注释
             svg_str = re.sub(r'<!--.*?-->\s*', '', svg_str, flags=re.DOTALL)
 
-        _svg_cache[cache_key] = svg_str
+        _cache_svg(cache_key, svg_str)
         return svg_str
     except Exception:
-        _svg_cache[cache_key] = None
+        _cache_svg(cache_key, None)
         return None
 
 

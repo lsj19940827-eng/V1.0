@@ -7,7 +7,8 @@
 - 持久化: QSettings("SichuanShuifa", "HydroCalc")
 """
 
-from dataclasses import dataclass, field
+from version import APP_VERSION
+
 from typing import List
 
 from PySide6.QtWidgets import (
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QTextEdit, QComboBox, QPushButton,
     QListWidget, QListWidgetItem, QGroupBox, QTabWidget,
     QWidget, QDialogButtonBox, QFrame, QSizePolicy,
-    QAbstractItemView, QRadioButton, QButtonGroup,
+    QAbstractItemView, QRadioButton, QButtonGroup, QMessageBox,
 )
 from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont
@@ -28,7 +29,7 @@ from app_渠系计算前端.styles import P, T1, T2, BD, CARD, DIALOG_STYLE
 # ============================================================
 
 DESIGN_UNIT = "四川水发勘测设计研究有限公司"
-APP_NAME_VER = "渠系建筑物水力计算系统 V1.0"
+APP_NAME_VER = f"渠系建筑物水力计算系统 V{APP_VERSION}"
 
 REFERENCES_BASE = {
     "open_channel": [
@@ -135,22 +136,7 @@ def build_calc_purpose(module_key: str, project: str = "", name: str = "",
 # 数据类
 # ============================================================
 
-@dataclass
-class ReportMeta:
-    project_name: str = ""
-    design_stage: str = "施工图"
-    product_level: str = "三级"
-    record_number: str = ""
-    specialty: str = "水工"
-    calculator: str = ""
-    checker: str = ""
-    reviewer: str = ""
-    approver: str = ""
-    volume_current: str = ""
-    volume_total: str = ""
-    basic_info: str = ""
-    mandatory_clause: str = "无"
-    extra_references: List[str] = field(default_factory=list)
+from app_渠系计算前端.report_meta_model import ReportMeta
 
 
 # ============================================================
@@ -203,6 +189,8 @@ def save_meta(meta: ReportMeta):
     s.setValue("report/mandatory_clause", meta.mandatory_clause)
     s.setValue("report/extra_references", meta.extra_references)
     s.sync()
+    if s.status() != QSettings.Status.NoError:
+        raise OSError("报告设置未能完整写入，请检查配置目录的访问权限。")
 
 
 def load_calc_purpose(module_key: str) -> str:
@@ -410,7 +398,11 @@ class ProjectSettingsDialog(QDialog):
             self.ref_list.item(i).text()
             for i in range(self.ref_list.count())
         ]
-        save_meta(m)
+        try:
+            save_meta(m)
+        except OSError as exc:
+            QMessageBox.critical(self, "保存失败", str(exc))
+            return
         self.accept()
 
     def get_meta(self) -> ReportMeta:

@@ -43,6 +43,7 @@ class SlopeComparisonControls(QWidget):
         self.standard_box = QWidget()
         self.standard_grid = QGridLayout(self.standard_box)
         self.standard_grid.setContentsMargins(0, 0, 0, 0)
+        self._standard_columns = 3
         self.standard_labels = []
         for index, value in enumerate(STANDARD_SLOPES):
             label = QLabel(f"1/{value}")
@@ -149,6 +150,9 @@ class SlopeComparisonControls(QWidget):
         """窄侧栏使用两列，普通侧栏使用三列，交由网格计算完整行高。"""
         super().resizeEvent(event)
         columns = 3 if self.width() >= 310 else 2
+        if columns == self._standard_columns:
+            return
+        self._standard_columns = columns
         for index, label in enumerate(self.standard_labels):
             self.standard_grid.addWidget(label, index // columns, index % columns)
 

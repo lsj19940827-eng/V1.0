@@ -5,7 +5,10 @@
 """
 
 import math
-from siphon_models import GradientType, TrashRackBarShape, TrashRackParams
+if __package__:
+    from .siphon_models import GradientType, TrashRackBarShape, TrashRackParams
+else:
+    from siphon_models import GradientType, TrashRackBarShape, TrashRackParams
 
 
 class CoefficientService:

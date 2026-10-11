@@ -441,7 +441,14 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
     )
     monkeypatch.setattr(bootstrap, "ensure_application", lambda argv=None: DummyApp())
     monkeypatch.setattr(bootstrap.QCoreApplication, "removePostedEvents", lambda *_args: None)
-    monkeypatch.setattr(bootstrap.QTimer, "singleShot", lambda _ms, func: func())
+    def _run_owned_callback(delay_ms, owner, callback):
+        # 启动提示必须归属主窗口，替身也严格验证对象上下文和延迟契约。
+        assert delay_ms == 300
+        assert isinstance(owner, DummyWindow)
+        assert callback.__self__ is owner
+        callback()
+
+    monkeypatch.setattr(bootstrap.QTimer, "singleShot", _run_owned_callback)
     monkeypatch.setitem(sys.modules, BASE_PACKAGE + ".app", dummy_app_module)
 
     code = bootstrap.run(

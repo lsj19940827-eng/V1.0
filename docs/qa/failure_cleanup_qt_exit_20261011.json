@@ -1,0 +1,718 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-11T12:03:13.905497+08:00",
+  "scope": "Qt deferred callback owner lifetime, autosave timer ownership, and true process exits in independent offscreen Qt processes",
+  "result": {
+    "after_pytest": {
+      "tests": 52,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "after_pytest_processes": 7,
+    "after_raw_destruction_processes": 2,
+    "after_actual_process_exit_codes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "same_final_lifecycle_test_before": {
+      "tests": 12,
+      "failures": 6,
+      "errors": 0,
+      "skipped": 0
+    },
+    "same_final_lifecycle_test_after": {
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "raw_business_callbacks_before_actual_exit_codes": [
+      1,
+      1
+    ]
+  },
+  "findings": [
+    "Before: context-free single-shot callbacks still ran after the owning MultiSiphonDialog, WaterProfilePanel, and SiphonPanel C++ object was deleted. The autosave timer without a QObject parent outlived its panel.",
+    "The final 12-test lifecycle file on before code had 6 failures and 6 passes; the same file on after code had 12 passes. Assertions record isValid at callback entry and include positive live-window behavior and real temporary case autosave readback.",
+    "Raw unmodified warning callback reproduced RuntimeError: Internal C++ object (MultiSiphonDialog) already deleted through InfoBar.warning; raw layout callback reproduced QSplitter already deleted. Each before child exited 1. Both after raw children exited 0 with empty stderr.",
+    "Fix: bind QTimer.singleShot to the owning QObject context and parent the case autosave QTimer to its panel. Apply the same ownership rule to the delayed startup update dialog.",
+    "The original five suspect test files were each rerun independently after the fix: 38 cases passed with actual process exit 0. The two multi-siphon longitudinal reset cases also passed independently with exit 0.",
+    "Normal interpreter shutdown was used; no os._exit, exception-hook suppression, global QApplication retention, forced event drain, or forced GC was added to the seven final pytest child invocations. Individual existing test fixtures may retain QApplication during their own scope."
+  ],
+  "limits": [
+    "This demonstrates a real deferred-callback lifecycle defect, not a proven single explanation for every historical stackless native access violation (0xC0000005).",
+    "Initial single-file probes without forced QApplication retention could also exit normally before the fix. QApplication strong-reference absence alone is not established as the crash cause.",
+    "Offscreen real Qt validation does not replace packaged application or native desktop acceptance. This report does not claim either.",
+    "The six original independent after-file runs predated automatic per-run source fingerprint recording; their complete outputs and XML are preserved. The final lifecycle after run includes automatically captured source fingerprints."
+  ],
+  "isolation": {
+    "workspace": ".tmp/failure_cleanup_qt_workspace",
+    "basis": "Independent physical extraction of the parent fresh before.zip; only specified after source/test files synchronized",
+    "data": "Copied workspace/data; lifecycle save test redirects _pkg_root to pytest tmp_path",
+    "settings": "QSettings IniFormat, both UserScope and SystemScope redirected to workspace/.probe_settings",
+    "parallelism": "One child test process at a time for this probe",
+    "windows_wmi": "Same protective platform WMI disable before project imports as the application launcher",
+    "env": {
+      "QT_QPA_PLATFORM": "offscreen",
+      "CODEX_FORCE_QTEXTBROWSER": "1",
+      "QTWEBENGINE_DISABLE_SANDBOX": "1"
+    }
+  },
+  "baseline_archive_sha256": "723ce317a7a3651d94c513a028bd9cd591caf05631d8e0730e6bd1f30211742c",
+  "baseline_source_sha256": {
+    "app_渠系计算前端/siphon/multi_siphon_dialog.py": "74e9176c826fbd135f64eb504aba7cf715294a60bea5b75f99230a170d764c23",
+    "app_渠系计算前端/water_profile/panel.py": "d77534b1fe580bbb58655f4ba991226cee5318e32395d160240d75037e355d8c",
+    "app_渠系计算前端/siphon/panel.py": "446e82510a98b7c4cb3256f4bec2a6d9b4a729888a045375cdae87f3f27673ba",
+    "app_渠系计算前端/bootstrap.py": "6aba41dabb4646cf5eb1a563dc9dbbada7d0a6d188b98ac1b0aeb192a5a017bc"
+  },
+  "source_sha256_at_consolidation": {
+    "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+    "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12",
+    "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+    "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+    "tests/test_qt_deferred_lifecycle_unit.py": "1c5881756482a6bd04526826e1850e721ecc21bfeb956f21a264d765ae94c95b",
+    "tools/qa_qt_exit_probe.py": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354"
+  },
+  "production_changes_against_fresh_baseline": {
+    "app_渠系计算前端/siphon/multi_siphon_dialog.py": "--- before/app_渠系计算前端/siphon/multi_siphon_dialog.py\n+++ after/app_渠系计算前端/siphon/multi_siphon_dialog.py\n@@ -103,7 +103,8 @@\n         self._create_ui()\n         print(\"[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\")\n         self._load_saved_data()\n-        QTimer.singleShot(0, self._show_velocity_source_warnings_once)\n+        # 绑定窗口上下文，快速关闭/销毁时由 Qt 取消尚未执行的提示。\n+        QTimer.singleShot(0, self, self._show_velocity_source_warnings_once)\n         print(\"[DEBUG MultiSiphonDialog] __init__ 完成\")\n \n         # 标记第一次显示，用于 showEvent 中的置顶操作\n@@ -115,7 +116,7 @@\n         if self._first_show:\n             self._first_show = False\n             # 延迟置顶，确保窗口已完全显示\n-            QTimer.singleShot(50, self._ensure_visible)\n+            QTimer.singleShot(50, self, self._ensure_visible)\n \n     def _configure_window(self):\n         \"\"\"配置窗口属性\"\"\"\n",
+    "app_渠系计算前端/water_profile/panel.py": "--- before/app_渠系计算前端/water_profile/panel.py\n+++ after/app_渠系计算前端/water_profile/panel.py\n@@ -1868,8 +1868,9 @@\n         splitter = getattr(self, \"_splitter\", None)\n         if splitter is None or splitter.count() <= 0:\n             return\n-        QTimer.singleShot(0, self._adjust_splitter_for_settings)\n-        QTimer.singleShot(80, self._adjust_splitter_for_settings)\n+        # 定时回调归属页面，页面销毁后不得访问已经释放的 splitter。\n+        QTimer.singleShot(0, self, self._adjust_splitter_for_settings)\n+        QTimer.singleShot(80, self, self._adjust_splitter_for_settings)\n \n     def _refresh_top_layout_for_measurement(self):\n         \"\"\"测量 splitter 前，强制更新顶部折叠区布局缓存。\"\"\"\n@@ -9364,7 +9365,7 @@\n                 group.setVisible(show_group)\n                 changed = True\n         if changed and self.isVisible():\n-            QTimer.singleShot(0, self._adjust_splitter_for_settings)\n+            QTimer.singleShot(0, self, self._adjust_splitter_for_settings)\n \n     def _update_siphon_roughness_overview(self, pairs):\n         \"\"\"更新倒虹吸糙率芯片展示。\n@@ -16213,7 +16214,7 @@\n             self._pre_edit_cell_value = None\n             self._undo_group = 0\n             self._loss_delete_batch = None\n-            QTimer.singleShot(0, self._adjust_splitter_for_settings)\n+            QTimer.singleShot(0, self, self._adjust_splitter_for_settings)\n             \n         finally:\n             self._updating_cells = old_updating\n",
+    "app_渠系计算前端/siphon/panel.py": "--- before/app_渠系计算前端/siphon/panel.py\n+++ after/app_渠系计算前端/siphon/panel.py\n@@ -341,7 +341,7 @@\n             from .case_manager import CaseManager\n             cases_dir = os.path.join(_pkg_root, 'data', 'siphon_cases')\n             self.case_manager = CaseManager(cases_dir)\n-            self._autosave_timer = QTimer()\n+            self._autosave_timer = QTimer(self)\n             self._autosave_timer.setSingleShot(True)\n             self._autosave_timer.timeout.connect(self._do_autosave)\n \n@@ -431,10 +431,10 @@\n             if not self._show_case_management:\n                 # 优先使用 SiphonManager 加载（支持自动确认）\n                 if self.siphon_manager:\n-                    QTimer.singleShot(100, self._load_from_manager)\n+                    QTimer.singleShot(100, self, self._load_from_manager)\n                 else:\n                     # 降级到旧的 autosave 机制（不支持自动确认）\n-                    QTimer.singleShot(100, self._load_autosave)\n+                    QTimer.singleShot(100, self, self._load_autosave)\n \n     # ================================================================\n     # UI 构建\n",
+    "app_渠系计算前端/bootstrap.py": "--- before/app_渠系计算前端/bootstrap.py\n+++ after/app_渠系计算前端/bootstrap.py\n@@ -305,7 +305,7 @@\n     if startup_context.update_checks_enabled:\n         window.start_silent_update_check()\n     if open_update_dialog:\n-        QTimer.singleShot(300, lambda: window._open_update_dialog())\n+        QTimer.singleShot(300, window, window._open_update_dialog)\n     if trace_enabled:\n         print(\"[StartupTrace] event_loop_enter\", flush=True)\n         app.aboutToQuit.connect(\n"
+  },
+  "reusable_probe": "tools/qa_qt_exit_probe.py",
+  "lifecycle_test": "tests/test_qt_deferred_lifecycle_unit.py",
+  "reproduction": {
+    "pytest_argv": [
+      ".venv/Scripts/python.exe",
+      "tools/qa_qt_exit_probe.py",
+      "--workspace",
+      "<ISOLATED_WORKSPACE>",
+      "--test-file",
+      "tests/test_qt_deferred_lifecycle_unit.py",
+      "--json",
+      "<OUTPUT_JSON>",
+      "--junit",
+      "<ABS_OUTPUT_XML>",
+      "--quiet-lifecycle"
+    ],
+    "raw_argv": [
+      ".venv/Scripts/python.exe",
+      "tools/qa_qt_exit_probe.py",
+      "--workspace",
+      "<ISOLATED_WORKSPACE>",
+      "--destruction-case",
+      "multi-siphon or water-profile",
+      "--json",
+      "<OUTPUT_JSON>",
+      "--junit",
+      "<ABS_UNUSED_XML>"
+    ],
+    "before_after": "Keep the final test file identical. For before, use the four production modules from the fresh baseline archive. For after, use the current four production modules. Do not run on the live data directory."
+  },
+  "test_source": "\"\"\"真实控件销毁后，延迟任务不得继续访问已释放的 Qt 对象。\"\"\"\n\nimport os\n\nos.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')\nos.environ.setdefault('CODEX_FORCE_QTEXTBROWSER', '1')\n\nimport pytest\nfrom PySide6.QtCore import QCoreApplication, QEvent\nfrom PySide6.QtTest import QTest\nfrom PySide6.QtWidgets import QApplication\nfrom shiboken6 import isValid\n\n\n@pytest.fixture(scope='module')\ndef app():\n    value = QApplication.instance() or QApplication([])\n    yield value\n    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)\n    value.processEvents()\n\n\ndef delete_widget(widget):\n    \"\"\"明确先完成 C++ 销毁，再推进尚未到期的回调，复现关闭时序。\"\"\"\n    widget.deleteLater()\n    QCoreApplication.sendPostedEvents(widget, QEvent.DeferredDelete)\n    assert not isValid(widget)\n\n\n@pytest.mark.parametrize('deleted', [False, True])\ndef test_multi_siphon_warning_timer_follows_dialog_lifetime(app, monkeypatch, deleted):\n    from app_渠系计算前端.siphon import multi_siphon_dialog as module\n    from 推求水面线.utils.siphon_extractor import SiphonGroup\n\n    calls = []\n    warnings = []\n    original = module.MultiSiphonDialog._show_velocity_source_warnings_once\n\n    def record_warning(self):\n        calls.append(isValid(self))\n        # 失效调用已经足以复现问题；不把无效 parent 送入原生 InfoBar 造成进程崩溃。\n        if isValid(self):\n            original(self)\n\n    monkeypatch.setattr(module.MultiSiphonDialog, '_show_velocity_source_warnings_once', record_warning)\n    monkeypatch.setattr(module.InfoBar, 'warning', lambda *a, **kw: warnings.append(isValid(kw['parent'])))\n    dialog = module.MultiSiphonDialog(None, [SiphonGroup(name='生命周期测试')])\n    if deleted:\n        delete_widget(dialog)\n    QTest.qWait(120)\n    if not deleted:\n        delete_widget(dialog)\n    assert calls == ([] if deleted else [True])\n    assert warnings == ([] if deleted else [True])\n\n\n@pytest.mark.parametrize('deleted', [False, True])\ndef test_water_profile_layout_callbacks_follow_panel_lifetime(app, monkeypatch, deleted):\n    from app_渠系计算前端.water_profile.panel import WaterProfilePanel\n\n    calls = []\n    original = WaterProfilePanel._adjust_splitter_for_settings\n\n    def record_adjust(self):\n        calls.append(isValid(self))\n        if isValid(self):\n            original(self)\n\n    monkeypatch.setattr(WaterProfilePanel, '_adjust_splitter_for_settings', record_adjust)\n    panel = WaterProfilePanel()\n    panel._schedule_adjust_splitter_for_settings()\n    if deleted:\n        delete_widget(panel)\n    QTest.qWait(130)\n    if not deleted:\n        delete_widget(panel)\n    assert calls == ([] if deleted else [True, True])\n\n\n@pytest.mark.parametrize('load_from_manager', [False, True])\n@pytest.mark.parametrize('deleted', [False, True])\ndef test_siphon_startup_load_follows_panel_lifetime(app, monkeypatch, load_from_manager, deleted):\n    from app_渠系计算前端.siphon.panel import SiphonPanel\n\n    calls = []\n    method = '_load_from_manager' if load_from_manager else '_load_autosave'\n    monkeypatch.setattr(SiphonPanel, method, lambda self: calls.append(isValid(self)))\n    panel = SiphonPanel(show_case_management=False, siphon_manager=object() if load_from_manager else None)\n    if deleted:\n        delete_widget(panel)\n    QTest.qWait(140)\n    if not deleted:\n        delete_widget(panel)\n    assert calls == ([] if deleted else [True])\n\n\ndef test_siphon_autosave_timer_is_destroyed_with_panel(app, monkeypatch, tmp_path):\n    from app_渠系计算前端.siphon import panel as module\n\n    calls = []\n    # 工况创建与保存只访问本用例独立目录。\n    monkeypatch.setattr(module, '_pkg_root', str(tmp_path))\n    monkeypatch.setattr(module.SiphonPanel, '_do_autosave', lambda self: calls.append(isValid(self)))\n    panel = module.SiphonPanel(show_case_management=True, disable_autosave_load=True)\n    timer = panel._autosave_timer\n    timer.start(50)\n    delete_widget(panel)\n    QTest.qWait(110)\n    assert not isValid(timer)\n    assert calls == []\n\n\n@pytest.mark.parametrize('deleted', [False, True])\ndef test_multi_siphon_raise_timer_follows_dialog_lifetime(app, monkeypatch, deleted):\n    from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog\n\n    calls = []\n    monkeypatch.setattr(MultiSiphonDialog, '_ensure_visible', lambda self: calls.append(isValid(self)))\n    dialog = MultiSiphonDialog(None, [])\n    dialog.show()\n    if deleted:\n        delete_widget(dialog)\n    QTest.qWait(100)\n    if not deleted:\n        delete_widget(dialog)\n    assert calls == ([] if deleted else [True])\n\n\ndef test_live_siphon_autosave_still_persists_current_inputs(app, monkeypatch, tmp_path):\n    from app_渠系计算前端.siphon import panel as module\n\n    monkeypatch.setattr(module, '_pkg_root', str(tmp_path))\n    panel = module.SiphonPanel(show_case_management=True, disable_autosave_load=True)\n    try:\n        panel.edit_Q.setText('1.234')\n        panel._mark_dirty()\n        panel._autosave_timer.start(30)\n        QTest.qWait(100)\n        assert not panel._data_dirty\n        case = panel._get_current_case()\n        assert panel.case_manager.load_case_data(case)['Q'] == pytest.approx(1.234)\n    finally:\n        delete_widget(panel)\n",
+  "probe_source": "\"\"\"在隔离工作区复现 Qt 测试退出，记录断言结果和真实进程退出码。\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport subprocess\nimport sys\nimport time\n\n\ndef parse_args():\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument('--workspace', required=True)\n    parser.add_argument('--test-file', action='append', default=[])\n    parser.add_argument('--destruction-case', choices=['multi-siphon', 'water-profile'])\n    parser.add_argument('--json', required=True)\n    parser.add_argument('--junit', required=True)\n    parser.add_argument('--retain-app', action='store_true')\n    parser.add_argument('--drain', action='store_true')\n    parser.add_argument('--collect-garbage', action='store_true')\n    parser.add_argument('--capture', action='store_true')\n    parser.add_argument('--quiet-lifecycle', action='store_true')\n    parser.add_argument('--child', action='store_true')\n    return parser.parse_args()\n\n\ndef child(args):\n    import faulthandler\n    import gc\n    import platform\n\n    faulthandler.enable(all_threads=True)\n    if sys.platform.startswith('win'):\n        def disabled_wmi(*_args, **_kwargs):\n            raise OSError('Windows WMI query disabled to avoid startup hang')\n        platform._wmi_query = disabled_wmi\n        if hasattr(platform, '_wmi'):\n            platform._wmi = None\n        platform._uname_cache = None\n    workspace = Path(args.workspace).resolve()\n    os.chdir(workspace)\n    sys.path.insert(0, str(workspace))\n    from PySide6.QtCore import QCoreApplication, QEvent, QSettings\n    from PySide6.QtWidgets import QApplication\n    QSettings.setDefaultFormat(QSettings.IniFormat)\n    for scope in (QSettings.UserScope, QSettings.SystemScope):\n        QSettings.setPath(QSettings.IniFormat, scope, str(workspace/'.probe_settings'))\n\n    retained_app = (QApplication.instance() or QApplication([])) if args.retain_app else None\n    if args.destruction_case:\n        from PySide6.QtTest import QTest\n        from shiboken6 import isValid\n        retained_app = QApplication.instance() or QApplication([])\n        if args.destruction_case == 'multi-siphon':\n            from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog\n            from 推求水面线.utils.siphon_extractor import SiphonGroup\n            widget = MultiSiphonDialog(None, [SiphonGroup(name='销毁时序原始探针')])\n        else:\n            from app_渠系计算前端.water_profile.panel import WaterProfilePanel\n            widget = WaterProfilePanel()\n            widget._schedule_adjust_splitter_for_settings()\n        widget.deleteLater()\n        QCoreApplication.sendPostedEvents(widget, QEvent.DeferredDelete)\n        print('OWNER_DESTROYED', not isValid(widget), flush=True)\n        # 不改回调及异常钩子，观察真正业务方法在销毁后的行为与退出码。\n        QTest.qWait(140)\n        print('NORMAL_EXIT_BEGIN', 0, flush=True)\n        return 0\n\n    def state(stage):\n        if args.quiet_lifecycle:\n            return\n        app = QApplication.instance()\n        print('QT_PROBE', json.dumps({'stage': stage, 'app_exists': app is not None,\n              'widgets': len(app.allWidgets()) if app else 0,\n              'top_levels': len(app.topLevelWidgets()) if app else 0}), flush=True)\n\n    class LifecycleTrace:\n        def pytest_runtest_teardown(self, item, nextitem):\n            state('teardown:' + item.name)\n\n        def pytest_sessionfinish(self, session, exitstatus):\n            state('sessionfinish')\n\n        def pytest_unconfigure(self, config):\n            state('unconfigure')\n\n    state('before_collection')\n    import pytest\n    options = [*args.test_file, '-q', '--tb=short', '-p', 'no:cacheprovider',\n               '-p', 'no:hypothesispytest', '--basetemp', str(workspace/'.probe_pytest'),\n               '--junitxml', str(Path(args.junit).resolve())]\n    if not args.capture:\n        options.append('-s')\n    code = pytest.main(options, plugins=[] if args.quiet_lifecycle else [LifecycleTrace()])\n    print('PYTEST_RETURNED', int(code), flush=True)\n    state('after_pytest')\n    if args.drain:\n        app = QApplication.instance()\n        if app:\n            # 只在明确选择的探针分支处理已排队事件，不强制删除控件。\n            app.processEvents()\n            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)\n            app.processEvents()\n        state('after_drain')\n    if args.collect_garbage:\n        print('GC_COLLECT_START', flush=True)\n        print('GC_COLLECTED', gc.collect(), flush=True)\n        state('after_gc')\n    print('NORMAL_EXIT_BEGIN', int(code), bool(retained_app), flush=True)\n    return int(code)\n\n\ndef main():\n    sys.stdout.reconfigure(encoding='utf-8')\n    args = parse_args()\n    if args.child:\n        return child(args)\n    environment = dict(os.environ, QT_QPA_PLATFORM='offscreen', CODEX_FORCE_QTEXTBROWSER='1',\n                       QTWEBENGINE_DISABLE_SANDBOX='1', PYTHONIOENCODING='utf-8')\n    start = time.monotonic()\n    result = subprocess.run([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:], '--child'],\n                            env=environment, capture_output=True, text=True, encoding='utf-8',\n                            errors='replace', timeout=120)\n    record = {'arguments': vars(args), 'exit_code': result.returncode,\n              'exit_code_hex': hex(result.returncode & 0xffffffff),\n              'elapsed_seconds': round(time.monotonic()-start, 3),\n              'stdout': result.stdout, 'stderr': result.stderr,\n              'normal_exit_requested': 'NORMAL_EXIT_BEGIN' in result.stdout,\n              'pytest_returned': 'PYTEST_RETURNED' in result.stdout}\n    # 保存被测文件指纹，让后续复核能够区分代码变化与进程退出差异。\n    workspace = Path(args.workspace).resolve()\n    sources = [*args.test_file,\n               'app_渠系计算前端/bootstrap.py',\n               'app_渠系计算前端/siphon/multi_siphon_dialog.py',\n               'app_渠系计算前端/siphon/panel.py',\n               'app_渠系计算前端/water_profile/panel.py']\n    record['source_sha256'] = {\n        relative: hashlib.sha256((workspace/relative).read_bytes()).hexdigest()\n        for relative in sources if (workspace/relative).is_file()}\n    record['probe_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()\n    record['python_executable'] = sys.executable\n    destination = Path(args.json).resolve()\n    destination.parent.mkdir(parents=True, exist_ok=True)\n    destination.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding='utf-8')\n    print(result.stdout)\n    print(result.stderr)\n    print('ACTUAL_EXIT', record['exit_code_hex'], flush=True)\n    return 0 if result.returncode == 0 else 1\n\n\nif __name__ == '__main__':\n    raise SystemExit(main())\n",
+  "final_pytest_record_names": [
+    "failure_cleanup_qt_probe_deferred_final_20261011.json",
+    "failure_cleanup_qt_single_test_siphon_multi_dialog_longitudinal_reset_unit_20261011.json",
+    "failure_cleanup_qt_single_test_water_profile_flow_selector_unit_20261011.json",
+    "failure_cleanup_qt_single_test_water_profile_init_shared_batch_results_unit_20261011.json",
+    "failure_cleanup_qt_single_test_water_profile_start_station_regression_unit_20261011.json",
+    "failure_cleanup_qt_single_test_water_profile_transition_length_details_regression_unit_20261011.json",
+    "failure_cleanup_qt_single_test_water_profile_transition_qxproj_roundtrip_unit_20261011.json"
+  ],
+  "final_raw_record_names": [
+    "failure_cleanup_qt_raw_multi_after_20261011.json",
+    "failure_cleanup_qt_raw_water_after_20261011.json"
+  ],
+  "records": {
+    "failure_cleanup_qt_probe_deferred_after_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_qt_deferred_lifecycle_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_deferred_after_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_deferred_after_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 4.929,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.....\n6 passed in 3.96s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"6\" time=\"3.966\" timestamp=\"2026-10-11T11:54:07.598702+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[False]\" time=\"1.933\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\" time=\"0.319\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_stop_after_destruction\" time=\"0.787\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_stops_after_destruction[False]\" time=\"0.265\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_stops_after_destruction[True]\" time=\"0.294\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_autosave_timer_is_destroyed_with_panel\" time=\"0.265\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_deferred_before_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_qt_deferred_lifecycle_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_deferred_before_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_deferred_before_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 1,
+      "exit_code_hex": "0x1",
+      "elapsed_seconds": 4.811,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\nFFFFF\n================================== FAILURES ===================================\n________ test_multi_siphon_warning_timer_follows_dialog_lifetime[True] ________\ntests\\test_qt_deferred_lifecycle_unit.py:53: in test_multi_siphon_warning_timer_follows_dialog_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n_________ test_water_profile_layout_callbacks_stop_after_destruction __________\ntests\\test_qt_deferred_lifecycle_unit.py:73: in test_water_profile_layout_callbacks_stop_after_destruction\n    assert calls == []\nE   assert [False, False] == []\nE     \nE     Left contains 2 more items, first extra item: False\nE     Use -v to get more diff\n___________ test_siphon_startup_load_stops_after_destruction[False] ___________\ntests\\test_qt_deferred_lifecycle_unit.py:86: in test_siphon_startup_load_stops_after_destruction\n    assert calls == []\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n___________ test_siphon_startup_load_stops_after_destruction[True] ____________\ntests\\test_qt_deferred_lifecycle_unit.py:86: in test_siphon_startup_load_stops_after_destruction\n    assert calls == []\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n_____________ test_siphon_autosave_timer_is_destroyed_with_panel ______________\ntests\\test_qt_deferred_lifecycle_unit.py:101: in test_siphon_autosave_timer_is_destroyed_with_panel\n    assert not isValid(timer)\nE   assert not True\nE    +  where True = isValid(<PySide6.QtCore.QTimer(0x20ade39f860) at 0x0000020ADFEC5B80>)\n=========================== short test summary info ===========================\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_water_profile_layout_callbacks_stop_after_destruction\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_siphon_startup_load_stops_after_destruction[False]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_siphon_startup_load_stops_after_destruction[True]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_siphon_autosave_timer_is_destroyed_with_panel\n5 failed, 1 passed in 3.82s\nPYTEST_RETURNED 1\nNORMAL_EXIT_BEGIN 1 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"5\" skipped=\"0\" tests=\"6\" time=\"3.824\" timestamp=\"2026-10-11T11:52:52.483473+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[False]\" time=\"2.023\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\" time=\"0.254\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:53: in test_multi_siphon_warning_timer_follows_dialog_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_stop_after_destruction\" time=\"0.458\"><failure message=\"assert [False, False] == []&#10;  &#10;  Left contains 2 more items, first extra item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:73: in test_water_profile_layout_callbacks_stop_after_destruction\n    assert calls == []\nE   assert [False, False] == []\nE     \nE     Left contains 2 more items, first extra item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_stops_after_destruction[False]\" time=\"0.257\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:86: in test_siphon_startup_load_stops_after_destruction\n    assert calls == []\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_stops_after_destruction[True]\" time=\"0.243\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:86: in test_siphon_startup_load_stops_after_destruction\n    assert calls == []\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_autosave_timer_is_destroyed_with_panel\" time=\"0.258\"><failure message=\"assert not True&#10; +  where True = isValid(&lt;PySide6.QtCore.QTimer(0x20ade39f860) at 0x0000020ADFEC5B80&gt;)\">tests\\test_qt_deferred_lifecycle_unit.py:101: in test_siphon_autosave_timer_is_destroyed_with_panel\n    assert not isValid(timer)\nE   assert not True\nE    +  where True = isValid(&lt;PySide6.QtCore.QTimer(0x20ade39f860) at 0x0000020ADFEC5B80&gt;)</failure></testcase></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 6,
+        "failures": 5,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_deferred_final_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_qt_deferred_lifecycle_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs/qa/failure_cleanup_qt_probe_deferred_final_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_deferred_final_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 6.475,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n........[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 0\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 0\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n..\n12 passed in 5.58s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "source_sha256": {
+        "tests/test_qt_deferred_lifecycle_unit.py": "1c5881756482a6bd04526826e1850e721ecc21bfeb956f21a264d765ae94c95b",
+        "app_渠系计算前端/bootstrap.py": "1ff2b6256fe78d1a45d54368939c52e1f248da433baa17f18e3ca29131f7494b",
+        "app_渠系计算前端/siphon/multi_siphon_dialog.py": "a6c2f98946fad03c9efb555fa1ca088eb45c671aec116d3dd41a787c8c735a9f",
+        "app_渠系计算前端/siphon/panel.py": "c8345a1bf08e0605127961e52fda0f42516fa03d7e23b53ae732a35b63f9b390",
+        "app_渠系计算前端/water_profile/panel.py": "a06d8a74abee0dd49292a68ff6816e0efa3f17e031996ca9cafe234fdc2d4b12"
+      },
+      "probe_sha256": "128fa90769b14ef62aad1fb943bdcdb7c1c8d1a062fc97533540c3c31998d354",
+      "python_executable": "D:\\V1.0\\.venv\\Scripts\\python.exe",
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"12\" time=\"5.581\" timestamp=\"2026-10-11T12:01:57.323509+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[False]\" time=\"1.967\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\" time=\"0.253\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_follow_panel_lifetime[False]\" time=\"0.965\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_follow_panel_lifetime[True]\" time=\"0.464\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[False-False]\" time=\"0.304\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[False-True]\" time=\"0.357\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[True-False]\" time=\"0.260\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[True-True]\" time=\"0.236\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_autosave_timer_is_destroyed_with_panel\" time=\"0.230\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_raise_timer_follows_dialog_lifetime[False]\" time=\"0.123\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_raise_timer_follows_dialog_lifetime[True]\" time=\"0.123\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_live_siphon_autosave_still_persists_current_inputs\" time=\"0.211\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_drain_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_start_station_regression_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_drain_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_drain_20261011.xml",
+        "retain_app": false,
+        "drain": true,
+        "collect_garbage": true,
+        "capture": false,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.326,
+      "stdout": "QT_PROBE {\"stage\": \"before_collection\", \"app_exists\": false, \"widgets\": 0, \"top_levels\": 0}\n\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.QT_PROBE {\"stage\": \"teardown:test_table3_recalculate_geometry_uses_project_start_station\", \"app_exists\": true, \"widgets\": 530, \"top_levels\": 12}\n.QT_PROBE {\"stage\": \"teardown:test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nQT_PROBE {\"stage\": \"sessionfinish\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\n\n2 passed in 2.37s\nQT_PROBE {\"stage\": \"unconfigure\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nPYTEST_RETURNED 0\nQT_PROBE {\"stage\": \"after_pytest\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nQT_PROBE {\"stage\": \"after_drain\", \"app_exists\": true, \"widgets\": 27, \"top_levels\": 3}\nGC_COLLECT_START\nGC_COLLECTED 1680\nQT_PROBE {\"stage\": \"after_gc\", \"app_exists\": true, \"widgets\": 27, \"top_levels\": 3}\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.375\" timestamp=\"2026-10-11T11:39:37.091027+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_table3_recalculate_geometry_uses_project_start_station\" time=\"1.789\" /><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\" time=\"0.481\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_final_before_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_qt_deferred_lifecycle_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs/qa/failure_cleanup_qt_probe_final_before_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_final_before_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 1,
+      "exit_code_hex": "0x1",
+      "elapsed_seconds": 5.896,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\nF.F..FFF[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 0\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 0\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\nF.\n================================== FAILURES ===================================\n________ test_multi_siphon_warning_timer_follows_dialog_lifetime[True] ________\ntests\\test_qt_deferred_lifecycle_unit.py:53: in test_multi_siphon_warning_timer_follows_dialog_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n_______ test_water_profile_layout_callbacks_follow_panel_lifetime[True] _______\ntests\\test_qt_deferred_lifecycle_unit.py:77: in test_water_profile_layout_callbacks_follow_panel_lifetime\n    assert calls == ([] if deleted else [True, True])\nE   assert [False, False] == []\nE     \nE     Left contains 2 more items, first extra item: False\nE     Use -v to get more diff\n_________ test_siphon_startup_load_follows_panel_lifetime[True-False] _________\ntests\\test_qt_deferred_lifecycle_unit.py:94: in test_siphon_startup_load_follows_panel_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n_________ test_siphon_startup_load_follows_panel_lifetime[True-True] __________\ntests\\test_qt_deferred_lifecycle_unit.py:94: in test_siphon_startup_load_follows_panel_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n_____________ test_siphon_autosave_timer_is_destroyed_with_panel ______________\ntests\\test_qt_deferred_lifecycle_unit.py:109: in test_siphon_autosave_timer_is_destroyed_with_panel\n    assert not isValid(timer)\nE   assert not True\nE    +  where True = isValid(<PySide6.QtCore.QTimer(0x2b1991f2290) at 0x000002B19544DB00>)\n_________ test_multi_siphon_raise_timer_follows_dialog_lifetime[True] _________\ntests\\test_qt_deferred_lifecycle_unit.py:126: in test_multi_siphon_raise_timer_follows_dialog_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff\n=========================== short test summary info ===========================\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_water_profile_layout_callbacks_follow_panel_lifetime[True]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_siphon_startup_load_follows_panel_lifetime[True-False]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_siphon_startup_load_follows_panel_lifetime[True-True]\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_siphon_autosave_timer_is_destroyed_with_panel\nFAILED tests/test_qt_deferred_lifecycle_unit.py::test_multi_siphon_raise_timer_follows_dialog_lifetime[True]\n6 failed, 6 passed in 4.95s\nPYTEST_RETURNED 1\nNORMAL_EXIT_BEGIN 1 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"6\" skipped=\"0\" tests=\"12\" time=\"4.953\" timestamp=\"2026-10-11T12:00:52.210439+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[False]\" time=\"1.744\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_warning_timer_follows_dialog_lifetime[True]\" time=\"0.251\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:53: in test_multi_siphon_warning_timer_follows_dialog_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_follow_panel_lifetime[False]\" time=\"0.715\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_water_profile_layout_callbacks_follow_panel_lifetime[True]\" time=\"0.332\"><failure message=\"assert [False, False] == []&#10;  &#10;  Left contains 2 more items, first extra item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:77: in test_water_profile_layout_callbacks_follow_panel_lifetime\n    assert calls == ([] if deleted else [True, True])\nE   assert [False, False] == []\nE     \nE     Left contains 2 more items, first extra item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[False-False]\" time=\"0.252\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[False-True]\" time=\"0.247\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[True-False]\" time=\"0.242\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:94: in test_siphon_startup_load_follows_panel_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_startup_load_follows_panel_lifetime[True-True]\" time=\"0.244\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:94: in test_siphon_startup_load_follows_panel_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_siphon_autosave_timer_is_destroyed_with_panel\" time=\"0.231\"><failure message=\"assert not True&#10; +  where True = isValid(&lt;PySide6.QtCore.QTimer(0x2b1991f2290) at 0x000002B19544DB00&gt;)\">tests\\test_qt_deferred_lifecycle_unit.py:109: in test_siphon_autosave_timer_is_destroyed_with_panel\n    assert not isValid(timer)\nE   assert not True\nE    +  where True = isValid(&lt;PySide6.QtCore.QTimer(0x2b1991f2290) at 0x000002B19544DB00&gt;)</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_raise_timer_follows_dialog_lifetime[False]\" time=\"0.123\" /><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_multi_siphon_raise_timer_follows_dialog_lifetime[True]\" time=\"0.122\"><failure message=\"assert [False] == []&#10;  &#10;  Left contains one more item: False&#10;  Use -v to get more diff\">tests\\test_qt_deferred_lifecycle_unit.py:126: in test_multi_siphon_raise_timer_follows_dialog_lifetime\n    assert calls == ([] if deleted else [True])\nE   assert [False] == []\nE     \nE     Left contains one more item: False\nE     Use -v to get more diff</failure></testcase><testcase classname=\"tests.test_qt_deferred_lifecycle_unit\" name=\"test_live_siphon_autosave_still_persists_current_inputs\" time=\"0.224\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 12,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_flow_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_flow_selector_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_flow_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_flow_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 4.239,
+      "stdout": "QT_PROBE {\"stage\": \"before_collection\", \"app_exists\": false, \"widgets\": 0, \"top_levels\": 0}\n\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.QT_PROBE {\"stage\": \"teardown:test_flow_selector_defaults_to_first_segment_and_shows_summary\", \"app_exists\": true, \"widgets\": 564, \"top_levels\": 14}\n.QT_PROBE {\"stage\": \"teardown:test_flow_selector_switch_keeps_design_and_max_on_same_segment\", \"app_exists\": true, \"widgets\": 1128, \"top_levels\": 28}\n.QT_PROBE {\"stage\": \"teardown:test_design_flow_change_recomputes_all_max_flows\", \"app_exists\": true, \"widgets\": 1709, \"top_levels\": 43}\n.QT_PROBE {\"stage\": \"teardown:test_programmatic_flow_values_refresh_main_view\", \"app_exists\": true, \"widgets\": 2307, \"top_levels\": 59}\n.QT_PROBE {\"stage\": \"teardown:test_project_reset_panels_clears_flow_selector_values\", \"app_exists\": true, \"widgets\": 2910, \"top_levels\": 75}\n.QT_PROBE {\"stage\": \"teardown:test_main_view_no_longer_exposes_flow_segment_editor_entry\", \"app_exists\": true, \"widgets\": 3440, \"top_levels\": 87}\n.QT_PROBE {\"stage\": \"teardown:test_flow_display_hides_float_tail_and_preserves_values_after_restore\", \"app_exists\": true, \"widgets\": 4568, \"top_levels\": 115}\nQT_PROBE {\"stage\": \"sessionfinish\", \"app_exists\": true, \"widgets\": 4568, \"top_levels\": 115}\n\n7 passed in 3.30s\nQT_PROBE {\"stage\": \"unconfigure\", \"app_exists\": true, \"widgets\": 4568, \"top_levels\": 115}\nPYTEST_RETURNED 0\nQT_PROBE {\"stage\": \"after_pytest\", \"app_exists\": true, \"widgets\": 4568, \"top_levels\": 115}\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"7\" time=\"3.303\" timestamp=\"2026-10-11T11:39:58.741797+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_defaults_to_first_segment_and_shows_summary\" time=\"1.652\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_switch_keeps_design_and_max_on_same_segment\" time=\"0.198\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_design_flow_change_recomputes_all_max_flows\" time=\"0.219\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_programmatic_flow_values_refresh_main_view\" time=\"0.225\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_project_reset_panels_clears_flow_selector_values\" time=\"0.279\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_main_view_no_longer_exposes_flow_segment_editor_entry\" time=\"0.211\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_display_hides_float_tail_and_preserves_values_after_restore\" time=\"0.422\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_flow_quiet_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_flow_selector_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_flow_quiet_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_flow_quiet_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 4.367,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.......\n7 passed in 3.44s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"7\" time=\"3.441\" timestamp=\"2026-10-11T11:40:40.004242+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_defaults_to_first_segment_and_shows_summary\" time=\"1.725\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_switch_keeps_design_and_max_on_same_segment\" time=\"0.231\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_design_flow_change_recomputes_all_max_flows\" time=\"0.210\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_programmatic_flow_values_refresh_main_view\" time=\"0.248\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_project_reset_panels_clears_flow_selector_values\" time=\"0.269\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_main_view_no_longer_exposes_flow_segment_editor_entry\" time=\"0.195\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_display_hides_float_tail_and_preserves_values_after_restore\" time=\"0.483\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_gc_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_start_station_regression_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_gc_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_gc_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": true,
+        "capture": false,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.125,
+      "stdout": "QT_PROBE {\"stage\": \"before_collection\", \"app_exists\": false, \"widgets\": 0, \"top_levels\": 0}\n\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.QT_PROBE {\"stage\": \"teardown:test_table3_recalculate_geometry_uses_project_start_station\", \"app_exists\": true, \"widgets\": 530, \"top_levels\": 12}\n.QT_PROBE {\"stage\": \"teardown:test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nQT_PROBE {\"stage\": \"sessionfinish\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\n\n2 passed in 2.12s\nQT_PROBE {\"stage\": \"unconfigure\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nPYTEST_RETURNED 0\nQT_PROBE {\"stage\": \"after_pytest\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nGC_COLLECT_START\nGC_COLLECTED 0\nQT_PROBE {\"stage\": \"after_gc\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.119\" timestamp=\"2026-10-11T11:39:03.538304+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_table3_recalculate_geometry_uses_project_start_station\" time=\"1.602\" /><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\" time=\"0.418\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_length_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_transition_length_details_regression_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_length_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_length_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 5.861,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n....................\n20 passed in 4.84s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"20\" time=\"4.847\" timestamp=\"2026-10-11T11:41:30.065041+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_project_reload_repairs_missing_transition_length_details\" time=\"1.698\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_detail_refresh_replaces_stale_pressure_pipe_length\" time=\"0.179\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_refreshes_stale_pressure_pipe_details\" time=\"0.172\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_require_existing_transition_instances\" time=\"0.153\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_switch_to_current_hit_scope_after_transitions_exist\" time=\"0.168\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_rule_dialog_displays_hit_scope_copy\" time=\"0.012\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_requires_inserted_transition_instances\" time=\"0.173\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_insert_transitions_no_longer_defers_to_length_rule_nudge\" time=\"0.181\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_after_insert_uses_current_rows_only\" time=\"0.202\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_reports_updated_and_skipped_rows\" time=\"0.160\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_clamps_requested_length_to_physical_limit\" time=\"0.231\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_uses_real_gap_for_direct_transition_without_auto_channel\" time=\"0.177\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_process_section_displays_requested_and_physical_limit\" time=\"0.000\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_dialog_displays_rule_target_and_physical_limit\" time=\"0.000\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_require_transition_rows_even_if_table_text_changes\" time=\"0.172\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_override_blocks_values_that_require_topology_rebuild\" time=\"0.182\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_override_allows_values_within_current_local_slack\" time=\"0.166\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_lazy_repairs_missing_details\" time=\"0.163\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_respects_explicit_zero_length\" time=\"0.175\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_project_reload_repairs_single_override_warning_and_source\" time=\"0.346\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_probe_noref_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_start_station_regression_unit.py"
+        ],
+        "json": "docs/qa/failure_cleanup_qt_probe_noref_20261011.json",
+        "junit": "D:/V1.0/docs/qa/failure_cleanup_qt_probe_noref_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 5.424,
+      "stdout": "QT_PROBE {\"stage\": \"before_collection\", \"app_exists\": false, \"widgets\": 0, \"top_levels\": 0}\n\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.QT_PROBE {\"stage\": \"teardown:test_table3_recalculate_geometry_uses_project_start_station\", \"app_exists\": true, \"widgets\": 530, \"top_levels\": 12}\n.QT_PROBE {\"stage\": \"teardown:test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nQT_PROBE {\"stage\": \"sessionfinish\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\n\n2 passed in 4.53s\nQT_PROBE {\"stage\": \"unconfigure\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nPYTEST_RETURNED 0\nQT_PROBE {\"stage\": \"after_pytest\", \"app_exists\": true, \"widgets\": 1624, \"top_levels\": 38}\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"4.529\" timestamp=\"2026-10-11T11:38:35.624246+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_table3_recalculate_geometry_uses_project_start_station\" time=\"3.782\" /><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\" time=\"0.638\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_raw_multi_after_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [],
+        "destruction_case": "multi-siphon",
+        "json": "docs/qa/failure_cleanup_qt_raw_multi_after_20261011.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_qt_workspace/unused.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": false,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 2.485,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\nOWNER_DESTROYED True\nNORMAL_EXIT_BEGIN 0\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": false
+    },
+    "failure_cleanup_qt_raw_multi_before_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [],
+        "destruction_case": "multi-siphon",
+        "json": "docs/qa/failure_cleanup_qt_raw_multi_before_20261011.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_qt_workspace/unused.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": false,
+        "child": false
+      },
+      "exit_code": 1,
+      "exit_code_hex": "0x1",
+      "elapsed_seconds": 2.306,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=False, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] manager不可用，返回\n[DEBUG MultiSiphonDialog] __init__ 完成\nOWNER_DESTROYED True\n",
+      "stderr": "Traceback (most recent call last):\n  File \"D:\\V1.0\\tools\\qa_qt_exit_probe.py\", line 144, in <module>\n    raise SystemExit(main())\n                     ~~~~^^\n  File \"D:\\V1.0\\tools\\qa_qt_exit_probe.py\", line 121, in main\n    return child(args)\n  File \"D:\\V1.0\\tools\\qa_qt_exit_probe.py\", line 69, in child\n    QTest.qWait(140)\n    ~~~~~~~~~~~^^^^^\n  File \"D:\\V1.0\\.tmp\\failure_cleanup_qt_workspace\\app_渠系计算前端\\siphon\\multi_siphon_dialog.py\", line 614, in _show_velocity_source_warnings_once\n    InfoBar.warning(\n    ~~~~~~~~~~~~~~~^\n        \"流速来源提醒\",\n        ^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        position=InfoBarPosition.TOP\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"D:\\V1.0\\.venv\\Lib\\site-packages\\qfluentwidgets\\components\\widgets\\info_bar.py\", line 296, in warning\n    return cls.new(InfoBarIcon.WARNING, title, content, orient, isClosable, duration, position, parent)\n           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\V1.0\\.venv\\Lib\\site-packages\\qfluentwidgets\\components\\widgets\\info_bar.py\", line 278, in new\n    w = InfoBar(icon, title, content, orient,\n                isClosable, duration, position, parent)\n  File \"D:\\V1.0\\.venv\\Lib\\site-packages\\qfluentwidgets\\components\\widgets\\info_bar.py\", line 103, in __init__\n    super().__init__(parent=parent)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^\nRuntimeError: libshiboken: Internal C++ object (MultiSiphonDialog) already deleted.\n",
+      "normal_exit_requested": false,
+      "pytest_returned": false
+    },
+    "failure_cleanup_qt_raw_water_after_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [],
+        "destruction_case": "water-profile",
+        "json": "docs/qa/failure_cleanup_qt_raw_water_after_20261011.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_qt_workspace/unused.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": false,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 3.153,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\nOWNER_DESTROYED True\nNORMAL_EXIT_BEGIN 0\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": false
+    },
+    "failure_cleanup_qt_raw_water_before_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [],
+        "destruction_case": "water-profile",
+        "json": "docs/qa/failure_cleanup_qt_raw_water_before_20261011.json",
+        "junit": "D:/V1.0/.tmp/failure_cleanup_qt_workspace/unused.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": false,
+        "child": false
+      },
+      "exit_code": 1,
+      "exit_code_hex": "0x1",
+      "elapsed_seconds": 3.288,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\nOWNER_DESTROYED True\n",
+      "stderr": "Traceback (most recent call last):\n  File \"D:\\V1.0\\tools\\qa_qt_exit_probe.py\", line 144, in <module>\n    raise SystemExit(main())\n                     ~~~~^^\n  File \"D:\\V1.0\\tools\\qa_qt_exit_probe.py\", line 121, in main\n    return child(args)\n  File \"D:\\V1.0\\tools\\qa_qt_exit_probe.py\", line 69, in child\n    QTest.qWait(140)\n    ~~~~~~~~~~~^^^^^\n  File \"D:\\V1.0\\.tmp\\failure_cleanup_qt_workspace\\app_渠系计算前端\\water_profile\\panel.py\", line 1909, in _adjust_splitter_for_settings\n    top_w, top_layout = self._refresh_top_layout_for_measurement()\n                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"D:\\V1.0\\.tmp\\failure_cleanup_qt_workspace\\app_渠系计算前端\\water_profile\\panel.py\", line 1876, in _refresh_top_layout_for_measurement\n    top_w = self._splitter.widget(0)\nRuntimeError: libshiboken: Internal C++ object (PySide6.QtWidgets.QSplitter) already deleted.\n",
+      "normal_exit_requested": false,
+      "pytest_returned": false
+    },
+    "failure_cleanup_qt_single_test_siphon_multi_dialog_longitudinal_reset_unit_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_siphon_multi_dialog_longitudinal_reset_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs\\qa\\failure_cleanup_qt_single_test_siphon_multi_dialog_longitudinal_reset_unit_20261011.json",
+        "junit": "D:\\V1.0\\docs\\qa\\failure_cleanup_qt_single_test_siphon_multi_dialog_longitudinal_reset_unit_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 2.77,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 2\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=True, MANAGER_AVAILABLE=True\n[倒虹吸重命名迁移] '旧倒虹吸1' → '大营山'\n[倒虹吸重命名迁移] '旧倒虹吸2' → '庙梁子'\n[DEBUG _load_saved_data] 调用 _reapply_table_data()\n[DEBUG _reapply_table_data] 开始, groups数量: 2\n[DEBUG _reapply_table_data] 调用 panel.set_params() for 大营山\n[DEBUG _reapply_table_data] 调用 panel.set_params() for 庙梁子\n[DEBUG _reapply_table_data] 完成\n[DEBUG _load_saved_data] _reapply_table_data() 完成\n[DEBUG _load_saved_data] 完成\n[DEBUG MultiSiphonDialog] __init__ 完成\n.[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: 1\n[DEBUG MultiSiphonDialog] 调用 _configure_window()\n[DEBUG MultiSiphonDialog] 调用 _create_ui()\n[DEBUG MultiSiphonDialog] 调用 _load_saved_data()\n[DEBUG _load_saved_data] 开始, manager=True, MANAGER_AVAILABLE=True\n[DEBUG _load_saved_data] 调用 _reapply_table_data()\n[DEBUG _reapply_table_data] 开始, groups数量: 1\n[DEBUG _reapply_table_data] 调用 panel.set_params() for 庙梁子\n[DEBUG _reapply_table_data] 完成\n[DEBUG _load_saved_data] _reapply_table_data() 完成\n[DEBUG _load_saved_data] 完成\n[DEBUG MultiSiphonDialog] __init__ 完成\n.\n2 passed in 1.94s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"1.949\" timestamp=\"2026-10-11T11:58:18.468599+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_siphon_multi_dialog_longitudinal_reset_unit\" name=\"test_water_profile_entry_does_not_restore_renamed_historical_longitudinal\" time=\"0.421\" /><testcase classname=\"tests.test_siphon_multi_dialog_longitudinal_reset_unit\" name=\"test_water_profile_save_does_not_mark_blank_profile_as_example\" time=\"0.116\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_single_test_water_profile_flow_selector_unit_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_flow_selector_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs\\qa\\failure_cleanup_qt_single_test_water_profile_flow_selector_unit_20261011.json",
+        "junit": "D:\\V1.0\\docs\\qa\\failure_cleanup_qt_single_test_water_profile_flow_selector_unit_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 4.112,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n.......\n7 passed in 3.20s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"7\" time=\"3.201\" timestamp=\"2026-10-11T11:58:07.169704+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_defaults_to_first_segment_and_shows_summary\" time=\"1.611\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_selector_switch_keeps_design_and_max_on_same_segment\" time=\"0.210\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_design_flow_change_recomputes_all_max_flows\" time=\"0.215\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_programmatic_flow_values_refresh_main_view\" time=\"0.218\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_project_reset_panels_clears_flow_selector_values\" time=\"0.238\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_main_view_no_longer_exposes_flow_segment_editor_entry\" time=\"0.198\" /><testcase classname=\"tests.test_water_profile_flow_selector_unit\" name=\"test_flow_display_hides_float_tail_and_preserves_values_after_restore\" time=\"0.426\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_single_test_water_profile_init_shared_batch_results_unit_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_init_shared_batch_results_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs\\qa\\failure_cleanup_qt_single_test_water_profile_init_shared_batch_results_unit_20261011.json",
+        "junit": "D:\\V1.0\\docs\\qa\\failure_cleanup_qt_single_test_water_profile_init_shared_batch_results_unit_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 2.852,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n...\n3 passed in 2.00s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"3\" time=\"2.006\" timestamp=\"2026-10-11T11:58:15.528991+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_init_shared_batch_results_unit\" name=\"test_water_profile_panel_init_keeps_existing_shared_batch_results\" time=\"1.554\" /><testcase classname=\"tests.test_water_profile_init_shared_batch_results_unit\" name=\"test_import_from_batch_prefers_shared_max_flows_per_segment\" time=\"0.168\" /><testcase classname=\"tests.test_water_profile_init_shared_batch_results_unit\" name=\"test_import_from_batch_keeps_auto_rules_when_shared_max_flows_are_empty\" time=\"0.171\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_single_test_water_profile_start_station_regression_unit_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_start_station_regression_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs\\qa\\failure_cleanup_qt_single_test_water_profile_start_station_regression_unit_20261011.json",
+        "junit": "D:\\V1.0\\docs\\qa\\failure_cleanup_qt_single_test_water_profile_start_station_regression_unit_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 2.98,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n..\n2 passed in 2.14s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"2\" time=\"2.142\" timestamp=\"2026-10-11T11:57:58.088688+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_table3_recalculate_geometry_uses_project_start_station\" time=\"1.591\" /><testcase classname=\"tests.test_water_profile_start_station_regression_unit\" name=\"test_project_reload_with_zero_based_snapshot_recovers_on_recalculate\" time=\"0.451\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_single_test_water_profile_transition_length_details_regression_unit_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_transition_length_details_regression_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs\\qa\\failure_cleanup_qt_single_test_water_profile_transition_length_details_regression_unit_20261011.json",
+        "junit": "D:\\V1.0\\docs\\qa\\failure_cleanup_qt_single_test_water_profile_transition_length_details_regression_unit_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 5.921,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n....................\n20 passed in 4.85s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"20\" time=\"4.857\" timestamp=\"2026-10-11T11:58:01.186046+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_project_reload_repairs_missing_transition_length_details\" time=\"1.746\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_detail_refresh_replaces_stale_pressure_pipe_length\" time=\"0.191\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_refreshes_stale_pressure_pipe_details\" time=\"0.175\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_require_existing_transition_instances\" time=\"0.162\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_switch_to_current_hit_scope_after_transitions_exist\" time=\"0.171\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_rule_dialog_displays_hit_scope_copy\" time=\"0.009\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_requires_inserted_transition_instances\" time=\"0.165\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_insert_transitions_no_longer_defers_to_length_rule_nudge\" time=\"0.155\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_after_insert_uses_current_rows_only\" time=\"0.196\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_reports_updated_and_skipped_rows\" time=\"0.187\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_clamps_requested_length_to_physical_limit\" time=\"0.185\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_open_transition_length_rules_uses_real_gap_for_direct_transition_without_auto_channel\" time=\"0.176\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_process_section_displays_requested_and_physical_limit\" time=\"0.000\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_dialog_displays_rule_target_and_physical_limit\" time=\"0.000\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_rule_rows_require_transition_rows_even_if_table_text_changes\" time=\"0.169\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_override_blocks_values_that_require_topology_rebuild\" time=\"0.183\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_transition_length_override_allows_values_within_current_local_slack\" time=\"0.177\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_lazy_repairs_missing_details\" time=\"0.173\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_show_transition_length_details_respects_explicit_zero_length\" time=\"0.186\" /><testcase classname=\"tests.test_water_profile_transition_length_details_regression_unit\" name=\"test_project_reload_repairs_single_override_warning_and_source\" time=\"0.343\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "failure_cleanup_qt_single_test_water_profile_transition_qxproj_roundtrip_unit_20261011.json": {
+      "arguments": {
+        "workspace": ".tmp/failure_cleanup_qt_workspace",
+        "test_file": [
+          "tests/test_water_profile_transition_qxproj_roundtrip_unit.py"
+        ],
+        "destruction_case": null,
+        "json": "docs\\qa\\failure_cleanup_qt_single_test_water_profile_transition_qxproj_roundtrip_unit_20261011.json",
+        "junit": "D:\\V1.0\\docs\\qa\\failure_cleanup_qt_single_test_water_profile_transition_qxproj_roundtrip_unit_20261011.xml",
+        "retain_app": false,
+        "drain": false,
+        "collect_garbage": false,
+        "capture": false,
+        "quiet_lifecycle": true,
+        "child": false
+      },
+      "exit_code": 0,
+      "exit_code_hex": "0x0",
+      "elapsed_seconds": 4.086,
+      "stdout": "\n\u001b[1;33m📢 Tips:\u001b[0m QFluentWidgets Pro is now released. Click \u001b[1;96mhttps://qfluentwidgets.com/pages/pro\u001b[0m to learn more about it.\n\n......\n6 passed in 3.15s\nPYTEST_RETURNED 0\nNORMAL_EXIT_BEGIN 0 False\n",
+      "stderr": "",
+      "normal_exit_requested": true,
+      "pytest_returned": true,
+      "junit_xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"6\" time=\"3.159\" timestamp=\"2026-10-11T11:58:11.367067+08:00\" hostname=\"刘思杰\"><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_table_refresh_preserves_fractional_slope_denominators[True]\" time=\"1.242\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_table_refresh_preserves_fractional_slope_denominators[False]\" time=\"0.172\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit\" time=\"0.580\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_qxproj_roundtrip_recovers_successful_gate_when_old_project_saved_false\" time=\"0.363\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_qxproj_load_uses_project_settings_flow_lists_when_ui_text_missing\" time=\"0.165\" /><testcase classname=\"tests.test_water_profile_transition_qxproj_roundtrip_unit\" name=\"test_old_project_flow_snapshot_is_reformatted_without_losing_value\" time=\"0.179\" /></testsuite></testsuites>",
+      "junit_counts": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  }
+}

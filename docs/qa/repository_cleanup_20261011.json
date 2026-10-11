@@ -1,0 +1,578 @@
+{
+  "completed_at": "2026-10-11T12:51:42",
+  "scope": "D:/V1.0 中已确认过期的测试副本、诊断构建、可再生缓存、打印日志与浏览器自动输出",
+  "removed_target_count": 84,
+  "removed_file_count": 25450,
+  "removed_bytes": 3798348984,
+  "net_bytes_before_audit_record": 3795826012,
+  "targets": [
+    {
+      "path": "__pycache__",
+      "files": 10,
+      "bytes": 347967,
+      "links": []
+    },
+    {
+      "path": ".codex-test-tmp-buildfix",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".hypothesis",
+      "files": 392,
+      "bytes": 943965,
+      "links": []
+    },
+    {
+      "path": ".playwright-mcp",
+      "files": 14,
+      "bytes": 623633,
+      "links": []
+    },
+    {
+      "path": ".pytest_cache",
+      "files": 5,
+      "bytes": 527694,
+      "links": []
+    },
+    {
+      "path": ".pytest_pressure_pipe_catalog",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".pytest_pressure_pipe_pe",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".pytest_tmp",
+      "files": 403,
+      "bytes": 10713414,
+      "links": []
+    },
+    {
+      "path": ".pytest_tmp_chute_audit_20261004",
+      "files": 2,
+      "bytes": 184063,
+      "links": []
+    },
+    {
+      "path": ".pytest_tmp_chute_baseline_20261004",
+      "files": 1,
+      "bytes": 174272,
+      "links": []
+    },
+    {
+      "path": ".pytest_tmp_chute_interface_v2_20261004",
+      "files": 2,
+      "bytes": 184040,
+      "links": []
+    },
+    {
+      "path": ".pytest-release-142",
+      "files": 1,
+      "bytes": 452,
+      "links": []
+    },
+    {
+      "path": ".pytest-release-142-final",
+      "files": 1,
+      "bytes": 452,
+      "links": []
+    },
+    {
+      "path": ".pytest-startup-fix-0901",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".pytest-startup-fix-escalated",
+      "files": 6,
+      "bytes": 705,
+      "links": []
+    },
+    {
+      "path": ".qt-clean-env-smoke",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".tmp_chating_diameter_20261003",
+      "files": 15,
+      "bytes": 2294468,
+      "links": [
+        ".tmp_chating_diameter_20261003/node_modules"
+      ]
+    },
+    {
+      "path": ".tmp_dxf_precision_20261003_1522",
+      "files": 5,
+      "bytes": 253589,
+      "links": []
+    },
+    {
+      "path": ".tmp_profile_dialog_qa_20261003",
+      "files": 6,
+      "bytes": 500741,
+      "links": []
+    },
+    {
+      "path": ".tmp_pytest",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".tmp_spillway_audit_20261004",
+      "files": 20,
+      "bytes": 738033,
+      "links": []
+    },
+    {
+      "path": "codex_mkdir_probe_113646202",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "codex_pytest_temproot_20260513114857",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "codex_pytest_temproot_20260513114928",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "codex_pytest_temproot_20260513115023",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "codex_pytest_tmp_panel_20260513113955",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "pytest_tmp_update_patch_red_20260429a",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "tmp",
+      "files": 2257,
+      "bytes": 45476674,
+      "links": [
+        "tmp/feature_report_work/node_modules"
+      ]
+    },
+    {
+      "path": ".tmp/core-engine-diagnostic-20260825-a",
+      "files": 5274,
+      "bytes": 920452280,
+      "links": []
+    },
+    {
+      "path": ".tmp/core-engine-diagnostic-20260825-b",
+      "files": 5276,
+      "bytes": 921778627,
+      "links": []
+    },
+    {
+      "path": ".tmp/core-engine-diagnostic-20260825-c",
+      "files": 5277,
+      "bytes": 922066861,
+      "links": []
+    },
+    {
+      "path": ".tmp/pressure-pipe-ui-0905",
+      "files": 26,
+      "bytes": 1087790,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-core-engine-diagnostics",
+      "files": 7,
+      "bytes": 1157,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-core-engine-final-20260825-d",
+      "files": 7,
+      "bytes": 1164,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-core-engine-final-focused",
+      "files": 7,
+      "bytes": 1157,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-core-engine-full-tests-dir",
+      "files": 189,
+      "bytes": 666571,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-core-engine-package-fix",
+      "files": 7,
+      "bytes": 1157,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-core-engine-package-fix-2",
+      "files": 7,
+      "bytes": 1158,
+      "links": []
+    },
+    {
+      "path": ".tmp/pytest-release-v1.3.10",
+      "files": 7,
+      "bytes": 1157,
+      "links": []
+    },
+    {
+      "path": ".tmp/release-smoke-v1.3.10",
+      "files": 5256,
+      "bytes": 864896553,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-diff-panel.txt",
+      "files": 1,
+      "bytes": 21884,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-diff-有压管道设计.txt",
+      "files": 1,
+      "bytes": 14113,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-exit-check",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-final-clean",
+      "files": 12,
+      "bytes": 944059,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-final-test",
+      "files": 12,
+      "bytes": 944059,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-gui-final",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-pytest",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-pytest-full",
+      "files": 2,
+      "bytes": 18565,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-ui-test",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr-visual",
+      "files": 35,
+      "bytes": 4365466,
+      "links": []
+    },
+    {
+      "path": ".tmp/unpr_visual_check.py",
+      "files": 1,
+      "bytes": 3897,
+      "links": []
+    },
+    {
+      "path": ".tmp/v1311-activation-smoke-appdata",
+      "files": 0,
+      "bytes": 0,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/__pycache__",
+      "files": 49,
+      "bytes": 1175107,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/aqueduct/__pycache__",
+      "files": 6,
+      "bytes": 569157,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/batch/__pycache__",
+      "files": 25,
+      "bytes": 6676046,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/culvert/__pycache__",
+      "files": 9,
+      "bytes": 1005521,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/earthwork/__pycache__",
+      "files": 5,
+      "bytes": 122392,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/open_channel/__pycache__",
+      "files": 7,
+      "bytes": 752671,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/pressure_pipe/__pycache__",
+      "files": 12,
+      "bytes": 674325,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/siphon/__pycache__",
+      "files": 9,
+      "bytes": 721290,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/spillway_steep_chute/__pycache__",
+      "files": 20,
+      "bytes": 1425869,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/tunnel/__pycache__",
+      "files": 8,
+      "bytes": 590787,
+      "links": []
+    },
+    {
+      "path": "app_渠系计算前端/water_profile/__pycache__",
+      "files": 11,
+      "bytes": 3157776,
+      "links": []
+    },
+    {
+      "path": "calc_渠系计算算法内核/__pycache__",
+      "files": 36,
+      "bytes": 1339549,
+      "links": []
+    },
+    {
+      "path": "倒虹吸水力计算系统/__pycache__",
+      "files": 7,
+      "bytes": 260592,
+      "links": []
+    },
+    {
+      "path": "推求水面线/config/__pycache__",
+      "files": 3,
+      "bytes": 18159,
+      "links": []
+    },
+    {
+      "path": "推求水面线/core/__pycache__",
+      "files": 11,
+      "bytes": 686957,
+      "links": []
+    },
+    {
+      "path": "推求水面线/managers/__pycache__",
+      "files": 3,
+      "bytes": 85300,
+      "links": []
+    },
+    {
+      "path": "推求水面线/models/__pycache__",
+      "files": 6,
+      "bytes": 146716,
+      "links": []
+    },
+    {
+      "path": "推求水面线/shared/__pycache__",
+      "files": 3,
+      "bytes": 180121,
+      "links": []
+    },
+    {
+      "path": "推求水面线/utils/__pycache__",
+      "files": 9,
+      "bytes": 292077,
+      "links": []
+    },
+    {
+      "path": "土石方计算/__pycache__",
+      "files": 1,
+      "bytes": 33631,
+      "links": []
+    },
+    {
+      "path": "土石方计算/adapters/__pycache__",
+      "files": 2,
+      "bytes": 22830,
+      "links": []
+    },
+    {
+      "path": "土石方计算/bridge/__pycache__",
+      "files": 2,
+      "bytes": 17942,
+      "links": []
+    },
+    {
+      "path": "土石方计算/core/__pycache__",
+      "files": 8,
+      "bytes": 99850,
+      "links": []
+    },
+    {
+      "path": "土石方计算/io/__pycache__",
+      "files": 6,
+      "bytes": 94794,
+      "links": []
+    },
+    {
+      "path": "土石方计算/models/__pycache__",
+      "files": 4,
+      "bytes": 34565,
+      "links": []
+    },
+    {
+      "path": "土石方计算/services/__pycache__",
+      "files": 3,
+      "bytes": 97267,
+      "links": []
+    },
+    {
+      "path": "土石方计算/tests/__pycache__",
+      "files": 17,
+      "bytes": 526857,
+      "links": []
+    },
+    {
+      "path": "土石方计算/ui/__pycache__",
+      "files": 3,
+      "bytes": 152734,
+      "links": []
+    },
+    {
+      "path": "tests/__pycache__",
+      "files": 585,
+      "bytes": 25483797,
+      "links": []
+    },
+    {
+      "path": "test_support/__pycache__",
+      "files": 2,
+      "bytes": 4959,
+      "links": []
+    },
+    {
+      "path": "tools/__pycache__",
+      "files": 33,
+      "bytes": 551802,
+      "links": []
+    },
+    {
+      "path": "hardcopy.log",
+      "files": 1,
+      "bytes": 51115707,
+      "links": []
+    }
+  ],
+  "recovery_archive": {
+    "path": ".tmp/legacy_recovery_20261011.zip",
+    "files": 104,
+    "bytes": 2522972,
+    "sha256": "0d09dbcf66f7a57b517740d0d89fca78325d613fe901c4b22e08db748cf6ee50",
+    "verified": true
+  },
+  "temporary_dependency_junctions_removed": 2,
+  "dependency_directory_preserved": true,
+  "verification": {
+    "all_targets_removed": true,
+    "no_unexpected_file_loss": true,
+    "tracked_deletions_match_plan": true,
+    "tracked_generated_files_deleted": [
+      ".playwright-mcp/console-2026-09-05T12-09-16-891Z.log",
+      ".playwright-mcp/console-2026-09-05T12-16-07-144Z.log",
+      ".playwright-mcp/page-2026-09-05T12-09-17-145Z.yml",
+      ".playwright-mcp/page-2026-09-05T12-09-35-683Z.png",
+      ".playwright-mcp/page-2026-09-05T12-10-03-039Z.png",
+      ".playwright-mcp/page-2026-09-05T12-10-12-412Z.png",
+      ".playwright-mcp/page-2026-09-05T12-16-07-257Z.yml",
+      ".playwright-mcp/page-2026-09-05T12-16-16-517Z.png",
+      ".playwright-mcp/page-2026-09-05T12-16-45-505Z.yml",
+      ".playwright-mcp/page-2026-09-05T12-16-45-617Z.png",
+      ".playwright-mcp/page-2026-09-05T12-17-26-226Z.yml",
+      ".playwright-mcp/page-2026-09-05T12-17-26-305Z.png",
+      ".playwright-mcp/page-2026-09-05T12-17-54-248Z.yml",
+      ".playwright-mcp/page-2026-09-05T12-18-04-455Z.png",
+      ".pytest-startup-fix-escalated/test_build_universal_patch_inc0/patch.zip"
+    ],
+    "checked_protected_files": 729,
+    "unchanged_protected_files": 719,
+    "protected_user_data_files": 3,
+    "protected_user_data_unchanged": true,
+    "recent_recovery_backups_unchanged": true,
+    "legacy_recovery_archive_verified": true,
+    "valid_report_links": 44,
+    "invalid_report_links": []
+  },
+  "concurrent_changes_observed_and_preserved": [
+    "app_渠系计算前端/earthwork/exporters.py",
+    "app_渠系计算前端/earthwork/panel.py",
+    "app_渠系计算前端/earthwork/project_resources.py",
+    "tests/test_rhino_earthwork_ui_unit.py"
+  ],
+  "source_code_modified_by_cleanup": false,
+  "documentation_updated": [
+    "docs/diagnostics/Word导出格式核验_20261009.md"
+  ],
+  "preserved": [
+    "current source and PRD",
+    "user project data",
+    "dist and release snapshots",
+    "active Rhino and earthwork temporary files",
+    "docs/qa final evidence",
+    "architecture_upgrade_20261011 recovery",
+    "failure_cleanup_20261011 recovery"
+  ],
+  "tests": "本次仅清除已核对的临时文件，未修改业务代码；验证采用文件摘要、目录边界、Git删除清单和报告链接核对，未重跑功能测试。",
+  "own_temporary_workspace_removed": true
+}

@@ -55,6 +55,10 @@ def _make_aqueduct_dummy(panel_cls):
         pass
 
     d = _Dummy()
+    d._panel_key = 'aqueduct'
+    d._case_result_nav_label = lambda index: f'工况 {index+1}'
+    # 本测试检查各工况详略标记；绘图、跳转和项目新鲜度由真实面板回归覆盖。
+    d._suppress_project_restore_side_effects = True
     d.detail_cb = _FakeCheckBox(True)  # Opposite of case2 detail flag on purpose
     d._suppress_result_render = False
     d._export_plain_text = ""
@@ -87,7 +91,7 @@ def _make_aqueduct_dummy(panel_cls):
 
 def test_open_channel_reads_detail_toggle_per_case():
     mod = importlib.import_module(
-        "\u6e20\u7cfb\u65ad\u9762\u8bbe\u8ba1.open_channel.panel"
+        "app_渠系计算前端.open_channel.panel"
     )
     panel_cls = mod.OpenChannelPanel
     dummy = _make_open_channel_dummy(panel_cls)
@@ -101,7 +105,7 @@ def test_open_channel_reads_detail_toggle_per_case():
 
 def test_aqueduct_reads_detail_toggle_per_case():
     mod = importlib.import_module(
-        "\u6e20\u7cfb\u65ad\u9762\u8bbe\u8ba1.aqueduct.panel"
+        "app_渠系计算前端.aqueduct.panel"
     )
     panel_cls = mod.AqueductPanel
     dummy = _make_aqueduct_dummy(panel_cls)

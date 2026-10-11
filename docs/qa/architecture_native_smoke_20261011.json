@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-11",
+  "entry": "main.py via project pythonw",
+  "window_title": "渠系建筑物水力计算系统 V1.4.4",
+  "native_source_startup": true,
+  "real_webengine": true,
+  "merged_workspace_visible_without_editor_shell_overlay": true,
+  "sample": "示例一（综合演示）",
+  "input_rows": 59,
+  "batch_success_rows": 37,
+  "batch_failure_rows": 0,
+  "batch_specialized_skipped_rows": 22,
+  "synced_table3_rows": 59,
+  "auto_switched_to_table3": true,
+  "closed_without_saving_test_project": true,
+  "packaged_acceptance": false,
+  "native_full_water_profile_workflow": false,
+  "note": "水面线完整后台计算由400行离屏真实Qt基准与异步回归覆盖；本次桌面只验正式启动、合并页面和断面批量同步。"
+}

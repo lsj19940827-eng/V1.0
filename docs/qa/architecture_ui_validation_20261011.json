@@ -1,0 +1,214 @@
+{
+  "date": "2026-10-11",
+  "scope": "batch service, common task runner, shadowed methods, production architecture checker, model import identity",
+  "baseline_archive_sha256": "cbbd4be3a61dfced5a39f4a4e21c4bbefa7cb9f213ee83a7c5aea56278cf0c5e",
+  "baseline_source_checks": [
+    {
+      "path": "tests/test_pressure_pipe_data_extraction_unit.py",
+      "extracted_baseline_matches_archive": true
+    },
+    {
+      "path": "tests/test_pressure_pipe_extractor_fallback_unit.py",
+      "extracted_baseline_matches_archive": true
+    },
+    {
+      "path": "推求水面线/core/pressure_pipe_data.py",
+      "extracted_baseline_matches_archive": true
+    },
+    {
+      "path": "推求水面线/utils/pressure_pipe_extractor.py",
+      "extracted_baseline_matches_archive": true
+    },
+    {
+      "path": "推求水面线/models/data_models.py",
+      "extracted_baseline_matches_archive": true
+    },
+    {
+      "path": "推求水面线/models/enums.py",
+      "extracted_baseline_matches_archive": true
+    }
+  ],
+  "baseline_extractor": {
+    "tests": 33,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": []
+  },
+  "baseline_fallback_import_order": {
+    "tests": 65,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": []
+  },
+  "before_fix_extractor": {
+    "tests": 33,
+    "failures": 10,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": [
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_single_pressure_pipe",
+        "message": "AssertionError: assert None == ChannelNode(flow_section='', name='有压管道1', structure_type=<StructureType.PRESSURE_PIPE: '有压管道'>, x=0.0, y=0.0, turn_ra...iction=0.0, head_loss_transition=0.0, transition_calc_details={}, transition_length_calc_details={}, profile_row_id='')\n +  where None = PressurePipeGroup(name='有压管道1', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).inlet_node"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_multiple_pressure_pipes",
+        "message": "AssertionError: assert False\n +  where False = is_valid()\n +    where is_valid = PressurePipeGroup(name='有压管道1', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).is_valid"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_with_default_naming",
+        "message": "AssertionError: 应提取到一个分组\nassert 2 == 1\n +  where 2 = len([PressurePipeGroup(name='有压管道1', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_...inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0)])"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_multiple_unnamed_pairs",
+        "message": "AssertionError: 应提取到3个分组\nassert 6 == 3\n +  where 6 = len([PressurePipeGroup(name='有压管道1', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_...inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0)])"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_incomplete_group_inlet_only",
+        "message": "AssertionError: assert None is not None\n +  where None = PressurePipeGroup(name='不完整有压管道', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).inlet_node"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_incomplete_group_outlet_only",
+        "message": "AssertionError: assert None is not None\n +  where None = PressurePipeGroup(name='不完整有压管道', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).outlet_node"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_extract_with_mixed_structures",
+        "message": "AssertionError: assert False\n +  where False = is_valid()\n +    where is_valid = PressurePipeGroup(name='有压管道1', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).is_valid"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_parameter_extraction_from_inlet",
+        "message": "AssertionError: 管径应从进口节点提取\nassert 0.0 == 2.0\n +  where 0.0 = PressurePipeGroup(name='测试管道', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).diameter_D"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_parameter_extraction_from_outlet_when_inlet_missing",
+        "message": "AssertionError: 管径应从出口节点提取\nassert 0.0 == 1.8\n +  where 0.0 = PressurePipeGroup(name='测试管道', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).diameter_D"
+      },
+      {
+        "class": "tests.test_pressure_pipe_data_extraction_unit",
+        "name": "test_row_index_tracking",
+        "message": "AssertionError: 进口行索引应为3\nassert -1 == 3\n +  where -1 = PressurePipeGroup(name='有压管道1', inlet_node=None, outlet_node=None, inlet_row_index=-1, outlet_row_index=-1, diameter_D=0.0, roughness=0.014, flow=0.0).inlet_row_index"
+      }
+    ]
+  },
+  "final_extractor_and_identity": {
+    "tests": 91,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": []
+  },
+  "final_shared_services": {
+    "tests": 68,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": []
+  },
+  "additional_successful_runs": [
+    {
+      "scope": "batch pure service and Qt task runner async",
+      "passed": 15
+    },
+    {
+      "scope": "batch dialog parenting, culvert and tunnel batch/plot, architecture checker",
+      "passed": 117
+    },
+    {
+      "scope": "pressurized DXF and dialog sizing after duplicate cleanup",
+      "passed": 104
+    },
+    {
+      "scope": "siphon batch head loss export after duplicate cleanup",
+      "passed": 4
+    }
+  ],
+  "regression_cause": "Legacy models.* loaded before the new qualified ProfileNodeCodec recreated enum modules through one-way aliases. Both package names and four type-bearing shared modules now have one identity before dependent imports.",
+  "algorithm_comparisons_unchanged": true,
+  "shadow_cleanup_active_methods": [
+    {
+      "path": "app_渠系计算前端/culvert/panel.py",
+      "effective_class_methods_unchanged": true
+    },
+    {
+      "path": "app_渠系计算前端/tunnel/panel.py",
+      "effective_class_methods_unchanged": true
+    },
+    {
+      "path": "app_渠系计算前端/siphon/multi_siphon_dialog.py",
+      "effective_class_methods_unchanged": true
+    },
+    {
+      "path": "app_渠系计算前端/water_profile/cad_tools.py",
+      "effective_class_methods_unchanged": true
+    },
+    {
+      "path": "app_渠系计算前端/water_profile/water_profile_dialogs.py",
+      "effective_class_methods_unchanged": true
+    },
+    {
+      "path": "推求水面线/utils/pressure_pipe_extractor.py",
+      "effective_class_methods_unchanged": true
+    },
+    {
+      "path": "推求水面线/utils/siphon_extractor.py",
+      "effective_class_methods_unchanged": true
+    }
+  ],
+  "batch_editor_shell": "explicitly hidden; adopted table/checkbox/detail widgets are reparented by merged workspace",
+  "verification_boundary": {
+    "qt_event_loop_tests": true,
+    "native_packaged_desktop_acceptance": false,
+    "print_acceptance": false
+  },
+  "test_counts_overlap": true,
+  "cleanup": "本轮测试目录已由主任务逐个核对绝对路径，并以不使用Force的单目录原生删除完成；仅保留改动前源码归档和基线哈希。",
+  "before_fix_fallback_import_order": {
+    "tests": 75,
+    "failures": 3,
+    "errors": 1,
+    "skipped": 0,
+    "failed_tests": [
+      {
+        "class": "tests.test_pressure_pipe_extractor_fallback_unit",
+        "name": "test_extract_dialog_pipe_groups_assigns_route_context_for_continuous_xxqu_run"
+      },
+      {
+        "class": "tests.test_pressure_pipe_extractor_fallback_unit",
+        "name": "test_extract_dialog_pipe_groups_for_branch_channel_ignores_leading_tunnel_in_route_context"
+      },
+      {
+        "class": "tests.test_pressure_pipe_extractor_fallback_unit",
+        "name": "test_extract_dialog_pipe_groups_keeps_one_import_route_across_middle_tunnel"
+      }
+    ],
+    "environment_error_note": "One additional setup error came from the default Windows user temporary directory permissions; final verification uses controlled repository temporary directories."
+  },
+  "final_extractor_exact_order": {
+    "tests": 33,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": []
+  },
+  "final_fallback_exact_order": {
+    "tests": 65,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "failed_tests": []
+  },
+  "architecture_checker": {
+    "production_files_checked": 160,
+    "issues": []
+  }
+}

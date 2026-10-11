@@ -14,6 +14,8 @@
 - 同步后自动填充断面参数（底宽、水深、糙率等）
 """
 
+from version import APP_VERSION
+
 import sys
 import os
 import math
@@ -120,8 +122,46 @@ from app_渠系计算前端.report_meta import (
 )
 from app_渠系计算前端.structure_type_selector import StructureTypeSelector
 from app_渠系计算前端.case_manager import FlowLayout as _FlowLayout
-from app_渠系计算前端.batch.panel import BatchPanel, format_station_display, parse_station_input
+from app_渠系计算前端.batch.panel import BatchEditor, format_station_display, parse_station_input
 from app_渠系计算前端.debug_utils import debug_print
+
+from 推求水面线.models.profile_node_codec import (
+    ProfileNodeRules, ProfileNodeCodec,
+    ARCH_CULVERT_FAMILY_TEXT,
+    ARCH_CULVERT_H_STRAIGHT_ROLE_KEY,
+    ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY,
+    ARCH_CULVERT_SOURCE_ROLE_KEY,
+    ARCH_CULVERT_THETA_ROLE_KEY,
+    ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY,
+    COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY,
+    COMPOUND_TRAPEZOID_PARAM_KEYS,
+    CULVERT_FAMILY_TYPE_KEY,
+    FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY,
+    GATE_HEAD_LOSS_USER_SET_PARAM_KEY,
+    GATE_HEAD_LOSS_USER_SET_ROLE_KEY,
+    PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS,
+    PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY,
+    PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY,
+    PRESSURE_PIPE_ROW_ID_ROLE_KEY,
+    PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY,
+    RECT_CULVERT_FAMILY_TEXT,
+    SOURCE_COORD_X_ROLE_KEY,
+    SOURCE_COORD_Y_ROLE_KEY,
+    SPILLWAY_STEEP_CHUTE_ROLE_KEY,
+    TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY,
+    TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY,
+    TUNNEL_ARCH_THETA_ROLE_KEY,
+    TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY,
+    USE_INCREASE_ROLE_KEY,
+    _SPILLWAY_STEEP_CHUTE_DISPLAY_TYPES,
+    _resolve_spillway_steep_chute_display_structure_type,
+    normalize_compound_trapezoid_params,
+    normalize_culvert_family_type_name,
+    normalize_use_increase_flag,
+    parse_flow_values_text,
+)
+from 推求水面线.models.profile_state import WaterProfileState, ProfileTableState, PROFILE_ROW_ID_KEY
+from app_渠系计算前端.water_profile.table_state_adapter import capture_table_state, apply_row_metadata
 from app_渠系计算前端.water_profile.core_engine_diagnostics import (
     build_core_engine_copyable_details,
     build_core_engine_user_message,
@@ -240,24 +280,8 @@ except ImportError:
     def normalize_section_type_name(section_type):
         return str(section_type or "").strip()
 
-_SPILLWAY_STEEP_CHUTE_DISPLAY_TYPES = {
-    "充水渠",
-    "泄水渠",
-    "陡坡",
-    "泄槽",
-    "陡槽",
-    "泄水渠及陡坡",
-    "泄水渠与陡坡",
-}
 
 
-def _resolve_spillway_steep_chute_display_structure_type(raw_value, fallback="") -> str:
-    """读取用户填写的泄水渠类结构名，导出显示用，不影响计算归一。"""
-    for value in (raw_value, fallback):
-        text = str(getattr(value, "value", value) or "").strip()
-        if text in _SPILLWAY_STEEP_CHUTE_DISPLAY_TYPES:
-            return text
-    return ""
 
 # 配置常量
 try:
@@ -304,19 +328,6 @@ TABLE1_SOURCE_LOCKED_COLS = set(range(8)) | set(range(20, 27))
 TRANSITION_PREPARATION_RELEVANT_COLS = set(range(8)) | set(range(20, 27))
 # 第一行（水位起点）锁定的水头损失列：初始水位是用户输入的定值，不受水头损失影响
 FIRST_ROW_LOCKED_LOSS_COLS = {36, 37, 38}
-PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS = {"有压管道", "定向钻", "顶管"}
-CULVERT_FAMILY_TYPE_KEY = "culvert_family_type"
-ARCH_CULVERT_THETA_ROLE_KEY = "_arch_culvert_theta_deg"
-ARCH_CULVERT_SOURCE_ROLE_KEY = "_arch_culvert_source_allowed"
-ARCH_CULVERT_H_STRAIGHT_ROLE_KEY = "_arch_culvert_H_straight"
-ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY = "_arch_culvert_manual_H_straight"
-ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY = "_arch_culvert_used_manual_H_straight"
-TUNNEL_ARCH_THETA_ROLE_KEY = "_tunnel_arch_theta_deg"
-TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY = "_tunnel_arch_H_straight"
-TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY = "_tunnel_arch_manual_H_straight"
-TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY = "_tunnel_arch_used_manual_H_straight"
-RECT_CULVERT_FAMILY_TEXT = "暗涵-矩形"
-ARCH_CULVERT_FAMILY_TEXT = "暗涵-圆拱直墙型"
 
 NODE_ALL_HEADERS = [
     # 基础输入列 (0-7) — 对应Tkinter INPUT_COLUMNS
@@ -357,15 +368,6 @@ CURVE_CHECK_NOTICE_LIMIT = 5
 # compact（紧凑）/ balanced（平衡，默认）/ comfortable（宽松）
 NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
 
-SOURCE_COORD_X_ROLE_KEY = "_source_x_text"
-SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
-FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY = "_flat_bottom_tunnel_source_allowed"
-USE_INCREASE_ROLE_KEY = "_use_increase"
-PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
-PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY = "_pressure_pipe_window_override"
-PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY = "_pressure_pipe_named_group_result"
-PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY = "_pressure_pipe_loss_override_m"
-SPILLWAY_STEEP_CHUTE_ROLE_KEY = "_spillway_steep_chute"
 SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER = (
     "inlet_weir_width",
     "inlet_head",
@@ -378,28 +380,14 @@ SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER = (
     "pool_depth_factor",
     "outlet_rectification_factor",
 )
-GATE_HEAD_LOSS_USER_SET_ROLE_KEY = "_gate_head_loss_user_set"
-GATE_HEAD_LOSS_USER_SET_PARAM_KEY = "gate_head_loss_user_set"
-COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY = "_compound_trapezoid_params"
 TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
 TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
     ("公式值", "formula"),
     ("向上修约", "step_up"),
     ("固定值", "fixed"),
 )
-COMPOUND_TRAPEZOID_PARAM_KEYS = ("m1", "B1", "m2", "B2", "m3", "h1")
 
 
-def normalize_culvert_family_type_name(structure_type) -> str:
-    """统一暗涵家族子类型名称。"""
-    text = normalize_section_type_name(structure_type)
-    if not text:
-        return ""
-    if "暗涵" not in text and "暗渠" not in text and text != "矩形暗涵":
-        return ""
-    if "圆拱直墙" in text or "圆弧直墙" in text:
-        return ARCH_CULVERT_FAMILY_TEXT
-    return RECT_CULVERT_FAMILY_TEXT
 
 
 def resolve_node_effective_structure_type_text(node) -> str:
@@ -432,55 +420,10 @@ for _culvert_option in (RECT_CULVERT_FAMILY_TEXT, ARCH_CULVERT_FAMILY_TEXT):
         STRUCTURE_TYPE_OPTIONS.append(_culvert_option)
 
 
-def normalize_use_increase_flag(value, default=True):
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    text = str(value).strip().lower()
-    if not text:
-        return default
-    if text in {"true", "1", "yes", "y", "on"}:
-        return True
-    if text in {"false", "0", "no", "n", "off"}:
-        return False
-    return bool(value)
 
 
-def normalize_compound_trapezoid_params(source):
-    """统一整理复式梯形隐藏参数，避免在表格刷新时丢失。"""
-    if not isinstance(source, dict):
-        return {}
-
-    params = {}
-    for key in COMPOUND_TRAPEZOID_PARAM_KEYS:
-        value = source.get(key, None)
-        if value is None or str(value).strip() == "":
-            continue
-        try:
-            params[key] = float(value)
-        except (TypeError, ValueError):
-            continue
-    return params
 
 
-def parse_flow_values_text(flow_text: str) -> list:
-    """把逗号分隔流量文本解析为浮点列表。"""
-    if not flow_text or not str(flow_text).strip():
-        return []
-    text = str(flow_text).replace("，", ",")
-    values = []
-    for item in text.split(","):
-        piece = str(item or "").strip()
-        if not piece:
-            continue
-        try:
-            values.append(float(piece))
-        except (TypeError, ValueError):
-            continue
-    return values
 
 
 def format_flow_value(value) -> str:
@@ -1375,11 +1318,106 @@ class SiphonRoughnessChipContainer(QWidget):
         return ""
 
 
-class WaterProfilePanel(QWidget):
+class WaterProfilePanel(QWidget, ProfileNodeRules):
     """推求水面线面板"""
 
     # 数据变化信号（用于项目管理器追踪脏状态）
     data_changed = Signal()
+
+    def _get_profile_state(self):
+        """兼容直接构造测试替身，工程数据只由独立会话对象持有。"""
+        state = self.__dict__.get('_profile_state')
+        if state is None:
+            state = WaterProfileState()
+            self._profile_state = state
+        return state
+
+    @property
+    def nodes(self):
+        return self._get_profile_state().nodes
+
+    @nodes.setter
+    def nodes(self, value):
+        self._get_profile_state().nodes = value
+
+    @property
+    def calculated_nodes(self):
+        return self._get_profile_state().calculated_nodes
+
+    @calculated_nodes.setter
+    def calculated_nodes(self, value):
+        self._get_profile_state().calculated_nodes = value
+
+    @property
+    def _settings(self):
+        return self._get_profile_state().settings
+
+    @_settings.setter
+    def _settings(self, value):
+        self._get_profile_state().settings = value
+
+    def _profile_parameter_map(self, name):
+        return self._get_profile_state().row_parameters.setdefault(name, {})
+
+    @property
+    def _node_structure_heights(self):
+        return self._profile_parameter_map('structure_heights')
+
+    @_node_structure_heights.setter
+    def _node_structure_heights(self, value):
+        self._get_profile_state().row_parameters['structure_heights'] = value
+
+    @property
+    def _node_chamfer_params(self):
+        return self._profile_parameter_map('chamfer_params')
+
+    @_node_chamfer_params.setter
+    def _node_chamfer_params(self, value):
+        self._get_profile_state().row_parameters['chamfer_params'] = value
+
+    @property
+    def _node_u_params(self):
+        return self._profile_parameter_map('u_params')
+
+    @_node_u_params.setter
+    def _node_u_params(self, value):
+        self._get_profile_state().row_parameters['u_params'] = value
+
+    @property
+    def _node_velocity_increased(self):
+        return self._profile_parameter_map('velocity_increased')
+
+    @_node_velocity_increased.setter
+    def _node_velocity_increased(self, value):
+        self._get_profile_state().row_parameters['velocity_increased'] = value
+
+    def _capture_profile_table_state(self):
+        """在计算、撤销和保存边界提交表格编辑，保留原文与精确数值。"""
+        state = self._get_profile_state()
+        table_state = capture_table_state(self.node_table, {
+            'structure_heights': self._node_structure_heights,
+            'chamfer_params': self._node_chamfer_params,
+            'u_params': self._node_u_params,
+            'velocity_increased': self._node_velocity_increased,
+        })
+        state.replace_table(table_state)
+        for nodes in (state.nodes, state.calculated_nodes):
+            if len(nodes or []) == len(table_state.rows):
+                for node, row in zip(nodes, table_state.rows):
+                    if not getattr(node, "profile_row_id", ""):
+                        node.profile_row_id = row.row_id
+        return table_state
+
+    def _apply_profile_table_state(self, table_state):
+        """新版工程及撤销采用同一状态；旧字段只用于兼容导出。"""
+        if table_state.column_count != self.node_table.columnCount():
+            raise ValueError("工程节点表列数与当前版本不一致")
+        self._apply_node_table_text_snapshot([row.cells for row in table_state.rows])
+        apply_row_metadata(self.node_table, table_state)
+        state = self._get_profile_state()
+        state.replace_table(table_state)
+        for name in ('structure_heights', 'chamfer_params', 'u_params', 'velocity_increased'):
+            state.row_parameters[name] = table_state.parameter_values(name)
 
     def __init__(self, parent=None, siphon_manager=None, pressure_pipe_manager=None):
         super().__init__(parent)
@@ -1455,19 +1493,17 @@ class WaterProfilePanel(QWidget):
         self._pre_edit_cell_value = None  # (row, col, old_text)
         self._pre_edit_snapshot = None  # 编辑前的快照
         self._undo_group = 0  # 撤销分组计数器，用于批量操作时避免重复记录快照
+        self._loss_delete_batch = None  # 批量删除期间收集需要合并的联动工作
         # 节点表行操作撤销栈（添加/删除/插入/复制/清空行）
         self._node_table_undo_stack = []
         self._node_table_redo_stack = []
-        # 合并面板：断面批量计算后端（复用 BatchPanel 的计算与校验能力）
-        self._batch_backend = BatchPanel(self)
+        # 合并工作区仅复用输入/结果编辑组件，计算由独立服务执行。
+        self._batch_backend = BatchEditor(self)
         self._batch_backend.set_info_parent(lambda: self)
-        self._batch_backend.hide()
-        try:
-            self._batch_backend._clear_input(force=True, clear_shared=False)
-            # 这里只重置嵌入式批量面板自身状态，避免把外部刚算好的共享结果一并清空。
-            self._batch_backend._clear_results(clear_shared=False)
-        except Exception:
-            pass
+        self._batch_backend.calculation_finished.connect(self._on_section_calculation_finished)
+        self._batch_backend.calculation_running_changed.connect(self._on_section_calculation_running_changed)
+        self._batch_backend.calculation_discarded.connect(self._on_section_calculation_discarded)
+        self._batch_backend.calculation_failed.connect(self._on_section_calculation_failed)
         self._section_sync_ready = False
         self._transition_topology_prepared = False
         self._section_first_success_switched = False
@@ -1832,8 +1868,9 @@ class WaterProfilePanel(QWidget):
         splitter = getattr(self, "_splitter", None)
         if splitter is None or splitter.count() <= 0:
             return
-        QTimer.singleShot(0, self._adjust_splitter_for_settings)
-        QTimer.singleShot(80, self._adjust_splitter_for_settings)
+        # 定时回调归属页面，页面销毁后不得访问已经释放的 splitter。
+        QTimer.singleShot(0, self, self._adjust_splitter_for_settings)
+        QTimer.singleShot(80, self, self._adjust_splitter_for_settings)
 
     def _refresh_top_layout_for_measurement(self):
         """测量 splitter 前，强制更新顶部折叠区布局缓存。"""
@@ -1954,6 +1991,8 @@ class WaterProfilePanel(QWidget):
             self._batch_backend.flow_segments_edit.text().strip() or "5.0, 4.0, 3.0"
         )
         self._section_flow_segments_edit.setMinimumWidth(220)
+        # 粘贴识别流量及撤销会更新后端文本，必须同步可见设置，避免下次计算读回旧值。
+        self._batch_backend.flow_segments_edit.textChanged.connect(self._section_flow_segments_edit.setText)
         tb1.addWidget(self._section_flow_segments_edit)
 
         self._btn_section_apply_flow = PushButton("应用到表1")
@@ -1986,7 +2025,7 @@ class WaterProfilePanel(QWidget):
         button_row.addWidget(self._btn_section_import_excel)
 
         self._btn_section_calc = PrimaryPushButton("开始批量计算")
-        self._btn_section_calc.clicked.connect(self._run_section_batch_calculate)
+        self._btn_section_calc.clicked.connect(self._start_section_batch_calculate)
         button_row.addWidget(self._btn_section_calc)
 
         sample_menu = RoundMenu(parent=self)
@@ -2082,7 +2121,7 @@ class WaterProfilePanel(QWidget):
         # 表1输入表
         self._section_input_table = self._batch_backend.input_table
         self._section_input_table.setParent(parent)
-        self._section_input_table.cellChanged.connect(self._on_section_input_changed)
+        self._batch_backend.input_changed.connect(self._on_section_input_changed)
         lay.addWidget(self._section_input_table, stretch=1)
 
     def _build_tab_section_result(self, parent):
@@ -2208,7 +2247,7 @@ class WaterProfilePanel(QWidget):
         _register_toolbar_button(self.btn_pressure_pipe_calc, "primary_long")
 
         self._btn_calc = PrimaryPushButton("执行计算")
-        self._btn_calc.clicked.connect(self._calculate)
+        self._btn_calc.clicked.connect(self._start_calculation)
         _register_toolbar_button(self._btn_calc, "primary")
 
         self.btn_pressure_pipe_water_hammer = PrimaryPushButton("有压管道水锤验算")
@@ -2251,6 +2290,7 @@ class WaterProfilePanel(QWidget):
         self.node_table.undoRequested.connect(self._undo_loss_edit)
         self.node_table.redoRequested.connect(self._redo_loss_edit)
         self.node_table.deleteRequested.connect(self._push_undo_snapshot)
+        self.node_table.deleteFinished.connect(self._finish_loss_delete)
         self.node_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.node_table.customContextMenuRequested.connect(self._show_node_table_context_menu)
         self.node_table.installEventFilter(self)
@@ -2439,7 +2479,7 @@ class WaterProfilePanel(QWidget):
             return
         action()
         self._switch_workspace_tab(self._tab_section_input)
-        self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+        # 实际变更由后端统一通知；取消操作不能使已有计算结果失效。
 
     def _ask_destructive_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
         box = MessageBox(title, content, self)
@@ -2661,8 +2701,47 @@ class WaterProfilePanel(QWidget):
         """执行表1断面批量计算，并在全成功后自动同步到表3。"""
         if not self._batch_backend:
             return
+        self._section_calculation_settings = None
+        self._section_calculation_table_state = None
         self._copy_global_settings_to_batch_backend()
         self._batch_backend._batch_calculate()
+        self._on_section_calculation_finished()
+
+    def _start_section_batch_calculate(self):
+        """工作区真实按钮异步提交；再次点击可取消。"""
+        if self._batch_backend.is_calculation_running():
+            self._batch_backend.cancel_calculation()
+            return
+        if self.is_calculation_running():
+            return
+        self._copy_global_settings_to_batch_backend()
+        self._section_calculation_settings = self._build_settings().to_dict()
+        self._section_calculation_table_state = self._capture_profile_table_state().to_dict()
+        self._batch_backend.start_calculation()
+
+    def _on_section_calculation_running_changed(self, running):
+        self._btn_section_calc.setText("取消断面计算" if running else "开始批量计算")
+        self.node_table.setEnabled(not running)
+        for button in (self._btn_calc, self._btn_transition, self._btn_siphon,
+                       self.btn_pressure_pipe_calc, self.btn_pressure_pipe_water_hammer):
+            button.setEnabled(not running and bool(self._section_sync_ready))
+
+    def _on_section_calculation_discarded(self):
+        self._mark_section_results_stale("状态：断面计算已取消或输入已变化，请重新计算")
+
+    def _on_section_calculation_failed(self, message):
+        self._mark_section_results_stale("状态：断面计算失败，请检查输入后重算", status_kind="error")
+
+    def _on_section_calculation_finished(self, outcome=None):
+        """结果成功写回后再同步表3；过期的全局设置不得进入下游。"""
+        expected = getattr(self, '_section_calculation_settings', None)
+        if expected is not None and expected != self._build_settings().to_dict():
+            self._on_section_calculation_discarded()
+            return
+        expected_table = getattr(self, '_section_calculation_table_state', None)
+        if expected_table is not None and expected_table != self._capture_profile_table_state().to_dict():
+            self._on_section_calculation_discarded()
+            return
         self._switch_workspace_tab(self._tab_section_result)
 
         result_rows = self._section_result_table.rowCount() if self._section_result_table else 0
@@ -2757,13 +2836,14 @@ class WaterProfilePanel(QWidget):
             parent=self._info_parent(), duration=2500, position=InfoBarPosition.TOP
         )
 
-    def _on_section_input_changed(self, row, col):
+    def _on_section_input_changed(self, row=-1, col=-1):
         """表1任意编辑后，立即使下游链路失效并锁定。"""
         _ = (row, col)
         if getattr(self, "_loading_project", False):
             return
         if self._section_sync_ready:
             self._mark_section_results_stale("状态：表1已变更，结果已失效，请重新执行断面批量计算")
+        self.data_changed.emit()
 
     def _mark_section_results_stale(self, state_text: str, status_kind: str = ""):
         self._section_sync_ready = False
@@ -2842,19 +2922,6 @@ class WaterProfilePanel(QWidget):
         struct_text = struct_item.text().strip() if struct_item else ""
         return self._is_pressure_pipe_like_structure_text(struct_text)
 
-    @staticmethod
-    def _is_pressure_pipe_like_structure_text(struct_text: str) -> bool:
-        text = normalize_section_type_name(struct_text)
-        if not text:
-            return False
-        structure_type_cls = globals().get("StructureType")
-        helper = getattr(structure_type_cls, "is_pressure_pipe_like_str", None)
-        if callable(helper):
-            try:
-                return bool(helper(text))
-            except Exception:
-                pass
-        return text in PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS
 
     @staticmethod
     def _is_channel_roughness_structure_text(struct_text: str) -> bool:
@@ -2972,34 +3039,7 @@ class WaterProfilePanel(QWidget):
             pressure_pipe_params_pairs,
         )
 
-    @classmethod
-    def _is_pressure_pipe_like_node(cls, node) -> bool:
-        if getattr(node, "is_pressure_pipe", False):
-            return True
-        struct_type = getattr(node, "structure_type", None)
-        structure_type_cls = globals().get("StructureType")
-        helper = getattr(structure_type_cls, "is_pressure_pipe_like", None)
-        if callable(helper):
-            try:
-                return bool(helper(struct_type))
-            except Exception:
-                pass
-        value = getattr(struct_type, "value", struct_type)
-        return cls._is_pressure_pipe_like_structure_text(value)
 
-    @classmethod
-    def _get_node_structure_type_text(cls, node) -> str:
-        getter = getattr(node, "get_structure_type_str", None)
-        if callable(getter):
-            try:
-                text = normalize_section_type_name(getter())
-                if text:
-                    return text
-            except Exception:
-                pass
-        struct_type = getattr(node, "structure_type", None)
-        value = getattr(struct_type, "value", struct_type)
-        return normalize_section_type_name(value)
 
     @classmethod
     def _should_warn_missing_structure_height(cls, node) -> bool:
@@ -3070,9 +3110,6 @@ class WaterProfilePanel(QWidget):
             f"{preview}"
         )
 
-    @staticmethod
-    def _is_xxpipe_channel_level_text(channel_level: str | None) -> bool:
-        return str(channel_level or "").strip() in XXPIPE_CHANNEL_LEVEL_OPTIONS
 
     def _get_current_channel_level_text(self, settings=None) -> str:
         level_text = str(getattr(settings, "channel_level", "") or "").strip()
@@ -3111,48 +3148,11 @@ class WaterProfilePanel(QWidget):
                 return ""
         return str(getattr(settings, "station_prefix", "") or "").strip()
 
-    @classmethod
-    def _is_regular_pressure_pipe_node(cls, node) -> bool:
-        return cls._get_node_structure_type_text(node) == "有压管道"
 
-    @classmethod
-    def _is_unnamed_pressure_pipe_row_node(cls, node, channel_level: str | None = None) -> bool:
-        if not cls._is_regular_pressure_pipe_node(node):
-            return False
-        if str(getattr(node, "name", "") or "").strip():
-            return False
-        if cls._is_xxpipe_channel_level_text(channel_level):
-            return True
-        return bool(cls._get_pressure_pipe_window_override(node))
 
-    @classmethod
-    def _is_named_pressure_pipe_group_node(cls, node) -> bool:
-        if not cls._is_pressure_pipe_like_node(node):
-            return False
-        return bool(str(getattr(node, "name", "") or "").strip())
 
-    @staticmethod
-    def _build_pressure_pipe_row_identity_from_flow_section(flow_section, row_index: int) -> str:
-        flow_section = str(flow_section or "").strip()
-        row_part = f"row{int(row_index) + 1}"
-        if flow_section:
-            return f"flow{flow_section}-{row_part}"
-        return row_part
 
-    @classmethod
-    def _build_pressure_pipe_row_identity(cls, node, row_index: int) -> str:
-        return cls._build_pressure_pipe_row_identity_from_flow_section(
-            getattr(node, "flow_section", ""),
-            row_index,
-        )
 
-    @classmethod
-    def _ensure_pressure_pipe_row_identity(cls, node, row_index: int | None = None) -> str:
-        identity = str(getattr(node, "pressure_pipe_row_identity", "") or "").strip()
-        if not identity and row_index is not None:
-            identity = cls._build_pressure_pipe_row_identity(node, row_index)
-            setattr(node, "pressure_pipe_row_identity", identity)
-        return identity
 
     @classmethod
     def _should_persist_pressure_pipe_row_identity(
@@ -3167,31 +3167,8 @@ class WaterProfilePanel(QWidget):
             return True
         return cls._is_pressure_pipe_row_override_node(node, channel_level)
 
-    @staticmethod
-    def _get_pressure_pipe_group_storage_key(group) -> str:
-        """返回有压管道窗口分组稳定存储键。"""
-        storage_key = str(getattr(group, "storage_key", "") or "").strip()
-        if storage_key:
-            return storage_key
-        identity = str(getattr(group, "identity", "") or "").strip()
-        if identity:
-            return identity
-        return str(getattr(group, "name", "") or "").strip()
 
-    @staticmethod
-    def _get_pressure_pipe_group_display_name(group) -> str:
-        """返回有压管道窗口分组展示名称。"""
-        display_name = str(getattr(group, "display_name", "") or "").strip()
-        if display_name:
-            return display_name
-        return str(getattr(group, "name", "") or "").strip() or "未命名有压管道"
 
-    @staticmethod
-    def _get_pressure_pipe_group_structure_text(group) -> str:
-        """返回分组结构形式文本。"""
-        value = getattr(group, "structure_type", "")
-        value = getattr(value, "value", value)
-        return str(value or "").strip()
 
     @classmethod
     def _is_pressure_pipe_group_tunnel_segment(cls, group) -> bool:
@@ -3363,169 +3340,15 @@ class WaterProfilePanel(QWidget):
 
         return route_nodes, copy.deepcopy(route_nodes), ""
 
-    @staticmethod
-    def _coerce_pressure_pipe_row_index(value, default: int = -1) -> int:
-        """将有压管道相关行索引安全转换为整数，保留合法的 0。"""
-        if value is None:
-            return default
-        if isinstance(value, str) and not value.strip():
-            return default
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
 
-    @staticmethod
-    def _normalize_pressure_pipe_window_override(value) -> dict:
-        """规范化匿名有压管道窗口覆盖结构。"""
-        if not isinstance(value, dict):
-            return {}
-        enabled = bool(value.get("enabled", False))
-        identity = str(value.get("identity", "") or "").strip()
-        if not enabled or not identity:
-            return {}
-        normalized = {
-            "enabled": True,
-            "identity": identity,
-            "storage_key": str(value.get("storage_key", "") or identity).strip() or identity,
-            "display_name": str(value.get("display_name", "") or "").strip(),
-            "group_mode": str(value.get("group_mode", "") or "unnamed_row_segment").strip(),
-            "data_mode": str(value.get("data_mode", "") or "").strip(),
-            "applied_at": str(value.get("applied_at", "") or "").strip(),
-            "calc_steps": str(value.get("calc_steps", "") or "").strip(),
-            "target_row_index": WaterProfilePanel._coerce_pressure_pipe_row_index(value.get("target_row_index", -1)),
-            "upstream_row_index": WaterProfilePanel._coerce_pressure_pipe_row_index(value.get("upstream_row_index", -1)),
-        }
-        numeric_fields = (
-            "Q", "D", "total_length", "pipe_velocity", "friction_loss", "total_bend_loss",
-            "local_loss", "inlet_transition_loss", "outlet_transition_loss", "total_head_loss",
-        )
-        for field_name in numeric_fields:
-            try:
-                normalized[field_name] = float(value.get(field_name, 0.0) or 0.0)
-            except (TypeError, ValueError):
-                normalized[field_name] = 0.0
-        manual_total = value.get("manual_total_head_loss", None)
-        if manual_total is not None and str(manual_total).strip() != "":
-            try:
-                normalized["manual_total_head_loss"] = float(manual_total)
-            except (TypeError, ValueError):
-                pass
-        manual_source = str(value.get("manual_override_source", "") or "").strip()
-        if manual_source:
-            normalized["manual_override_source"] = manual_source
-        manual_updated_at = str(value.get("manual_override_updated_at", "") or "").strip()
-        if manual_updated_at:
-            normalized["manual_override_updated_at"] = manual_updated_at
-        for dict_field in ("friction_details", "bend_details", "local_details"):
-            dict_value = value.get(dict_field, {})
-            normalized[dict_field] = copy.deepcopy(dict_value) if isinstance(dict_value, dict) else {}
-        return normalized
 
-    @staticmethod
-    def _normalize_pressure_pipe_named_group_result(value) -> dict:
-        """规范化命名承压组隐藏结果元数据。"""
-        if not isinstance(value, dict):
-            return {}
-        identity = str(value.get("identity", "") or "").strip()
-        storage_key = str(value.get("storage_key", "") or identity).strip() or identity
-        display_name = str(value.get("display_name", "") or "").strip()
-        structure_type = str(value.get("structure_type", "") or "").strip()
-        applied_at = str(value.get("applied_at", "") or "").strip()
-        calc_steps = str(value.get("calc_steps", "") or "").strip()
-        target_row_index = WaterProfilePanel._coerce_pressure_pipe_row_index(
-            value.get("target_row_index", -1)
-        )
-        total_head_loss_raw = value.get("total_head_loss", None)
-        total_head_loss = None
-        if total_head_loss_raw is not None and str(total_head_loss_raw).strip() != "":
-            try:
-                total_head_loss = float(total_head_loss_raw)
-            except (TypeError, ValueError):
-                total_head_loss = None
-        if not any((identity, storage_key, display_name, structure_type, applied_at, calc_steps)) and total_head_loss is None:
-            return {}
-        return {
-            "identity": identity,
-            "storage_key": storage_key,
-            "display_name": display_name,
-            "structure_type": structure_type,
-            "total_head_loss": total_head_loss,
-            "applied_at": applied_at,
-            "calc_steps": calc_steps,
-            "target_row_index": target_row_index,
-        }
 
-    @classmethod
-    def _get_pressure_pipe_window_override(cls, node) -> dict:
-        """读取匿名有压管道窗口覆盖。"""
-        override = cls._normalize_pressure_pipe_window_override(
-            getattr(node, "pressure_pipe_window_override", {})
-        )
-        if not override:
-            section_params = getattr(node, "section_params", {}) or {}
-            override = cls._normalize_pressure_pipe_window_override(
-                section_params.get("pressure_pipe_window_override", {})
-            )
-        if override:
-            setattr(node, "pressure_pipe_window_override", copy.deepcopy(override))
-        return override
 
-    @staticmethod
-    def _normalize_pressure_pipe_loss_override_value(value):
-        """标准化表3第38列人工采用值。"""
-        if value in ("", None):
-            return None
-        try:
-            numeric_value = float(value)
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(numeric_value) or numeric_value < 0:
-            return None
-        return numeric_value
 
-    @classmethod
-    def _get_pressure_pipe_loss_override(cls, node):
-        """读取表3第38列人工采用值。"""
-        override_value = cls._normalize_pressure_pipe_loss_override_value(
-            getattr(node, "pressure_pipe_loss_override_m", None)
-        )
-        if override_value is not None:
-            setattr(node, "pressure_pipe_loss_override_m", override_value)
-        return override_value
 
-    @classmethod
-    def _set_pressure_pipe_loss_override(cls, node, value):
-        """写入或清空表3第38列人工采用值。"""
-        override_value = cls._normalize_pressure_pipe_loss_override_value(value)
-        setattr(node, "pressure_pipe_loss_override_m", override_value)
-        if override_value is None and hasattr(node, "_pressure_pipe_display_loss"):
-            setattr(node, "_pressure_pipe_display_loss", 0.0)
-        return override_value
 
-    @staticmethod
-    def _is_gate_like_structure_text(structure_text) -> bool:
-        """判断结构形式是否属于需要默认过闸损失的闸/分水口。"""
-        text = str(structure_text or "").strip()
-        return bool(text and ("闸" in text or "分水" in text))
 
-    @classmethod
-    def _is_gate_loss_user_set_node(cls, node) -> bool:
-        """判断节点是否已有用户明确设置过闸损失的标记。"""
-        section_params = getattr(node, "section_params", {}) or {}
-        return bool(section_params.get(GATE_HEAD_LOSS_USER_SET_PARAM_KEY, False))
 
-    @classmethod
-    def _set_gate_loss_user_set(cls, node, user_set: bool):
-        """写入或清空过闸损失用户设置标记。"""
-        section_params = getattr(node, "section_params", None)
-        if not isinstance(section_params, dict):
-            section_params = {}
-            setattr(node, "section_params", section_params)
-        if user_set:
-            section_params[GATE_HEAD_LOSS_USER_SET_PARAM_KEY] = True
-        else:
-            section_params.pop(GATE_HEAD_LOSS_USER_SET_PARAM_KEY, None)
 
     def _get_row_payload(self, row: int) -> dict:
         """读取表3行首隐藏元数据。"""
@@ -3555,22 +3378,6 @@ class WaterProfilePanel(QWidget):
             payload[key] = value
         first_item.setData(Qt.UserRole, payload if payload else None)
 
-    def _is_gate_loss_user_set_for_row(self, row: int, node=None) -> bool:
-        """判断表3某行过闸损失是否由用户明确设置。"""
-        payload = self._get_row_payload(row)
-        if GATE_HEAD_LOSS_USER_SET_ROLE_KEY in payload:
-            return bool(payload.get(GATE_HEAD_LOSS_USER_SET_ROLE_KEY))
-        table = getattr(self, "node_table", None)
-        item = table.item(row, 37) if table and 0 <= row < table.rowCount() else None
-        raw_text = str(item.text() if item else "").strip()
-        if raw_text and raw_text != "-":
-            try:
-                return abs(float(raw_text)) <= ZERO_TOLERANCE
-            except (TypeError, ValueError):
-                return False
-        if node is not None:
-            return self._is_gate_loss_user_set_node(node)
-        return False
 
     def _mark_gate_loss_user_set_for_row(self, row: int, user_set: bool = True):
         """标记表3某行过闸损失已由用户明确设置。"""
@@ -3586,227 +3393,13 @@ class WaterProfilePanel(QWidget):
             if nodes and 0 <= row < len(nodes):
                 self._set_gate_loss_user_set(nodes[row], bool(user_set))
 
-    @classmethod
-    def _get_pressure_pipe_named_group_result(cls, node) -> dict:
-        """读取命名承压组隐藏结果元数据。"""
-        result = cls._normalize_pressure_pipe_named_group_result(
-            getattr(node, "pressure_pipe_named_group_result", {})
-        )
-        if not result:
-            section_params = getattr(node, "section_params", {}) or {}
-            result = cls._normalize_pressure_pipe_named_group_result(
-                section_params.get("pressure_pipe_named_group_result", {})
-            )
-        if result:
-            setattr(node, "pressure_pipe_named_group_result", copy.deepcopy(result))
-            section_params = getattr(node, "section_params", None)
-            if isinstance(section_params, dict):
-                section_params["pressure_pipe_named_group_result"] = copy.deepcopy(result)
-        return result
 
-    @classmethod
-    def _set_pressure_pipe_named_group_result(cls, node, result) -> dict:
-        """写入命名承压组隐藏结果元数据。"""
-        normalized = cls._normalize_pressure_pipe_named_group_result(result)
-        setattr(node, "pressure_pipe_named_group_result", copy.deepcopy(normalized))
-        section_params = getattr(node, "section_params", None)
-        if isinstance(section_params, dict):
-            if normalized:
-                section_params["pressure_pipe_named_group_result"] = copy.deepcopy(normalized)
-            else:
-                section_params.pop("pressure_pipe_named_group_result", None)
-        return normalized
 
-    @classmethod
-    def _is_named_pressure_pipe_outlet_with_hidden_result(cls, node) -> bool:
-        """判断是否为带隐藏结果元数据的命名承压组出口行。"""
-        if not cls._is_named_pressure_pipe_group_node(node):
-            return False
-        in_out = getattr(node, "in_out", None)
-        if getattr(in_out, "value", "") != "出":
-            return False
-        return bool(cls._get_pressure_pipe_named_group_result(node))
 
-    @classmethod
-    def _get_named_pressure_pipe_group_total_head_loss(cls, node):
-        """读取命名承压组整组总损失。"""
-        result = cls._get_pressure_pipe_named_group_result(node)
-        if not result:
-            return None
-        return result.get("total_head_loss", None)
 
-    @classmethod
-    def _get_named_pressure_pipe_outlet_display_loss(cls, node) -> float:
-        """计算命名承压组出口行在表3列38的显示值。"""
-        total_head_loss = cls._get_named_pressure_pipe_group_total_head_loss(node)
-        stored_display = float(getattr(node, "_pressure_pipe_display_loss", 0.0) or 0.0)
-        if stored_display > 0:
-            return stored_display
 
-        siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
-        if siphon_loss > 0 and (
-            total_head_loss is None or abs(siphon_loss - float(total_head_loss)) > 1e-6
-        ):
-            setattr(node, "_pressure_pipe_display_loss", siphon_loss)
-            return siphon_loss
 
-        hydraulic_loss = (
-            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
-        )
-        if hydraulic_loss > 0:
-            setattr(node, "_pressure_pipe_display_loss", hydraulic_loss)
-            return hydraulic_loss
-        return 0.0
 
-    @classmethod
-    def _rebuild_named_pressure_pipe_outlet_total_loss(cls, node) -> float:
-        """按逐行口径重建命名承压组出口行总损失。"""
-        display_loss = cls._get_named_pressure_pipe_outlet_display_loss(node)
-        total_loss = (
-            display_loss
-            + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
-        )
-        node.head_loss_total = total_loss
-        return total_loss
-
-    @classmethod
-    def _build_pressure_pipe_named_group_result_payload(
-        cls,
-        *,
-        node=None,
-        group=None,
-        record: dict | None = None,
-        row_index: int = -1,
-        total_head_loss=None,
-        calc_steps: str = "",
-        applied_at: str = "",
-    ) -> dict:
-        """构造命名承压组隐藏结果元数据。"""
-        record = record or {}
-        identity = str(record.get("identity", "") or "").strip()
-        if not identity and group is not None:
-            identity = cls._build_pressure_pipe_group_identity(group)
-        if not identity and node is not None:
-            identity = make_pressure_pipe_identity(
-                getattr(node, "flow_section", ""),
-                getattr(node, "name", ""),
-            )
-
-        storage_key = str(record.get("storage_key", "") or "").strip()
-        if not storage_key and group is not None:
-            storage_key = cls._get_pressure_pipe_group_storage_key(group)
-        storage_key = storage_key or identity
-
-        display_name = str(record.get("display_name", "") or "").strip()
-        if not display_name and group is not None:
-            display_name = cls._get_pressure_pipe_group_display_name(group)
-        if not display_name and node is not None:
-            display_name = str(getattr(node, "name", "") or "").strip()
-
-        structure_type = str(record.get("structure_type", "") or "").strip()
-        if not structure_type and group is not None:
-            structure_type = cls._get_pressure_pipe_group_structure_text(group)
-        if not structure_type and node is not None:
-            structure_type = cls._get_node_structure_type_text(node)
-
-        if total_head_loss is None:
-            total_head_loss = record.get("total_head_loss", None)
-        if total_head_loss is not None and str(total_head_loss).strip() != "":
-            try:
-                total_head_loss = float(total_head_loss)
-            except (TypeError, ValueError):
-                total_head_loss = None
-        else:
-            total_head_loss = None
-
-        if not applied_at:
-            applied_at = str(record.get("applied_at", "") or "").strip()
-        if not applied_at:
-            applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if not calc_steps:
-            calc_steps = str(record.get("calc_steps", "") or "").strip()
-
-        target_row_index = cls._coerce_pressure_pipe_row_index(
-            record.get(
-                "target_row_index",
-                getattr(group, "target_row_index", getattr(group, "outlet_row_index", row_index))
-                if group is not None else row_index,
-            )
-        )
-
-        return cls._normalize_pressure_pipe_named_group_result({
-            "identity": identity,
-            "storage_key": storage_key,
-            "display_name": display_name,
-            "structure_type": structure_type,
-            "total_head_loss": total_head_loss,
-            "applied_at": applied_at,
-            "calc_steps": calc_steps,
-            "target_row_index": target_row_index,
-        })
-
-    @classmethod
-    def _migrate_named_pressure_pipe_outlet_visible_group_loss(
-        cls,
-        node,
-        row_index: int = -1,
-    ) -> bool:
-        """把旧版命名承压组出口行的可见整组损失迁入隐藏元数据。"""
-        if not cls._is_named_pressure_pipe_group_node(node):
-            return False
-        in_out = getattr(node, "in_out", None)
-        if getattr(in_out, "value", "") != "出":
-            return False
-
-        changed = False
-        hidden_result = cls._get_pressure_pipe_named_group_result(node)
-        hidden_total = hidden_result.get("total_head_loss", None) if hidden_result else None
-
-        external_loss = getattr(node, "external_head_loss", None)
-        legacy_total = None
-        if external_loss is not None and str(external_loss).strip() != "":
-            try:
-                legacy_total = float(external_loss)
-            except (TypeError, ValueError):
-                legacy_total = None
-
-        if hidden_total is None:
-            siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
-            if legacy_total is None and siphon_loss > 0:
-                legacy_total = siphon_loss
-            if legacy_total is not None and legacy_total > 0:
-                payload = cls._build_pressure_pipe_named_group_result_payload(
-                    node=node,
-                    row_index=row_index,
-                    total_head_loss=legacy_total,
-                    calc_steps="legacy-visible-migration",
-                )
-                if payload:
-                    cls._set_pressure_pipe_named_group_result(node, payload)
-                    hidden_result = payload
-                    hidden_total = payload.get("total_head_loss", None)
-                    changed = True
-
-        if external_loss is not None:
-            node.external_head_loss = None
-            changed = True
-
-        if hidden_total is not None:
-            siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
-            if siphon_loss > 0 and abs(siphon_loss - float(hidden_total)) <= 1e-6:
-                node.head_loss_siphon = 0.0
-                changed = True
-            stored_display = float(getattr(node, "_pressure_pipe_display_loss", 0.0) or 0.0)
-            if stored_display > 0 and abs(stored_display - float(hidden_total)) <= 1e-6:
-                setattr(node, "_pressure_pipe_display_loss", 0.0)
-                changed = True
-
-        if hidden_result:
-            cls._rebuild_named_pressure_pipe_outlet_total_loss(node)
-        return changed
 
     @classmethod
     def _migrate_named_pressure_pipe_group_results(cls, nodes) -> bool:
@@ -3822,29 +3415,7 @@ class WaterProfilePanel(QWidget):
         """判断节点是否存在匿名有压管道窗口覆盖。"""
         return bool(cls._get_pressure_pipe_window_override(node))
 
-    @staticmethod
-    def _get_pressure_pipe_row_override_group_modes() -> set[str]:
-        """返回按 row override 展示/回写的有压结果模式。"""
-        return {
-            "unnamed_row_segment",
-            "named_row_segment",
-            "chain_row_member",
-            "chain_tunnel_member",
-            "chain_prefix_member",
-        }
 
-    @classmethod
-    def _is_pressure_pipe_row_override_node(cls, node, channel_level: str | None = None) -> bool:
-        """判断当前行是否应按 row override 口径展示有压结果。"""
-        if cls._is_unnamed_pressure_pipe_row_node(node, channel_level):
-            return True
-        if not cls._is_pressure_pipe_like_node(node):
-            return False
-        override = cls._get_pressure_pipe_window_override(node)
-        if not override:
-            return False
-        group_mode = str(override.get("group_mode", "") or "").strip()
-        return group_mode in cls._get_pressure_pipe_row_override_group_modes()
 
     @classmethod
     def _has_pressure_pipe_row_override_result(
@@ -3887,33 +3458,7 @@ class WaterProfilePanel(QWidget):
         split_ids = list(getattr(group, "split_row_member_identities", []) or [])
         return any(str(identity or "").strip() for identity in split_ids)
 
-    @classmethod
-    def _set_pressure_pipe_window_override(cls, node, override: dict | None):
-        """写入或清空匿名有压管道窗口覆盖。"""
-        normalized = cls._normalize_pressure_pipe_window_override(override or {})
-        section_params = getattr(node, "section_params", None)
-        if not isinstance(section_params, dict):
-            section_params = {}
-            node.section_params = section_params
-        if normalized:
-            setattr(node, "pressure_pipe_window_override", copy.deepcopy(normalized))
-            section_params["pressure_pipe_window_override"] = copy.deepcopy(normalized)
-        else:
-            setattr(node, "pressure_pipe_window_override", {})
-            section_params.pop("pressure_pipe_window_override", None)
 
-    @classmethod
-    def _get_pressure_pipe_row_manual_override_loss(cls, override: dict | None):
-        """读取逐行承压手动采用值。"""
-        if not isinstance(override, dict):
-            return None
-        raw_value = override.get("manual_total_head_loss", None)
-        if raw_value is None or str(raw_value).strip() == "":
-            return None
-        try:
-            return float(raw_value)
-        except (TypeError, ValueError):
-            return None
 
     @classmethod
     def _set_pressure_pipe_row_manual_override(
@@ -4010,61 +3555,6 @@ class WaterProfilePanel(QWidget):
         setattr(node, "_pressure_pipe_display_loss", display_loss)
         return display_loss
 
-    @classmethod
-    def _rebuild_pressure_pipe_row_override_total_loss(
-        cls,
-        node,
-        fallback_display_loss: float | None = None,
-    ) -> float:
-        """把逐行承压覆盖结果同步回正式损失字段。"""
-        override = cls._get_pressure_pipe_window_override(node)
-        manual_override = cls._get_pressure_pipe_loss_override(node)
-        row_override_modes = cls._get_pressure_pipe_row_override_group_modes()
-        friction_loss = float(getattr(node, "head_loss_friction", 0.0) or 0.0)
-        bend_loss = float(getattr(node, "head_loss_bend", 0.0) or 0.0)
-        local_loss = float(getattr(node, "head_loss_local", 0.0) or 0.0)
-        display_loss = None
-        manual_override_applied = False
-
-        if override and str(override.get("group_mode", "") or "").strip() in row_override_modes:
-            friction_loss = float(override.get("friction_loss", 0.0) or 0.0)
-            bend_loss = float(override.get("total_bend_loss", 0.0) or 0.0)
-            local_loss = float(override.get("local_loss", 0.0) or 0.0)
-            if local_loss <= ZERO_TOLERANCE:
-                local_loss = (
-                    float(override.get("inlet_transition_loss", 0.0) or 0.0)
-                    + float(override.get("outlet_transition_loss", 0.0) or 0.0)
-                )
-            manual_total = cls._get_pressure_pipe_row_manual_override_loss(override)
-            if manual_total is not None:
-                display_loss = manual_total
-                manual_override_applied = True
-            elif manual_override is None:
-                display_loss = float(override.get("total_head_loss", 0.0) or 0.0)
-            node.head_loss_friction = friction_loss
-            node.head_loss_bend = bend_loss
-            node.head_loss_local = local_loss
-
-        if manual_override is not None:
-            display_loss = manual_override
-            manual_override_applied = True
-        elif display_loss is None:
-            try:
-                display_loss = float(fallback_display_loss or 0.0)
-            except (TypeError, ValueError):
-                display_loss = 0.0
-        if display_loss <= ZERO_TOLERANCE and not manual_override_applied:
-            display_loss = max(friction_loss + bend_loss + local_loss, 0.0)
-
-        node.head_loss_siphon = 0.0
-        node.external_head_loss = None
-        setattr(node, "_pressure_pipe_display_loss", display_loss)
-        node.head_loss_total = (
-            display_loss
-            + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
-        )
-        return display_loss
 
     @classmethod
     def _get_pressure_pipe_loss_display_value(
@@ -4116,56 +3606,6 @@ class WaterProfilePanel(QWidget):
             node.external_head_loss = None
         return display_loss
 
-    @classmethod
-    def _apply_pressure_pipe_loss_cell_to_node(
-        cls,
-        node,
-        value,
-        channel_level: str | None = None,
-    ) -> float:
-        try:
-            numeric_value = float(value)
-        except (TypeError, ValueError):
-            numeric_value = 0.0
-
-        manual_override = cls._get_pressure_pipe_loss_override(node)
-        effective_value = manual_override if manual_override is not None else numeric_value
-
-        if cls._is_pressure_pipe_row_override_node(node, channel_level):
-            cls._ensure_pressure_pipe_row_identity(node)
-            return cls._rebuild_pressure_pipe_row_override_total_loss(
-                node,
-                fallback_display_loss=effective_value,
-            )
-
-        if cls._is_regular_pressure_pipe_node(node) and not str(getattr(node, "name", "") or "").strip():
-            node.head_loss_siphon = 0.0
-            setattr(node, "_pressure_pipe_display_loss", 0.0)
-            return 0.0
-
-        if cls._is_named_pressure_pipe_outlet_with_hidden_result(node):
-            node.head_loss_siphon = 0.0
-            node.external_head_loss = None
-            if manual_override is None:
-                setattr(node, "_pressure_pipe_display_loss", numeric_value)
-            cls._rebuild_named_pressure_pipe_outlet_total_loss(node)
-            return effective_value
-
-        if manual_override is None and hasattr(node, "_pressure_pipe_display_loss"):
-            setattr(node, "_pressure_pipe_display_loss", 0.0)
-        if manual_override is None:
-            node.head_loss_siphon = numeric_value
-        if manual_override is None and numeric_value > 0 and getattr(node, "external_head_loss", None) is not None:
-            node.external_head_loss = None
-        node.head_loss_total = (
-            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
-            + effective_value
-        )
-        return effective_value
 
     def _get_pressure_pipe_display_context(self, node, row_index: int | None = None) -> dict:
         channel_level = self._get_current_channel_level_text()
@@ -4448,16 +3888,6 @@ class WaterProfilePanel(QWidget):
             excluded_items.add(ARCH_CULVERT_FAMILY_TEXT)
         return excluded_items
 
-    @staticmethod
-    def _is_flat_bottom_circle_source_payload(payload) -> bool:
-        """读取平底圆形来源标记，缺失时按不允许处理。"""
-        if not isinstance(payload, dict):
-            return False
-        if FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY in payload:
-            return bool(payload.get(FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY))
-        if "_from_table1_source" in payload:
-            return bool(payload.get("_from_table1_source"))
-        return False
 
     def _is_flat_bottom_circle_source_row(self, row: int) -> bool:
         """仅认带显式来源标记的平底圆形行，避免手输/粘贴被误判为合法来源。"""
@@ -4468,17 +3898,6 @@ class WaterProfilePanel(QWidget):
         payload = first_item.data(Qt.UserRole) if first_item else None
         return self._is_flat_bottom_circle_source_payload(payload)
 
-    @staticmethod
-    def _is_arch_culvert_source_payload(payload) -> bool:
-        """读取圆拱直墙型暗涵来源标记，兼容旧带入行。"""
-        if not isinstance(payload, dict):
-            return False
-        if ARCH_CULVERT_SOURCE_ROLE_KEY in payload:
-            return bool(payload.get(ARCH_CULVERT_SOURCE_ROLE_KEY))
-        family_type = normalize_culvert_family_type_name(payload.get(CULVERT_FAMILY_TYPE_KEY, ""))
-        if family_type == ARCH_CULVERT_FAMILY_TEXT and "_from_table1_source" in payload:
-            return bool(payload.get("_from_table1_source"))
-        return False
 
     def _is_arch_culvert_source_row(self, row: int) -> bool:
         """仅认带入链路明确标记的圆拱直墙型暗涵行。"""
@@ -4729,31 +4148,7 @@ class WaterProfilePanel(QWidget):
         info_bar.destroyed.connect(lambda *_args: setattr(self, "_length_rule_nudge_bar", None))
         self._length_rule_nudge_bar = info_bar
 
-    @staticmethod
-    def _get_transition_length_source_kind(source: str) -> str:
-        source = str(source or "").strip()
-        if source == "override":
-            return "single_override"
-        if source.startswith("rule:"):
-            return "combo_rule"
-        if source == "formula":
-            return "formula"
-        return "other"
 
-    @staticmethod
-    def _get_transition_length_source_label(source: str) -> str:
-        source = str(source or "").strip()
-        if source == "override":
-            return "单条覆盖"
-        if source == "rule:step_up":
-            return "组合规则-向上修约"
-        if source == "rule:fixed":
-            return "组合规则-固定值"
-        if source == "rule:formula":
-            return "组合规则-公式值"
-        if source == "formula":
-            return "公式/规范"
-        return "当前采用值"
 
     @staticmethod
     def _round_up_transition_length(length: float, step_up: float) -> float:
@@ -5136,6 +4531,10 @@ class WaterProfilePanel(QWidget):
 
     def _rebuild_calculation_summary_state(self, nodes):
         """在不重新执行总计算的情况下刷新摘要面板。"""
+        batch = getattr(self, '_loss_delete_batch', None)
+        if batch is not None:
+            batch['summary'] = True
+            return
         self._refresh_building_length_state(nodes)
         if not nodes:
             self._update_summary_panel([])
@@ -7192,13 +6591,13 @@ class WaterProfilePanel(QWidget):
                     node.top_elevation = te
 
     def _on_current_cell_changed(self, row, col, prev_row, prev_col):
-        """当用户切换单元格时，记录编辑前的快照（供撤销使用）"""
+        """切换单元格只记录原文，实际发生编辑时再生成整表撤销快照。"""
         if self._updating_cells:
             return
         # 重置批量操作标志（Delete 删除结束）
         self._undo_group = 0
-        # 任何单元格切换时都记录快照（与批量计算面板保持一致）
-        self._pre_edit_snapshot = self._snapshot_editable_cols()
+        self._pre_edit_snapshot = None
+        self._pre_edit_cell_value = None
         if col in EDITABLE_COLS:
             item = self.node_table.item(row, col)
             self._pre_edit_cell_value = (row, col, item.text() if item else "")
@@ -7225,9 +6624,12 @@ class WaterProfilePanel(QWidget):
         # 仅对可编辑列触发
         if col not in EDITABLE_COLS:
             return
+        batch = getattr(self, '_loss_delete_batch', None)
+        if batch is not None:
+            batch['columns'].add(col)
         
         # 触发数据变化信号（除非正在加载项目）
-        if not getattr(self, '_loading_project', False):
+        if batch is None and not getattr(self, '_loading_project', False):
             self.data_changed.emit()
         
         self._updating_cells = True
@@ -7367,15 +6769,20 @@ class WaterProfilePanel(QWidget):
         # 更新 pre_edit 为当前新值，以便连续编辑同一单元格时也能撤销
         item = self.node_table.item(row, col)
         self._pre_edit_cell_value = (row, col, item.text() if item else "")
-        if col in TRANSITION_PREPARATION_RELEVANT_COLS:
+        if batch is None:
+            self._refresh_after_loss_edits({col})
+
+    def _refresh_after_loss_edits(self, columns):
+        """一轮输入修改完成后，统一失效旧状态并更新相关控件。"""
+        if columns.intersection(TRANSITION_PREPARATION_RELEVANT_COLS):
             self._transition_topology_prepared = False
-        if col in (0, 1, 2, 3, 5, 6, 7):
+        if columns.intersection((0, 1, 2, 3, 5, 6, 7)):
             # 结构归属或几何输入变化后，不再展示上一版长度统计。
             self._refresh_building_length_state([])
             self._update_summary_panel([])
 
         self._refresh_pressure_pipe_controls()
-        if col in (2, 24):
+        if columns.intersection((2, 24)):
             nodes_for_view = self._build_nodes_from_table()
             self._update_pressure_pipe_roughness_overview(
                 self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes_for_view)
@@ -7393,6 +6800,7 @@ class WaterProfilePanel(QWidget):
         snapshot = self._snapshot_editable_cols()
         self._append_loss_undo_snapshot(snapshot)
         self._pre_edit_snapshot = None
+        self._loss_delete_batch = {'rows': set(), 'columns': set(), 'summary': False}
         # 设置标志，跳过本次 Delete 触发的 N 次 cellChanged 快照记录
         editable_count = 0
         for idx in self.node_table.selectedIndexes():
@@ -7400,6 +6808,26 @@ class WaterProfilePanel(QWidget):
             if item is not None and (item.flags() & Qt.ItemIsEditable):
                 editable_count += 1
         self._undo_group = max(1, editable_count)
+
+    def _finish_loss_delete(self):
+        """全部单元格规则处理完成后，只递推一次水位并刷新一次控件。"""
+        batch = self._loss_delete_batch
+        self._loss_delete_batch = None
+        self._undo_group = 0
+        if batch is None:
+            return
+        with self._table_batch_update(self.node_table):
+            if batch['rows']:
+                self._recalc_downstream(min(batch['rows']), changed_rows=batch['rows'])
+            if batch['summary']:
+                self._rebuild_calculation_summary_state(self._build_nodes_from_table())
+            if batch['columns']:
+                self._refresh_after_loss_edits(batch['columns'])
+        if batch['columns'] and not getattr(self, '_loading_project', False):
+            self.data_changed.emit()
+        row, col = self.node_table.currentRow(), self.node_table.currentColumn()
+        item = self.node_table.item(row, col)
+        self._pre_edit_cell_value = (row, col, item.text() if item else "")
 
     def _undo_loss_edit(self):
         """Ctrl+Z 撤销：优先撤销行操作，其次撤销单元格编辑"""
@@ -7437,6 +6865,8 @@ class WaterProfilePanel(QWidget):
                     table.setItem(r, c, item)
                 item.setText(text)
 
+            # 隐藏元数据已回填，先恢复人工覆盖，不能沿用撤销前的节点覆盖值。
+            self._restore_loss_snapshot_overrides(snapshot)
             # 同步 calculated_nodes
             _rf = self._read_table_numeric_value
 
@@ -7473,6 +6903,7 @@ class WaterProfilePanel(QWidget):
 
             InfoBar.success("已撤销", "已恢复上一步操作",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+            self._after_loss_snapshot_restore()
         finally:
             self._updating_cells = False
 
@@ -7512,6 +6943,7 @@ class WaterProfilePanel(QWidget):
                     table.setItem(r, c, item)
                 item.setText(text)
 
+            self._restore_loss_snapshot_overrides(snapshot)
             # 同步 calculated_nodes
             _rf = self._read_table_numeric_value
 
@@ -7548,15 +6980,43 @@ class WaterProfilePanel(QWidget):
 
             InfoBar.success("已重做", "已恢复上一步撤销的操作",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+            self._after_loss_snapshot_restore()
         finally:
             self._updating_cells = False
+
+    def _restore_loss_snapshot_overrides(self, snapshot):
+        """让节点中的人工采用值与当前撤销快照一致，缺失标记表示清除旧覆盖。"""
+        nodes = getattr(self, 'calculated_nodes', None) or []
+        for (row, col), saved in snapshot.items():
+            if col != -1 or not 0 <= row < len(nodes):
+                continue
+            payload = saved if isinstance(saved, dict) else {}
+            node = nodes[row]
+            self._set_pressure_pipe_loss_override(node, payload.get(PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY))
+            self._set_gate_loss_user_set(node, bool(payload.get(GATE_HEAD_LOSS_USER_SET_ROLE_KEY, False)))
+            if node.is_transition:
+                for name in ('transition_length_source', 'transition_length_warning',
+                             'transition_rule_upstream_structure_type', 'transition_rule_downstream_structure_type'):
+                    setattr(node, name, str(payload.get('_' + name, '') or ''))
+
+    def _after_loss_snapshot_restore(self):
+        """撤销/重做后同步后续编辑的原文、操作控件与工程修改状态。"""
+        row, col = self.node_table.currentRow(), self.node_table.currentColumn()
+        item = self.node_table.item(row, col)
+        self._pre_edit_cell_value = (row, col, item.text() if item else '')
+        self._pre_edit_snapshot = None
+        self._refresh_pressure_pipe_controls()
+        if not getattr(self, '_loading_project', False):
+            self.data_changed.emit()
 
     # ================================================================
     # 节点表行操作撤销（添加/删除/插入/复制/清空）
     # ================================================================
     def _snapshot_node_table(self):
         """保存完整节点表状态（用于行操作撤销）"""
+        table_state = self._capture_profile_table_state()
         snapshot = {
+            'table_state': table_state.to_dict(),
             'rows': [],
             'row_meta': [],
             'structure_heights': dict(self._node_structure_heights),
@@ -7663,6 +7123,13 @@ class WaterProfilePanel(QWidget):
 
     def _restore_node_table(self, snapshot):
         """从快照恢复完整节点表状态"""
+        restored_table_state = None
+        if 'table_state' in snapshot:
+            restored_table_state = ProfileTableState.from_dict(snapshot['table_state'])
+            if restored_table_state.column_count != self.node_table.columnCount():
+                raise ValueError("撤销快照的列数与当前表格不一致")
+            snapshot = dict(snapshot)
+            snapshot['rows'] = [row.cells for row in restored_table_state.rows]
         self._updating_cells = True
         try:
             # 恢复表格内容
@@ -7688,6 +7155,8 @@ class WaterProfilePanel(QWidget):
             self._node_chamfer_params = dict(snapshot['chamfer_params'])
             self._node_u_params = dict(snapshot['u_params'])
             self._node_velocity_increased = dict(snapshot.get('velocity_increased', {}))
+            if restored_table_state is not None:
+                self._apply_profile_table_state(restored_table_state)
         finally:
             self._updating_cells = False
         self._restore_manager_config(getattr(self, "_siphon_manager", None), snapshot.get('siphon_manager_config'))
@@ -7736,8 +7205,12 @@ class WaterProfilePanel(QWidget):
                        parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
         return True
 
-    def _recalc_downstream(self, edited_row):
+    def _recalc_downstream(self, edited_row, *, changed_rows=None):
         """从 edited_row 开始，重算总水头损失 / 累计 / 水位 / 高程"""
+        batch = getattr(self, '_loss_delete_batch', None)
+        if batch is not None:
+            batch['rows'].add(edited_row)
+            return
         table = self.node_table
         row_count = table.rowCount()
         if row_count == 0:
@@ -7768,20 +7241,16 @@ class WaterProfilePanel(QWidget):
             item = table.item(r, 2)
             return item and item.text().strip() == "渐变段"
 
-        # ── 1. 重算编辑行的总水头损失 (col 39) ──
-        if not _is_transition_row(edited_row):
-            h_bend = _rf(edited_row, 34)
-            h_friction = _rf(edited_row, 35)
-            h_reserve = _rf(edited_row, 36)
-            h_gate = _rf(edited_row, 37)
-            h_siphon = _rf(edited_row, 38)
-            new_total = h_bend + h_friction + h_reserve + h_gate + h_siphon
-            _set(edited_row, 39, new_total)
-            # 同步更新node对象，确保双击时读取到最新值
-            if edited_row < len(self.calculated_nodes):
-                node = self.calculated_nodes[edited_row]
-                if not getattr(node, 'is_transition', False):
-                    node.head_loss_total = new_total
+        # ── 1. 先更新全部编辑行的总损失，再从最上游受影响行统一递推 ──
+        for changed_row in sorted(changed_rows if changed_rows is not None else {edited_row}):
+            if not _is_transition_row(changed_row):
+                new_total = sum(_rf(changed_row, c) for c in (34, 35, 36, 37, 38))
+                _set(changed_row, 39, new_total)
+                # 同步节点对象，确保双击详情和后续完整计算读取到最新值。
+                if changed_row < len(self.calculated_nodes):
+                    node = self.calculated_nodes[changed_row]
+                    if not getattr(node, 'is_transition', False):
+                        node.head_loss_total = new_total
 
         # ── 2. 从编辑行开始重算累计总水头损失 (col 40) ──
         cumulative = _rf(edited_row - 1, 40) if edited_row > 0 else 0.0
@@ -8042,13 +7511,6 @@ class WaterProfilePanel(QWidget):
         payload = first_item.data(Qt.UserRole) if first_item else None
         return payload if isinstance(payload, dict) else {}
 
-    def _normalize_coord_text(self, value) -> str:
-        if value is None:
-            return ""
-        text = str(value).strip()
-        if not text or text == "-":
-            return ""
-        return text
 
     def _coord_decimal_places(self, value) -> int:
         text = self._normalize_coord_text(value)
@@ -8060,10 +7522,6 @@ class WaterProfilePanel(QWidget):
             return 0
         return len(text.split(".", 1)[1])
 
-    def _node_is_source_row(self, node) -> bool:
-        if bool(getattr(node, "from_table1_source", False)):
-            return True
-        return not getattr(node, "is_transition", False) and not getattr(node, "is_auto_inserted_channel", False)
 
     def _get_node_source_coord_text(self, node, axis: str) -> str:
         attr = "source_x_text" if axis == "x" else "source_y_text"
@@ -8950,616 +8408,21 @@ class WaterProfilePanel(QWidget):
         return settings
 
     def _build_nodes_from_table(self):
-        """从节点表格构建ChannelNode列表（与原版Tkinter get_nodes完全对齐）"""
+        """先提交界面编辑为独立状态，再通过无 Qt 解码器生成节点。"""
         if not CALCULATOR_AVAILABLE:
             return []
-
-        # 辅助函数提到循环外避免每行重复定义（#16）
-        table = self.node_table
-
-        def _precise_value(row, col):
-            first = table.item(row, 0)
-            item = table.item(row, col)
-            payload = first.data(Qt.UserRole) if first else None
-            stored = payload.get('_numeric_display_values', {}).get(str(col)) if isinstance(payload, dict) else None
-            if isinstance(stored, dict) and item and item.text() == stored.get('text'):
-                value = stored.get('value')
-                if isinstance(value, (int, float)) and math.isfinite(value):
-                    return value
-            return None
-
-        def _read_float(row, col):
-            precise = _precise_value(row, col)
-            if precise is not None:
-                return precise
-            item = table.item(row, col)
-            if item:
-                try:
-                    return float(item.text())
-                except (ValueError, TypeError):
-                    pass
-            return 0.0
-
-        def _read_text(row, col):
-            item = table.item(row, col)
-            if item:
-                t = item.text().strip()
-                if t and t != '-':
-                    return t
-            return ""
-
-        def _parse_station(text):
-            """解析格式化桩号文本（如 '南支0+123.456'）为浮点数"""
-            if not text:
-                return 0.0
-            if '+' in text:
-                parts = text.split('+')
-                if len(parts) == 2:
-                    km_digits = ''.join(c for c in parts[0] if c.isdigit())
-                    try:
-                        km = int(km_digits) if km_digits else 0
-                        m = float(parts[1])
-                        return km * 1000 + m
-                    except (ValueError, TypeError):
-                        pass
-            try:
-                return float(text)
-            except (ValueError, TypeError):
-                return 0.0
-
-        def _read_ip_metadata(row):
-            """读取 IP 单元格保存的原始/显示编号元数据。"""
-            item = table.item(row, 4)
-            if not item:
-                return {}
-            data = item.data(Qt.UserRole)
-            return data if isinstance(data, dict) else {}
-
-        def _parse_ip_number(row, text):
-            """解析IP编号，支持复合格式如 'IP3 沪蓉倒进'（#11）"""
-            meta = _read_ip_metadata(row)
-            raw_ip_number = meta.get("_raw_ip_number", None)
-            if raw_ip_number not in ("", None):
-                try:
-                    return int(raw_ip_number)
-                except (ValueError, TypeError):
-                    pass
-            if not text:
-                return 0
-            # 先尝试直接转int
-            try:
-                return int(text)
-            except (ValueError, TypeError):
-                pass
-            # 从 "IPxx" 或 "IP xx ..." 中提取数字
-            m = re.match(r'IP\s*(\d+)', text)
-            if m:
-                return int(m.group(1))
-            return 0
-
-        def _parse_display_ip_number(row, text):
-            """解析显示用 IP 编号；特殊建筑进出口允许为空。"""
-            meta = _read_ip_metadata(row)
-            display_ip_number = meta.get("_display_ip_number", None)
-            if display_ip_number not in ("", None):
-                try:
-                    return int(display_ip_number)
-                except (ValueError, TypeError):
-                    pass
-            if not text:
-                return None
-            m = re.match(r'IP\s*(\d+)', text)
-            if m:
-                return int(m.group(1))
-            return None
-
-        nodes = []
-        channel_level = self._get_current_channel_level_text()
-        _default_q = (self._parse_flow_values(self.design_flow_edit.text()) or [5.0])[0]
-        self._pressure_turn_radius_fallback_groups = set()
-
-        for r in range(table.rowCount()):
-            data = self._get_node_row_data(r)
-            # data[0-7]: 流量段,建筑物名称,结构形式,进出口,IP,X,Y,转弯半径
-            # data[8-19]: 几何结果列
-            # data[20-26]: 底宽B,直径D,半径R,边坡m,糙率n,底坡1/i,流量Q
-            # data[27-31]: 水力结果列
-            # data[32-40]: 水头损失列
-            # data[41-43]: 水位,渠底高程,渠顶高程
-            node = ChannelNode()
-            node.flow_section = str(data[0]).strip()
-            node.name = str(data[1]).strip()
-
-            # 结构形式 (col 2)
-            raw_struct_str = normalize_section_type_name(str(data[2]).strip())
-            culvert_family_type = normalize_culvert_family_type_name(raw_struct_str)
-            spillway_display_structure_type = _resolve_spillway_steep_chute_display_structure_type(
-                raw_struct_str,
-                "",
-            )
-            struct_str = raw_struct_str
-            if culvert_family_type or struct_str in {"暗渠", "矩形暗渠", "矩形暗涵"}:
-                struct_str = "矩形暗涵"
-            if is_spillway_steep_chute_value(struct_str):
-                struct_str = "泄水渠与陡坡"
-            if struct_str:
-                try:
-                    node.structure_type = StructureType.from_string(struct_str)
-                except ValueError:
-                    pass
-                if struct_str == "渐变段" or (node.structure_type and node.structure_type == StructureType.TRANSITION):
-                    node.is_transition = True
-
-            # 标记闸类结构（分水闸/分水口/节制闸/泄水闸等）
-            if node.structure_type and StructureType.is_diversion_gate(node.structure_type):
-                node.is_diversion_gate = True
-            # 标记倒虹吸
-            if node.structure_type and node.structure_type == StructureType.INVERTED_SIPHON:
-                node.is_inverted_siphon = True
-            # 标记有压管道
-            if node.structure_type and self._is_pressure_pipe_like_structure_text(node.structure_type.value):
-                node.is_pressure_pipe = True
-            pipe_material = ""
-            local_loss_ratio = None
-            in_out_raw = ""
-            use_increase = True
-            from_table1_source = False
-            explicit_table1_source_flag = False
-            flat_bottom_source_allowed = False
-            arch_culvert_H_straight = None
-            arch_culvert_manual_H_straight = None
-            arch_culvert_used_manual_H_straight = None
-            tunnel_arch_theta_deg = 0.0
-            tunnel_arch_H_straight = None
-            tunnel_arch_manual_H_straight = None
-            tunnel_arch_used_manual_H_straight = None
-            pressure_pipe_row_identity = ""
-            compound_trapezoid_params = {}
-            spillway_steep_chute_payload = {}
-            # 恢复自动插入补段标记（通过UserRole存储）
-            _first_item = table.item(r, 0)
-            if _first_item:
-                _ur = _first_item.data(Qt.UserRole)
-                if isinstance(_ur, dict) and _ur.get('_auto_channel'):
-                    node.is_auto_inserted_channel = True
-                    _auto_channel_struct = normalize_section_type_name(
-                        str(_ur.get('_auto_channel_structure_type', '') or '')
-                    )
-                    if _auto_channel_struct and not node.structure_type:
-                        try:
-                            node.structure_type = StructureType.from_string(_auto_channel_struct)
-                        except ValueError:
-                            pass
-                    try:
-                        node.stat_length = float(_ur.get('_stat_length', 0.0) or 0.0)
-                    except (TypeError, ValueError):
-                        node.stat_length = 0.0
-                elif _ur == "auto_channel":  # 兼容旧格式
-                    node.is_auto_inserted_channel = True
-                # 恢复渐变段详细参数（#10）
-                if isinstance(_ur, dict) and _ur.get('_transition_data'):
-                    td = _ur['_transition_data']
-                    node.transition_type = td.get('transition_type', '')
-                    node.transition_form = td.get('transition_form', '')
-                    node.transition_zeta = td.get('transition_zeta', 0.0)
-                    node.transition_theta = td.get('transition_theta', 0.0)
-                    if not node.structure_type:
-                        node.structure_type = StructureType.TRANSITION
-                        node.is_transition = True
-                if isinstance(_ur, dict):
-                    node.connection_source_details = copy.deepcopy(_ur.get("_connection_source_details", {}) or {})
-                    if _ur.get('_aux_coords') or _ur.get('_auto_channel'):
-                        try:
-                            node.x = float(_ur.get('_x', 0.0) or 0.0)
-                            node.y = float(_ur.get('_y', 0.0) or 0.0)
-                        except (TypeError, ValueError):
-                            node.x = 0.0
-                            node.y = 0.0
-                    _override = _ur.get("_transition_length_override_m", None)
-                    if _override is not None and str(_override).strip() != "":
-                        try:
-                            node.transition_length_override_m = float(_override)
-                        except (TypeError, ValueError):
-                            node.transition_length_override_m = None
-                    node.transition_length_source = str(_ur.get("_transition_length_source", "formula") or "formula")
-                    node.transition_length_warning = str(_ur.get("_transition_length_warning", "") or "")
-                    node.transition_rule_upstream_structure_type = str(
-                        _ur.get("_transition_rule_upstream_structure_type", "") or ""
-                    )
-                    node.transition_rule_downstream_structure_type = str(
-                        _ur.get("_transition_rule_downstream_structure_type", "") or ""
-                    )
-                    _length_details = _ur.get("_transition_length_calc_details", None)
-                    if isinstance(_length_details, dict):
-                        node.transition_length_calc_details = copy.deepcopy(_length_details)
-                        if not node.transition_rule_upstream_structure_type:
-                            node.transition_rule_upstream_structure_type = str(
-                                _length_details.get("upstream_structure_type", "") or ""
-                            )
-                        if not node.transition_rule_downstream_structure_type:
-                            node.transition_rule_downstream_structure_type = str(
-                                _length_details.get("downstream_structure_type", "") or ""
-                            )
-                    _loss_details = _ur.get("_transition_loss_calc_details", None)
-                    if isinstance(_loss_details, dict):
-                        node.transition_calc_details = copy.deepcopy(_loss_details)
-                    if "_from_table1_source" in _ur:
-                        explicit_table1_source_flag = True
-                        from_table1_source = bool(_ur.get("_from_table1_source"))
-                    flat_bottom_source_allowed = self._is_flat_bottom_circle_source_payload(_ur)
-                    arch_culvert_source_allowed = self._is_arch_culvert_source_payload(_ur)
-                    pressure_pipe_row_identity = str(
-                        _ur.get(PRESSURE_PIPE_ROW_ID_ROLE_KEY, "") or ""
-                    ).strip()
-                    pressure_pipe_window_override = self._normalize_pressure_pipe_window_override(
-                        _ur.get(PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY, {})
-                    )
-                    if pressure_pipe_window_override:
-                        self._set_pressure_pipe_window_override(node, pressure_pipe_window_override)
-                    pressure_pipe_named_group_result = self._normalize_pressure_pipe_named_group_result(
-                        _ur.get(PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY, {})
-                    )
-                    if pressure_pipe_named_group_result:
-                        self._set_pressure_pipe_named_group_result(node, pressure_pipe_named_group_result)
-                    pressure_pipe_loss_override = self._normalize_pressure_pipe_loss_override_value(
-                        _ur.get(PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY, None)
-                    )
-                    self._set_pressure_pipe_loss_override(node, pressure_pipe_loss_override)
-                    _ext = _ur.get('_external_head_loss', None)
-                    if _ext is not None and str(_ext).strip() != "":
-                        try:
-                            node.external_head_loss = float(_ext)
-                        except (ValueError, TypeError):
-                            node.external_head_loss = None
-                    _pm = str(_ur.get('_pipe_material', '') or '').strip()
-                    if _pm:
-                        pipe_material = _pm
-                    stored_culvert_family_type = normalize_culvert_family_type_name(
-                        _ur.get(CULVERT_FAMILY_TYPE_KEY, "")
-                    )
-                    if stored_culvert_family_type:
-                        culvert_family_type = stored_culvert_family_type
-                    _ior = str(_ur.get('_in_out_raw', '') or '').strip()
-                    if _ior:
-                        in_out_raw = _ior
-                    _llr = _ur.get('_local_loss_ratio', None)
-                    if _llr is not None and str(_llr).strip() != "":
-                        try:
-                            local_loss_ratio = float(_llr)
-                        except (ValueError, TypeError):
-                            local_loss_ratio = None
-                    if USE_INCREASE_ROLE_KEY in _ur:
-                        use_increase = normalize_use_increase_flag(
-                            _ur.get(USE_INCREASE_ROLE_KEY),
-                            default=True,
-                        )
-                    compound_trapezoid_params = normalize_compound_trapezoid_params(
-                        _ur.get(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, {})
-                    )
-                    if isinstance(_ur.get(SPILLWAY_STEEP_CHUTE_ROLE_KEY), dict):
-                        spillway_steep_chute_payload = copy.deepcopy(_ur.get(SPILLWAY_STEEP_CHUTE_ROLE_KEY) or {})
-                        stored_display_structure_type = _resolve_spillway_steep_chute_display_structure_type(
-                            spillway_steep_chute_payload.get("display_structure_type", ""),
-                            "",
-                        )
-                        if stored_display_structure_type:
-                            spillway_display_structure_type = stored_display_structure_type
-                    arch_culvert_theta_deg = self._sf(_ur.get(ARCH_CULVERT_THETA_ROLE_KEY, 0), 0.0)
-                    if ARCH_CULVERT_H_STRAIGHT_ROLE_KEY in _ur:
-                        arch_culvert_H_straight = self._sf(_ur.get(ARCH_CULVERT_H_STRAIGHT_ROLE_KEY, 0), 0.0)
-                    if ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
-                        arch_culvert_manual_H_straight = self._sf(_ur.get(ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY, 0), 0.0)
-                    if ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
-                        arch_culvert_used_manual_H_straight = bool(_ur.get(ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY))
-                    tunnel_arch_theta_deg = self._sf(_ur.get(TUNNEL_ARCH_THETA_ROLE_KEY, 0), 0.0)
-                    if TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY in _ur:
-                        tunnel_arch_H_straight = self._sf(_ur.get(TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY, 0), 0.0)
-                    if TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
-                        tunnel_arch_manual_H_straight = self._sf(_ur.get(TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY, 0), 0.0)
-                    if TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
-                        tunnel_arch_used_manual_H_straight = bool(_ur.get(TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY))
-                else:
-                    arch_culvert_source_allowed = False
-                    arch_culvert_theta_deg = 0.0
-                    arch_culvert_H_straight = None
-                    arch_culvert_manual_H_straight = None
-                    arch_culvert_used_manual_H_straight = None
-                    tunnel_arch_theta_deg = 0.0
-                    tunnel_arch_H_straight = None
-                    tunnel_arch_manual_H_straight = None
-                    tunnel_arch_used_manual_H_straight = None
-            else:
-                arch_culvert_source_allowed = False
-                arch_culvert_theta_deg = 0.0
-                arch_culvert_H_straight = None
-                arch_culvert_manual_H_straight = None
-                arch_culvert_used_manual_H_straight = None
-                tunnel_arch_theta_deg = 0.0
-                tunnel_arch_H_straight = None
-                tunnel_arch_manual_H_straight = None
-                tunnel_arch_used_manual_H_straight = None
-            if (
-                not explicit_table1_source_flag
-                and not from_table1_source
-                and not getattr(node, 'is_transition', False)
-                and not getattr(node, 'is_auto_inserted_channel', False)
-            ):
-                from_table1_source = True
-            if struct_str == "隧洞-平底圆形":
-                from_table1_source = bool(flat_bottom_source_allowed)
-            node.from_table1_source = from_table1_source
-            if struct_str == "隧洞-平底圆形" and not from_table1_source:
-                node.structure_type = None
-            if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT and not arch_culvert_source_allowed:
-                node.structure_type = None
-                culvert_family_type = ""
-
-            source_x_text = ""
-            source_y_text = ""
-            if _first_item and isinstance(_ur, dict):
-                source_x_text = self._normalize_coord_text(_ur.get(SOURCE_COORD_X_ROLE_KEY, ""))
-                source_y_text = self._normalize_coord_text(_ur.get(SOURCE_COORD_Y_ROLE_KEY, ""))
-
-            x_text = self._normalize_coord_text(data[5])
-            y_text = self._normalize_coord_text(data[6])
-            if x_text:
-                node.x = self._sf(x_text)
-            if y_text:
-                node.y = self._sf(y_text)
-            if self._node_is_source_row(node):
-                node.source_x_text = x_text or source_x_text
-                node.source_y_text = y_text or source_y_text
-            else:
-                node.source_x_text = ""
-                node.source_y_text = ""
-            if pressure_pipe_row_identity:
-                node.pressure_pipe_row_identity = pressure_pipe_row_identity
-            elif self._is_pressure_pipe_row_override_node(node, channel_level):
-                self._ensure_pressure_pipe_row_identity(node, r)
-
-            # 进出口 (col 3)
-            _io_text = _read_text(r, 3)
-            if _io_text:
-                node.in_out = InOutType.from_string(_io_text)
-            # IP编号 (col 4) — 支持复合格式 (#11)
-            ip_text = _read_text(r, 4)
-            node.ip_number = _parse_ip_number(r, ip_text)
-            node.display_ip_number = _parse_display_ip_number(r, ip_text)
-            # 记录转弯半径是否来自用户/表格的显式输入；"0" 也算显式输入，不能再当成空白兜底。
-            _turn_radius_text = _read_text(r, 7)
-            _turn_radius_is_explicit = bool(_turn_radius_text)
-            node.turn_radius_is_explicit = _turn_radius_is_explicit
-            node.turn_radius_text = _turn_radius_text if _turn_radius_is_explicit else ""
-            _row_turn = self._sf(_turn_radius_text, 0.0) if _turn_radius_is_explicit else 0.0
-            # 新规则：转弯半径单元格留空也按 0 处理，不再回退到全局半径。
-            if _turn_radius_is_explicit:
-                node.turn_radius = _row_turn
-            else:
-                node.turn_radius = 0.0
-            # 有压管道仅保留表格中的显式值；留空统一按 0 处理。
-            try:
-                _struct_for_turn = str(data[2]).strip()
-                _is_pressure_turn = self._is_pressure_pipe_like_structure_text(_struct_for_turn)
-                _is_siphon_turn = "倒虹吸" in _struct_for_turn
-                if _is_pressure_turn:
-                    if _turn_radius_is_explicit:
-                        node.turn_radius = _row_turn
-                    else:
-                        node.turn_radius = 0.0
-                elif _is_siphon_turn and _turn_radius_is_explicit:
-                    node.turn_radius = _row_turn
-            except Exception:
-                pass
-
-            # ===== 几何结果列 (8-19) =====
-            # 转角 (col 8)
-            _ta = _read_float(r, 8)
-            if _ta > 0:
-                node.turn_angle = _ta
-            # 切线长 (col 9)
-            _tl = _read_float(r, 9)
-            if _tl > 0:
-                node.tangent_length = _tl
-            # 弧长 (col 10)
-            _al = _read_float(r, 10)
-            if _al > 0:
-                node.arc_length = _al
-            # 弯道长度 (col 11)
-            _cl = _read_float(r, 11)
-            if _cl > 0:
-                node.curve_length = _cl
-            # IP直线间距 (col 12)
-            _sd = _read_float(r, 12)
-            if _sd > 0:
-                node.straight_distance = _sd
-            # IP桩号 (col 13)
-            node.station_ip = _precise_value(r, 13) if _precise_value(r, 13) is not None else _parse_station(_read_text(r, 13))
-            # 弯前BC (col 14)
-            node.station_BC = _precise_value(r, 14) if _precise_value(r, 14) is not None else _parse_station(_read_text(r, 14))
-            # 里程MC (col 15)
-            node.station_MC = _precise_value(r, 15) if _precise_value(r, 15) is not None else _parse_station(_read_text(r, 15))
-            # 弯末EC (col 16)
-            node.station_EC = _precise_value(r, 16) if _precise_value(r, 16) is not None else _parse_station(_read_text(r, 16))
-            # 复核弯前 (col 17)
-            _cpre = _read_float(r, 17)
-            if _cpre != 0:
-                node.check_pre_curve = _cpre
-            # 复核弯后 (col 18)
-            _cpost = _read_float(r, 18)
-            if _cpost != 0:
-                node.check_post_curve = _cpost
-            # 复核总长 (col 19)
-            _ctot = _read_float(r, 19)
-            if _ctot != 0:
-                node.check_total_length = _ctot
-
-            # ===== 水力输入列 (20-26) =====
-            B = self._sf(data[20])
-            D = self._sf(data[21])
-            R = self._sf(data[22])
-            m_val = self._sf(data[23])
-            # 糙率默认值：倒虹吸行用倒虹吸默认糙率常量，其他用渠道糙率输入框
-            _default_n = (DEFAULT_SIPHON_ROUGHNESS
-                          if struct_str and "倒虹吸" in struct_str
-                          else self._fval(self.roughness_edit, DEFAULT_ROUGHNESS))
-            n_val = self._sf(data[24], _default_n)
-            slope_inv = self._sf(data[25])
-            raw_flow = _precise_value(r, 26)
-            Q = raw_flow if raw_flow is not None else self._sf(data[26], _default_q)
-
-            # 与原版Tkinter get_nodes一致：始终写入B/D/R_circle/m（即使为0）
-            # 原因：_estimate_transition_length中 section_params.get("D", 3.0)
-            # 若D不在dict中会返回默认值3.0，导致隧洞渐变段长度偏大
-            node.section_params['B'] = B
-            node.section_params['D'] = D
-            node.section_params['R_circle'] = R
-            node.section_params['m'] = m_val
-            node.section_params['use_increase'] = use_increase
-            if culvert_family_type:
-                node.section_params[CULVERT_FAMILY_TYPE_KEY] = culvert_family_type
-            if struct_str == "明渠-复式梯形" and compound_trapezoid_params:
-                node.section_params.update(copy.deepcopy(compound_trapezoid_params))
-                if not node.section_params.get('B', 0) and compound_trapezoid_params.get('B2', 0):
-                    node.section_params['B'] = compound_trapezoid_params['B2']
-            node.use_increase = use_increase
-            if pipe_material:
-                node.section_params['pipe_material'] = pipe_material
-            if in_out_raw:
-                node.section_params['in_out_raw'] = in_out_raw
-            if local_loss_ratio is not None and local_loss_ratio > 0:
-                node.section_params['local_loss_ratio'] = local_loss_ratio
-            if is_spillway_steep_chute_value(struct_str) and spillway_display_structure_type:
-                if not isinstance(spillway_steep_chute_payload, dict):
-                    spillway_steep_chute_payload = {}
-                spillway_steep_chute_payload["display_structure_type"] = spillway_display_structure_type
-            if spillway_steep_chute_payload:
-                if spillway_display_structure_type:
-                    spillway_steep_chute_payload["display_structure_type"] = spillway_display_structure_type
-                node.section_params[SPILLWAY_STEEP_CHUTE_PARAM_KEY] = spillway_steep_chute_payload
-            node.roughness = n_val
-            if slope_inv > 0:
-                node.slope_i = 1.0 / slope_inv
-            node.flow = Q
-
-            # ===== 水力结果列 (27-31) =====
-            _h = _read_float(r, 27)
-            if _h > 0:
-                node.water_depth = _h
-            # 断面面积A (col 28)
-            _area = _read_float(r, 28)
-            if _area > 0:
-                node.section_params['A'] = _area
-            # 湿周X (col 29)
-            _wp = _read_float(r, 29)
-            if _wp > 0:
-                node.section_params['X'] = _wp
-            # 水力半径R (col 30)
-            _hr2 = _read_float(r, 30)
-            if _hr2 > 0:
-                node.section_params['R'] = _hr2
-            # 流速v (col 31)
-            _v = _read_float(r, 31)
-            if _v > 0:
-                node.velocity = _v
-
-            # ===== 水头损失列 (32-40) =====
-            # 渐变段长度 (col 32)
-            _trl_text = _read_text(r, 32)
-            _trl = _read_float(r, 32)
-            if _trl_text:
-                node.transition_length = _trl
-            # 渐变段损失 (col 33)
-            _ht = _read_float(r, 33)
-            if _ht != 0:
-                node.head_loss_transition = _ht
-            # 弯道损失 (col 34)
-            _hb = _read_float(r, 34)
-            if _hb != 0:
-                node.head_loss_bend = _hb
-            # 沿程损失 (col 35)
-            _hf = _read_float(r, 35)
-            if _hf != 0:
-                node.head_loss_friction = _hf
-            # 预留损失 (col 36)
-            _hr = _read_float(r, 36)
-            if _hr > 0:
-                node.head_loss_reserve = _hr
-            # 过闸损失 (col 37)
-            _hg = _read_float(r, 37)
-            gate_loss_user_set = self._is_gate_loss_user_set_for_row(r, node)
-            if gate_loss_user_set:
-                node.head_loss_gate = _hg
-                self._set_gate_loss_user_set(node, True)
-            elif _hg > 0:
-                node.head_loss_gate = _hg
-            elif self._is_gate_like_structure_text(struct_str):
-                node.head_loss_gate = DEFAULT_GATE_HEAD_LOSS
-            # 倒虹吸/有压管道损失 (col 38)
-            _hs = _read_float(r, 38)
-            self._apply_pressure_pipe_loss_cell_to_node(node, _hs, channel_level=channel_level)
-            # 总损失 (col 39)
-            _htotal = _read_float(r, 39)
-            if _htotal != 0:
-                node.head_loss_total = _htotal
-            # 累计损失 (col 40)
-            _hcum = _read_float(r, 40)
-            if _hcum != 0:
-                node.head_loss_cumulative = _hcum
-
-            # ===== 高程列 (41-43) =====
-            _wl = _read_float(r, 41)
-            if _wl != 0:
-                node.water_level = _wl
-            _be = _read_float(r, 42)
-            if _be != 0:
-                node.bottom_elevation = _be
-            _te = _read_float(r, 43)
-            if _te != 0:
-                node.top_elevation = _te
-
-            # 恢复结构高度（用于计算渠顶高程，与Tkinter版 data_table.py 对齐）
-            if r in self._node_structure_heights:
-                node.structure_height = self._node_structure_heights[r]
-            if culvert_family_type and node.structure_height > 0:
-                node.section_params['H_total'] = node.structure_height
-            if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT:
-                if arch_culvert_theta_deg > 0:
-                    node.section_params['theta_deg'] = arch_culvert_theta_deg
-                if arch_culvert_H_straight is not None:
-                    node.section_params['H_straight'] = arch_culvert_H_straight
-                if arch_culvert_manual_H_straight is not None:
-                    node.section_params['manual_H_straight'] = arch_culvert_manual_H_straight
-                if arch_culvert_used_manual_H_straight is not None:
-                    node.section_params['used_manual_H_straight'] = arch_culvert_used_manual_H_straight
-            if struct_str == "隧洞-圆拱直墙型":
-                if node.structure_height > 0:
-                    node.section_params['H_total'] = node.structure_height
-                if tunnel_arch_theta_deg > 0:
-                    node.section_params['theta_deg'] = tunnel_arch_theta_deg
-                if tunnel_arch_H_straight is not None:
-                    node.section_params['H_straight'] = tunnel_arch_H_straight
-                if tunnel_arch_manual_H_straight is not None:
-                    node.section_params['manual_H_straight'] = tunnel_arch_manual_H_straight
-                if tunnel_arch_used_manual_H_straight is not None:
-                    node.section_params['used_manual_H_straight'] = tunnel_arch_used_manual_H_straight
-
-            # 恢复倒角参数（渡槽-矩形精确水力计算用）
-            if r in self._node_chamfer_params:
-                cp = self._node_chamfer_params[r]
-                node.section_params['chamfer_angle'] = cp.get('chamfer_angle', 0)
-                node.section_params['chamfer_length'] = cp.get('chamfer_length', 0)
-
-            # 恢复明渠-U形圆心角
-            if r in self._node_u_params:
-                node.section_params['theta_deg'] = self._node_u_params[r].get('theta_deg', 0)
-            # 恢复加大流速（从批量计算导入的加大流量工况流速）
-            if r in self._node_velocity_increased:
-                node.velocity_increased = self._node_velocity_increased[r]
-
-            self._migrate_named_pressure_pipe_outlet_visible_group_loss(node, row_index=r)
-
-            nodes.append(node)
-        self._pressure_turn_radius_fallback_groups = set()
+        table_state = self._capture_profile_table_state()
+        codec = ProfileNodeCodec(
+            table_state,
+            design_flows_text=self.design_flow_edit.text(),
+            roughness_text=self.roughness_edit.text(),
+            channel_level=self._get_current_channel_level_text(),
+            fallback_groups=self._pressure_turn_radius_fallback_groups,
+            node_factory=ChannelNode, structure_type=StructureType, in_out_type=InOutType,
+        )
+        nodes = codec.decode()
+        self._pressure_turn_radius_fallback_groups = codec._pressure_turn_radius_fallback_groups
+        self._profile_state.nodes = nodes
         return nodes
 
     def _collect_optional_blank_name_rows(self, nodes, channel_level: str | None = None):
@@ -9592,7 +8455,8 @@ class WaterProfilePanel(QWidget):
             position=InfoBarPosition.TOP,
         )
 
-    def _calculate(self):
+    def _prepare_calculation(self):
+        """界面线程完成校验，只向后台交付已确认的输入数据。"""
         if not self._ensure_downstream_ready("执行计算"):
             return
         if not CALCULATOR_AVAILABLE:
@@ -9604,111 +8468,189 @@ class WaterProfilePanel(QWidget):
                            parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
-        try:
-            settings = self._build_settings()
-            nodes = self._build_nodes_from_table()
-            if not nodes or len(nodes) < 2:
-                InfoBar.warning("数据不足", "有效节点不足", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
-                return
+        settings = self._build_settings()
+        nodes = self._build_nodes_from_table()
+        if not nodes or len(nodes) < 2:
+            InfoBar.warning("数据不足", "有效节点不足", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            return
 
-            # 前置检查：渐变段必须已插入
-            if not self._has_transition_topology_ready(nodes):
-                InfoBar.warning("提示",
-                               "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再执行计算。",
-                               parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-                return
+        # 前置检查：渐变段必须已插入
+        if not self._has_transition_topology_ready(nodes):
+            InfoBar.warning("提示",
+                           "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再执行计算。",
+                           parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
 
-            # 前置检查：倒虹吸水力计算
-            has_siphon = any(
-                n.structure_type and "倒虹吸" in n.structure_type.value
-                for n in nodes if n.structure_type
+        # 前置检查：倒虹吸水力计算
+        has_siphon = any(
+            n.structure_type and "倒虹吸" in n.structure_type.value
+            for n in nodes if n.structure_type
+        )
+        has_siphon_loss = any(
+            n.structure_type
+            and "倒虹吸" in n.structure_type.value
+            and getattr(n, 'in_out', None) is not None
+            and n.in_out.value == "出"
+            and (getattr(n, 'head_loss_siphon', 0.0) or 0.0) > 0
+            for n in nodes if n.structure_type
+        )
+        if has_siphon and not has_siphon_loss:
+            InfoBar.warning("提示",
+                           "检测到表格中包含倒虹吸，但尚未执行水力计算。"
+                           "请先点击【倒虹吸水力计算】按钮完成计算后，再点击【执行计算】。",
+                           parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
+
+        # 前置检查：只校验当前表3中确实需要写回的承压成员，锚点成员不再误报“未计算”。
+        missing_pressure_pipe_groups = self._collect_pending_pressure_pipe_execute_members(
+            nodes,
+            settings=settings,
+        )
+        if missing_pressure_pipe_groups:
+            InfoBar.warning(
+                "提示",
+                "检测到表格中包含有压管道同类结构（有压管道/定向钻/顶管），但尚未执行水力计算。"
+                "请先点击【有压管道水力计算】按钮完成计算后，再点击【执行计算】。",
+                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP
             )
-            has_siphon_loss = any(
-                n.structure_type
-                and "倒虹吸" in n.structure_type.value
-                and getattr(n, 'in_out', None) is not None
-                and n.in_out.value == "出"
-                and (getattr(n, 'head_loss_siphon', 0.0) or 0.0) > 0
-                for n in nodes if n.structure_type
-            )
-            if has_siphon and not has_siphon_loss:
-                InfoBar.warning("提示",
-                               "检测到表格中包含倒虹吸，但尚未执行水力计算。"
-                               "请先点击【倒虹吸水力计算】按钮完成计算后，再点击【执行计算】。",
-                               parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-                return
+            return
 
-            # 前置检查：只校验当前表3中确实需要写回的承压成员，锚点成员不再误报“未计算”。
-            missing_pressure_pipe_groups = self._collect_pending_pressure_pipe_execute_members(
-                nodes,
-                settings=settings,
-            )
-            if missing_pressure_pipe_groups:
-                InfoBar.warning(
-                    "提示",
-                    "检测到表格中包含有压管道同类结构（有压管道/定向钻/顶管），但尚未执行水力计算。"
-                    "请先点击【有压管道水力计算】按钮完成计算后，再点击【执行计算】。",
-                    parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP
-                )
-                return
+        calculator = WaterProfileCalculator(settings)
 
-            calculator = WaterProfileCalculator(settings)
-
-            # 验证输入
-            is_valid, errors = calculator.validate_input(nodes)
-            if not is_valid:
-                InfoBar.error("输入错误", "\n".join(errors),
-                             parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-                return
-
-            self._show_optional_blank_name_notice(nodes, action_name="计算")
-
-            calculated = calculator.calculate_all(nodes)
-            self.calculated_nodes = calculated
-            self._settings = settings
-
-            self._display_results(calculated, settings)
-            self._generate_detail_report(calculated, settings, calculator)
-
-            # 计算摘要
-            summary = calculator.get_calculation_summary(calculated)
-            total_len = summary.get('总长度', 0.0)
-            wl_drop = summary.get('水位落差', 0.0)
-
-            # 更新建筑物长度统计缓存
-            self._refresh_building_length_state(calculated, calculator)
-
-            # 更新持久摘要面板
-            self._update_summary_panel(calculated, total_len, wl_drop, summary)
-
-            # 检查缺少结构高度（渠顶高程无法计算）的节点。
-            # 承压类节点已有独立导出与展示口径，这里只提示真正依赖结构总高的普通渠道/隧洞节点。
-            missing_height_names = self._collect_missing_structure_height_names(calculated)
-
-            msg = f"共{len(calculated)}个节点，总长{total_len:.3f}m，水位落差{wl_drop:.3f}m"
-            gate_backfill_notice_lines = self._build_terminal_gate_backfill_notice_lines(calculated)
-            if gate_backfill_notice_lines:
-                msg += "\n" + "\n".join(gate_backfill_notice_lines)
-
-            has_gate_backfill_issue = any(
-                details.get("status") != "success"
-                for details in self._collect_terminal_gate_backfill_records(calculated)
-            )
-            self._show_calculation_completion_notice(
-                msg,
-                calculated,
-                missing_height_names=missing_height_names,
-                has_gate_backfill_issue=has_gate_backfill_issue,
-            )
-
-            self._switch_workspace_tab(self._tab_output)
-
-        except Exception as e:
-            InfoBar.error("计算错误", f"计算过程出错: {str(e)}",
+        # 验证输入
+        is_valid, errors = calculator.validate_input(nodes)
+        if not is_valid:
+            InfoBar.error("输入错误", "\n".join(errors),
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-            import traceback
-            self.detail_text.setPlainText(f"计算错误:\n{traceback.format_exc()}")
-            self._switch_to_output_process_tab(process_index=1)
+            return
+
+        self._show_optional_blank_name_notice(nodes, action_name="计算")
+
+        return nodes, settings, calculator
+
+    def _apply_calculation_result(self, calculated, settings, calculator):
+        """所有控件、报表与摘要更新统一回到界面线程。"""
+        self.calculated_nodes = calculated
+        self._settings = settings
+
+        self._display_results(calculated, settings)
+        self._generate_detail_report(calculated, settings, calculator)
+
+        # 计算摘要
+        summary = calculator.get_calculation_summary(calculated)
+        total_len = summary.get('总长度', 0.0)
+        wl_drop = summary.get('水位落差', 0.0)
+
+        # 更新建筑物长度统计缓存
+        self._refresh_building_length_state(calculated, calculator)
+
+        # 更新持久摘要面板
+        self._update_summary_panel(calculated, total_len, wl_drop, summary)
+
+        # 检查缺少结构高度（渠顶高程无法计算）的节点。
+        # 承压类节点已有独立导出与展示口径，这里只提示真正依赖结构总高的普通渠道/隧洞节点。
+        missing_height_names = self._collect_missing_structure_height_names(calculated)
+
+        msg = f"共{len(calculated)}个节点，总长{total_len:.3f}m，水位落差{wl_drop:.3f}m"
+        gate_backfill_notice_lines = self._build_terminal_gate_backfill_notice_lines(calculated)
+        if gate_backfill_notice_lines:
+            msg += "\n" + "\n".join(gate_backfill_notice_lines)
+
+        has_gate_backfill_issue = any(
+            details.get("status") != "success"
+            for details in self._collect_terminal_gate_backfill_records(calculated)
+        )
+        self._show_calculation_completion_notice(
+            msg,
+            calculated,
+            missing_height_names=missing_height_names,
+            has_gate_backfill_issue=has_gate_backfill_issue,
+        )
+
+        self._switch_workspace_tab(self._tab_output)
+
+        self.data_changed.emit()
+
+    def _show_calculation_error(self, error):
+        InfoBar.error("计算错误", f"计算过程出错: {error}",
+                      parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+        import traceback
+        self.detail_text.setPlainText("计算错误：\n" + ''.join(traceback.format_exception(type(error), error, error.__traceback__)))
+        self._switch_to_output_process_tab(process_index=1)
+
+    def _calculate(self):
+        """保留程序调用的同步兼容入口；真实按钮使用后台任务。"""
+        try:
+            prepared = self._prepare_calculation()
+            if prepared is None:
+                return
+            nodes, settings, calculator = prepared
+            self._apply_calculation_result(calculator.calculate_all(nodes), settings, calculator)
+        except Exception as error:
+            self._show_calculation_error(error)
+
+    @property
+    def calculation_runner(self):
+        return getattr(self, '_calculation_runner', None)
+
+    def is_calculation_running(self):
+        runner = self.calculation_runner
+        return bool(runner is not None and runner.isRunning())
+
+    def cancel_calculation(self):
+        if self.calculation_runner is not None:
+            self.calculation_runner.cancel()
+
+    def _calculation_input_snapshot(self):
+        return (self._capture_profile_table_state().to_dict(), self._build_settings().to_dict(),
+                bool(getattr(self, '_transition_topology_prepared', False)),
+                bool(getattr(self, '_section_sync_ready', False)))
+
+    def _on_calculation_running_changed(self, running):
+        self._btn_calc.setText("取消计算" if running else "执行计算")
+        # 修改输入仍可继续；会覆盖整表的其他计算流程在任务结束后再启用。
+        self._btn_section_calc.setEnabled(not running)
+        for button in (self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc):
+            button.setEnabled(not running and bool(self._section_sync_ready))
+
+    def _start_calculation(self):
+        """后台只运行快照计算；迟到、取消或输入变更的结果不写回。"""
+        if self.is_calculation_running():
+            self.cancel_calculation()
+            return False
+        if self._batch_backend.is_calculation_running():
+            return False
+        try:
+            prepared = self._prepare_calculation()
+            if prepared is None:
+                return False
+            nodes, settings, _ = prepared
+            expected = self._calculation_input_snapshot()
+            nodes, settings = copy.deepcopy((nodes, settings))
+            from app_渠系计算前端.task_runner import TaskRunner
+            from 推求水面线.core.calculation_service import calculate_profile
+            if self.calculation_runner is None:
+                self._calculation_runner = TaskRunner(self)
+                self._calculation_runner.running_changed.connect(self._on_calculation_running_changed)
+
+            def apply_result(result):
+                if expected != self._calculation_input_snapshot():
+                    InfoBar.warning("输入已更新", "本次计算期间输入已变化，请重新计算。",
+                                    parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+                    return
+                self._apply_calculation_result(result.nodes, result.settings, result.calculator)
+
+            def cancelled():
+                InfoBar.info("已取消", "已取消本次计算，保留上次完整结果。",
+                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+            self._calculation_runner.submit(
+                lambda token: calculate_profile(nodes, settings, token.raise_if_cancelled),
+                on_success=apply_result, on_error=self._show_calculation_error, on_cancelled=cancelled)
+            return True
+        except Exception as error:
+            self._show_calculation_error(error)
+            return False
 
     def _recalculate_silent(self):
         """静默重新推求水面线（跳过前置检查和InfoBar提示）。
@@ -9776,6 +8718,17 @@ class WaterProfilePanel(QWidget):
         """用计算后的完整节点数据重建统一表格（输入列+结果列）"""
         with self._table_batch_update(self.node_table):
             self._update_table_from_nodes_full_impl(nodes, prefix)
+            # 计算前后的同一节点保留行身份，新增/复制节点由状态适配器分配新身份。
+            for row, node in enumerate(nodes):
+                item = self.node_table.item(row, 0)
+                if item is not None:
+                    payload = item.data(Qt.UserRole)
+                    payload = dict(payload) if isinstance(payload, dict) else {}
+                    identity = str(getattr(node, 'profile_row_id', '') or '')
+                    if identity:
+                        payload[PROFILE_ROW_ID_KEY] = identity
+                        item.setData(Qt.UserRole, payload)
+            self._capture_profile_table_state()
             self._apply_table1_source_row_lock_flags()
         self._update_pressure_pipe_roughness_overview(
             self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes)
@@ -10412,7 +9365,7 @@ class WaterProfilePanel(QWidget):
                 group.setVisible(show_group)
                 changed = True
         if changed and self.isVisible():
-            QTimer.singleShot(0, self._adjust_splitter_for_settings)
+            QTimer.singleShot(0, self, self._adjust_splitter_for_settings)
 
     def _update_siphon_roughness_overview(self, pairs):
         """更新倒虹吸糙率芯片展示。
@@ -11563,24 +10516,7 @@ class WaterProfilePanel(QWidget):
             InfoBar.error("错误", f"打开倒虹吸计算窗口失败: {str(e)}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
-    @staticmethod
-    def _get_pressure_pipe_group_flow_section(group) -> str:
-        rows = getattr(group, "rows", None) or []
-        for node in rows:
-            fs = str(getattr(node, "flow_section", "") or "").strip()
-            if fs:
-                return fs
-        return "-"
 
-    @classmethod
-    def _build_pressure_pipe_group_identity(cls, group) -> str:
-        identity = str(getattr(group, "identity", "") or "").strip()
-        if identity:
-            return identity
-        return make_pressure_pipe_identity(
-            cls._get_pressure_pipe_group_flow_section(group),
-            getattr(group, "name", "") or ""
-        )
 
     @staticmethod
     def _is_valid_pressure_pipe_total_head_loss(value) -> bool:
@@ -13260,16 +12196,6 @@ class WaterProfilePanel(QWidget):
                     segment_by_identity[identity] = segment
         return route_by_key, segment_by_identity
 
-    @staticmethod
-    def _resolve_pressure_route_profile_state(route_key: str, route_profiles: dict, route_profile_segments_by_key: dict) -> str:
-        """归一化整线纵断面覆盖状态。"""
-        route_nodes = list((route_profiles or {}).get(route_key, []) or [])
-        if isinstance(route_key, str) and route_key and len(route_nodes) >= 2:
-            return "ok"
-        route_segments = list((route_profile_segments_by_key or {}).get(route_key, []) or [])
-        if route_segments:
-            return "ok"
-        return "not_imported"
 
     @classmethod
     def _build_pressure_route_payloads(cls, pressure_routes, route_profiles, route_profile_segments_by_key) -> list[dict]:
@@ -16640,7 +15566,7 @@ class WaterProfilePanel(QWidget):
             calc_content_desc=f'{ch_name}水面线推求计算' if ch_name else '水面线推求计算',
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n推求水面线',
+            calc_program_text=f'渠系建筑物水力计算系统 V{APP_VERSION}\n推求水面线',
         )
         doc.add_page_break()
 
@@ -16776,7 +15702,8 @@ class WaterProfilePanel(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        auto_resize_table(self.node_table)
+        from app_渠系计算前端.styles import schedule_table_resize
+        schedule_table_resize(self.node_table)
         width = event.size().width()
         if abs(width - self._last_layout_width) >= 8:
             self._last_layout_width = width
@@ -16795,7 +15722,8 @@ class WaterProfilePanel(QWidget):
             包含所有数据的字典
         """
         from 推求水面线.models.data_models import ChannelNode, ProjectSettings
-        
+
+        table_state = self._capture_profile_table_state()
         # 收集 UI 设置（控件当前值）
         ui_settings = {
             "channel_name": self.channel_name_edit.text().strip(),
@@ -16882,8 +15810,8 @@ class WaterProfilePanel(QWidget):
         if self._batch_backend and hasattr(self._batch_backend, "to_project_dict"):
             try:
                 batch_panel_compat = self._batch_backend.to_project_dict()
-            except Exception:
-                batch_panel_compat = {}
+            except Exception as exc:
+                raise RuntimeError(f"收集表1批量计算数据失败：{exc}") from exc
         merged_section = {
             "sync_ready": bool(getattr(self, "_section_sync_ready", False)),
             "transition_topology_prepared": bool(getattr(self, "_transition_topology_prepared", False)),
@@ -16920,6 +15848,7 @@ class WaterProfilePanel(QWidget):
             "project_settings": project_settings,
             "nodes": nodes_data,
             "calculated_nodes": calculated_nodes_data,
+            "table_state": table_state.to_dict(),
             "node_table_rows": table3_rows,
             "node_numeric_display_values": table3_numeric,
             "extra_caches": extra_caches,
@@ -16944,6 +15873,16 @@ class WaterProfilePanel(QWidget):
         """
         from 推求水面线.models.data_models import ChannelNode, ProjectSettings
         
+        restored_table_state = None
+        if 'table_state' in d:
+            restored_table_state = ProfileTableState.from_dict(d['table_state'])
+            if restored_table_state.column_count != self.node_table.columnCount():
+                raise ValueError("工程节点表列数与当前版本不一致")
+        if self.calculation_runner is not None:
+            self.calculation_runner.invalidate()
+        self._section_calculation_settings = None
+        self._section_calculation_table_state = None
+
         # 设置守卫标志，防止加载时触发脏状态和 cellChanged
         old_updating = self._updating_cells
         old_loading = getattr(self, '_loading_project', False)
@@ -16962,7 +15901,7 @@ class WaterProfilePanel(QWidget):
             ui = d.get("ui_settings", {})
             self._length_rule_nudge_seen = bool(ui.get("length_rule_nudge_seen", False))
             
-            if ui.get("channel_name"):
+            if "channel_name" in ui:
                 self.channel_name_edit.setText(ui["channel_name"])
             
             if ui.get("channel_level"):
@@ -16970,19 +15909,19 @@ class WaterProfilePanel(QWidget):
                 if idx >= 0:
                     self.channel_level_combo.setCurrentIndex(idx)
             
-            if ui.get("start_water_level"):
+            if "start_water_level" in ui:
                 self.start_wl_edit.setText(ui["start_water_level"])
             
-            if ui.get("design_flows_text"):
+            if "design_flows_text" in ui:
                 self.design_flow_edit.setText(ui["design_flows_text"])
             
-            if ui.get("max_flows_text"):
+            if "max_flows_text" in ui:
                 self.max_flow_edit.setText(ui["max_flows_text"])
             
-            if ui.get("start_station_text"):
+            if "start_station_text" in ui:
                 self.start_station_edit.setText(ui["start_station_text"])
             
-            if ui.get("roughness"):
+            if "roughness" in ui:
                 self.roughness_edit.setText(ui["roughness"])
             
             if "turn_radius" in ui:
@@ -16993,35 +15932,35 @@ class WaterProfilePanel(QWidget):
                 idx = self.trans_inlet_combo.findText(ui["trans_inlet_form"])
                 if idx >= 0:
                     self.trans_inlet_combo.setCurrentIndex(idx)
-            if ui.get("trans_inlet_zeta"):
+            if "trans_inlet_zeta" in ui:
                 self.trans_inlet_zeta.setText(ui["trans_inlet_zeta"])
             
             if ui.get("trans_outlet_form"):
                 idx = self.trans_outlet_combo.findText(ui["trans_outlet_form"])
                 if idx >= 0:
                     self.trans_outlet_combo.setCurrentIndex(idx)
-            if ui.get("trans_outlet_zeta"):
+            if "trans_outlet_zeta" in ui:
                 self.trans_outlet_zeta.setText(ui["trans_outlet_zeta"])
             
             if ui.get("oc_trans_form"):
                 idx = self.oc_trans_combo.findText(ui["oc_trans_form"])
                 if idx >= 0:
                     self.oc_trans_combo.setCurrentIndex(idx)
-            if ui.get("oc_trans_zeta"):
+            if "oc_trans_zeta" in ui:
                 self.oc_trans_zeta.setText(ui["oc_trans_zeta"])
             
             if ui.get("siphon_inlet_form"):
                 idx = self.siphon_inlet_combo.findText(ui["siphon_inlet_form"])
                 if idx >= 0:
                     self.siphon_inlet_combo.setCurrentIndex(idx)
-            if ui.get("siphon_inlet_zeta"):
+            if "siphon_inlet_zeta" in ui:
                 self.siphon_inlet_zeta.setText(ui["siphon_inlet_zeta"])
             
             if ui.get("siphon_outlet_form"):
                 idx = self.siphon_outlet_combo.findText(ui["siphon_outlet_form"])
                 if idx >= 0:
                     self.siphon_outlet_combo.setCurrentIndex(idx)
-            if ui.get("siphon_outlet_zeta"):
+            if "siphon_outlet_zeta" in ui:
                 self.siphon_outlet_zeta.setText(ui["siphon_outlet_zeta"])
             
             # 恢复 ProjectSettings
@@ -17165,7 +16104,7 @@ class WaterProfilePanel(QWidget):
             flow_segments_text = str(
                 merged_section.get("flow_segments_text", "") or batch_panel_compat.get("flow_segments", "")
             ).strip()
-            if flow_segments_text and hasattr(self, "_section_flow_segments_edit") and self._section_flow_segments_edit:
+            if hasattr(self, "_section_flow_segments_edit") and self._section_flow_segments_edit:
                 self._section_flow_segments_edit.setText(flow_segments_text)
             result_rows = merged_section.get("result_rows", [])
             if self._section_result_table and isinstance(result_rows, list) and result_rows:
@@ -17227,6 +16166,8 @@ class WaterProfilePanel(QWidget):
                     payload = payload if isinstance(payload, dict) else {}
                     payload.setdefault('_numeric_display_values', {})['26'] = {'text': text, 'value': raw_flow}
                     first_item.setData(Qt.UserRole, payload)
+            if restored_table_state is not None:
+                self._apply_profile_table_state(restored_table_state)
             if self.calculated_nodes:
                 self._repair_missing_transition_length_details(self.calculated_nodes)
                 self._repair_missing_transition_loss_details(self.calculated_nodes)
@@ -17264,7 +16205,16 @@ class WaterProfilePanel(QWidget):
             self._refresh_pressure_pipe_controls()
             self._switch_workspace_tab(self._tab_section_input)
             self._rebuild_calculation_summary_state(self._build_nodes_from_table())
-            QTimer.singleShot(0, self._adjust_splitter_for_settings)
+            # 撤销只属于当前工程，不能把上一工程的行或单元格带回来。
+            self._loss_undo_stack.clear()
+            self._loss_redo_stack.clear()
+            self._node_table_undo_stack.clear()
+            self._node_table_redo_stack.clear()
+            self._pre_edit_snapshot = None
+            self._pre_edit_cell_value = None
+            self._undo_group = 0
+            self._loss_delete_batch = None
+            QTimer.singleShot(0, self, self._adjust_splitter_for_settings)
             
         finally:
             self._updating_cells = old_updating
