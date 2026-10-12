@@ -28,6 +28,8 @@ from contextlib import contextmanager
 # 配置区（版本号从 version.py 读取，发版时只需修改 version.py）
 # ============================================================
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 构建依赖也可能触发 Windows WMI 查询，采用主程序已有的启动保护。
+import tools.pyinstaller_runtime_wmi_guard  # noqa: E402,F401
 from update_artifact_rules import is_runtime_artifact
 from tools import patch_policy
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
@@ -617,7 +619,7 @@ def _build_update_helper(app_dist_dir: str):
     helper_workdir = os.path.join(BUILD_DIR, "update_helper")
     os.makedirs(helper_workdir, exist_ok=True)
     args = [
-        _project_python(), "-m", "PyInstaller",
+        _project_python(), os.path.join(PROJECT_ROOT, "tools", "pyinstaller_safe_main.py"),
         "--noconfirm",
         "--clean",
         "--onefile",
@@ -673,7 +675,7 @@ def build(bump: str = None):
 
     # ---- 构建 PyInstaller 参数 ----
     args = [
-        _project_python(), "-m", "PyInstaller",
+        _project_python(), os.path.join(PROJECT_ROOT, "tools", "pyinstaller_safe_main.py"),
         "--noconfirm",                      # 不询问确认
         "--clean",                          # 清理临时文件
         "--windowed",                       # 隐藏控制台窗口

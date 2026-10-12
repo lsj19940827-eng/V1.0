@@ -1,0 +1,469 @@
+{
+  "runs": [
+    {
+      "import_ms": 736.0453000001144,
+      "construct_ms": 263.2721000118181,
+      "click_handler_ms": 1087.1712000080151,
+      "first_display_ms": 1124.4348000036553,
+      "profile_top": [
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method mouseClick>",
+          "calls": 1,
+          "total_ms": 0.38320000000000004,
+          "cumulative_ms": 1087.1577000000002
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\qfluentwidgets\\components\\widgets\\button.py",
+          "line": 80,
+          "function": "mouseReleaseEvent",
+          "calls": 1,
+          "total_ms": 0.0057,
+          "cumulative_ms": 1083.2142000000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<function PushButton.mouseReleaseEvent at 0x0000013898038540>",
+          "calls": 1,
+          "total_ms": 0.0219,
+          "cumulative_ms": 1083.2085
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\app.py",
+          "line": 400,
+          "function": "<lambda>",
+          "calls": 1,
+          "total_ms": 0.0059,
+          "cumulative_ms": 1083.1866
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\app.py",
+          "line": 768,
+          "function": "_switch_to",
+          "calls": 1,
+          "total_ms": 0.0435,
+          "cumulative_ms": 1083.1807
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\panel_registry.py",
+          "line": 51,
+          "function": "get",
+          "calls": 1,
+          "total_ms": 0.013800000000000002,
+          "cumulative_ms": 1061.6438
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\app.py",
+          "line": 301,
+          "function": "<lambda>",
+          "calls": 1,
+          "total_ms": 0.0036000000000000003,
+          "cumulative_ms": 999.3278000000001
+        },
+        {
+          "file": "D:\\V1.0\\tools\\benchmark_water_profile_switch.py",
+          "line": 38,
+          "function": "measured_factory",
+          "calls": 1,
+          "total_ms": 0.022000000000000002,
+          "cumulative_ms": 999.3242000000001
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 1349,
+          "function": "_find_and_load",
+          "calls": 586,
+          "total_ms": 2.9805,
+          "cumulative_ms": 745.0462
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 1304,
+          "function": "_find_and_load_unlocked",
+          "calls": 585,
+          "total_ms": 2.2205000000000004,
+          "cumulative_ms": 744.8917
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 911,
+          "function": "_load_unlocked",
+          "calls": 561,
+          "total_ms": 1.5849000000000002,
+          "cumulative_ms": 743.5217
+        },
+        {
+          "file": "<frozen importlib._bootstrap_external>",
+          "line": 1020,
+          "function": "exec_module",
+          "calls": 503,
+          "total_ms": 1.0817,
+          "cumulative_ms": 743.3334
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 480,
+          "function": "_call_with_frames_removed",
+          "calls": 1267,
+          "total_ms": 0.7651,
+          "cumulative_ms": 736.1388000000001
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\importlib\\__init__.py",
+          "line": 71,
+          "function": "import_module",
+          "calls": 12,
+          "total_ms": 0.02,
+          "cumulative_ms": 736.041
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 1375,
+          "function": "_gcd_import",
+          "calls": 13,
+          "total_ms": 0.0182,
+          "cumulative_ms": 736.0375
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.exec>",
+          "calls": 537,
+          "total_ms": 18.6937,
+          "cumulative_ms": 735.4135
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\water_profile\\panel.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.3076,
+          "cumulative_ms": 731.2501
+        },
+        {
+          "file": "D:\\V1.0\\推求水面线\\utils\\__init__.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.03200000000000001,
+          "cumulative_ms": 666.3958000000001
+        },
+        {
+          "file": "D:\\V1.0\\推求水面线\\utils\\excel_io.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.0227,
+          "cumulative_ms": 648.4313000000001
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\pandas\\__init__.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.12530000000000002,
+          "cumulative_ms": 365.2638
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\openpyxl\\__init__.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.0357,
+          "cumulative_ms": 281.17350000000005
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\water_profile\\panel.py",
+          "line": 1425,
+          "function": "__init__",
+          "calls": 1,
+          "total_ms": 0.127,
+          "cumulative_ms": 263.2601
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\openpyxl\\workbook\\__init__.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.0104,
+          "cumulative_ms": 260.1575
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\openpyxl\\workbook\\workbook.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.1453,
+          "cumulative_ms": 259.2499
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.__import__>",
+          "calls": 81,
+          "total_ms": 0.1888,
+          "cumulative_ms": 249.9735
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\water_profile\\panel.py",
+          "line": 1562,
+          "function": "_init_ui",
+          "calls": 1,
+          "total_ms": 0.1273,
+          "cumulative_ms": 212.21060000000003
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\pandas\\core\\api.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.11420000000000001,
+          "cumulative_ms": 196.9454
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\openpyxl\\writer\\excel.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.0892,
+          "cumulative_ms": 161.43200000000002
+        },
+        {
+          "file": "shibokensupport/signature/loader.py",
+          "line": 67,
+          "function": "feature_imported",
+          "calls": 5819,
+          "total_ms": 2.3225000000000002,
+          "cumulative_ms": 143.73940000000002
+        },
+        {
+          "file": "shibokensupport/feature.py",
+          "line": 134,
+          "function": "feature_imported",
+          "calls": 5819,
+          "total_ms": 2.8858,
+          "cumulative_ms": 141.4169
+        },
+        {
+          "file": "shibokensupport/feature.py",
+          "line": 150,
+          "function": "_mod_uses_pyside",
+          "calls": 495,
+          "total_ms": 4.8989,
+          "cumulative_ms": 137.60510000000002
+        },
+        {
+          "file": "<frozen importlib._bootstrap_external>",
+          "line": 1093,
+          "function": "get_code",
+          "calls": 503,
+          "total_ms": 3.3251,
+          "cumulative_ms": 135.1859
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\inspect.py",
+          "line": 1252,
+          "function": "getsource",
+          "calls": 495,
+          "total_ms": 0.4109,
+          "cumulative_ms": 132.7062
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\inspect.py",
+          "line": 1231,
+          "function": "getsourcelines",
+          "calls": 495,
+          "total_ms": 0.9376,
+          "cumulative_ms": 126.2114
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\inspect.py",
+          "line": 1052,
+          "function": "findsource",
+          "calls": 495,
+          "total_ms": 1.5552000000000001,
+          "cumulative_ms": 122.9668
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method qWait>",
+          "calls": 1,
+          "total_ms": 86.64760000000001,
+          "cumulative_ms": 121.6121
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 1390,
+          "function": "_handle_fromlist",
+          "calls": 685,
+          "total_ms": 0.8448,
+          "cumulative_ms": 121.4115
+        },
+        {
+          "file": "<frozen importlib._bootstrap>",
+          "line": 1240,
+          "function": "_find_spec",
+          "calls": 570,
+          "total_ms": 3.4985000000000004,
+          "cumulative_ms": 113.98680000000002
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\openpyxl\\packaging\\manifest.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.0497,
+          "cumulative_ms": 108.9351
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\pandas\\core\\groupby\\__init__.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.020600000000000004,
+          "cumulative_ms": 107.795
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\mimetypes.py",
+          "line": 72,
+          "function": "__init__",
+          "calls": 2,
+          "total_ms": 0.0766,
+          "cumulative_ms": 107.3854
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\mimetypes.py",
+          "line": 387,
+          "function": "init",
+          "calls": 1,
+          "total_ms": 0.018900000000000004,
+          "cumulative_ms": 107.22970000000001
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\mimetypes.py",
+          "line": 252,
+          "function": "read_windows_registry",
+          "calls": 1,
+          "total_ms": 0.0054,
+          "cumulative_ms": 106.70760000000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method _winapi._mimetypes_read_windows_registry>",
+          "calls": 1,
+          "total_ms": 106.00780000000002,
+          "cumulative_ms": 106.7022
+        },
+        {
+          "file": "<frozen importlib._bootstrap_external>",
+          "line": 1551,
+          "function": "find_spec",
+          "calls": 566,
+          "total_ms": 0.4393000000000001,
+          "cumulative_ms": 106.6859
+        },
+        {
+          "file": "<frozen importlib._bootstrap_external>",
+          "line": 1522,
+          "function": "_get_spec",
+          "calls": 570,
+          "total_ms": 1.2283000000000002,
+          "cumulative_ms": 106.24660000000002
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\pandas\\core\\groupby\\generic.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.1338,
+          "cumulative_ms": 106.119
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method nt.stat>",
+          "calls": 2632,
+          "total_ms": 104.3906,
+          "cumulative_ms": 104.3906
+        },
+        {
+          "file": "<frozen importlib._bootstrap_external>",
+          "line": 1624,
+          "function": "find_spec",
+          "calls": 790,
+          "total_ms": 5.018,
+          "cumulative_ms": 97.46740000000001
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\linecache.py",
+          "line": 32,
+          "function": "getlines",
+          "calls": 450,
+          "total_ms": 0.9011,
+          "cumulative_ms": 89.95850000000002
+        },
+        {
+          "file": "F:\\装机必备软件\\Python\\Lib\\linecache.py",
+          "line": 102,
+          "function": "updatecache",
+          "calls": 443,
+          "total_ms": 2.5271,
+          "cumulative_ms": 89.05640000000001
+        },
+        {
+          "file": "<frozen importlib._bootstrap_external>",
+          "line": 145,
+          "function": "_path_stat",
+          "calls": 2182,
+          "total_ms": 0.926,
+          "cumulative_ms": 87.99650000000001
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\pandas\\core\\frame.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.2108,
+          "cumulative_ms": 87.02520000000001
+        },
+        {
+          "file": "D:\\V1.0\\app_渠系计算前端\\water_profile\\panel.py",
+          "line": 1583,
+          "function": "_build_top_area",
+          "calls": 1,
+          "total_ms": 0.8553000000000001,
+          "cumulative_ms": 77.9672
+        },
+        {
+          "file": "D:\\V1.0\\.venv\\Lib\\site-packages\\openpyxl\\worksheet\\worksheet.py",
+          "line": 1,
+          "function": "<module>",
+          "calls": 1,
+          "total_ms": 0.1922,
+          "cumulative_ms": 74.5973
+        }
+      ],
+      "event_loop_max_gap_ms": 1088.991900003748,
+      "input_rows": 0,
+      "platform": "windows",
+      "window_visible": true,
+      "repeat_display_ms": [
+        22.42340000520926,
+        25.709400011692196,
+        32.286400004522875
+      ]
+    }
+  ],
+  "median_ms": {
+    "import_ms": 736.0453000001144,
+    "construct_ms": 263.2721000118181,
+    "click_handler_ms": 1087.1712000080151,
+    "first_display_ms": 1124.4348000036553,
+    "event_loop_max_gap_ms": 1088.991900003748
+  },
+  "repeat_median_ms": 25.709400011692196
+}

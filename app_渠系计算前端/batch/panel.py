@@ -883,7 +883,7 @@ class BatchPanel(QWidget):
     # ================================================================
     # 输入区
     # ================================================================
-    def _build_input_area(self, parent):
+    def _build_input_area(self, parent, *, show_toolbars=True):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
@@ -922,75 +922,18 @@ class BatchPanel(QWidget):
         fg.addStretch()
         lay.addWidget(flow_grp)
 
-        # 工具栏 —— 第一行：标题 + 核心按钮 + 复选框
-        tb1 = QHBoxLayout()
-        tb1.setSpacing(6)
-        lbl = QLabel("输入参数表")
-        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
-        tb1.addWidget(lbl)
-
-        btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self.start_calculation)
-        self._calculate_button = btn_calc
-        self._cancel_calculation_button = PushButton("取消计算")
+        # 嵌入工作区仍保留计算状态与复选框接口，但不用创建重复工具栏和菜单。
+        self._calculate_button = PrimaryPushButton("开始批量计算", parent)
+        self._calculate_button.clicked.connect(self.start_calculation)
+        self._cancel_calculation_button = PushButton("取消计算", parent)
         self._cancel_calculation_button.clicked.connect(self.cancel_calculation)
         self._cancel_calculation_button.setVisible(False)
-        _sample_menu = RoundMenu(parent=self)
-        _sample_menu.addAction(Action("示例一（综合演示）", triggered=self._add_sample_data))
-        _sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._add_sample_data_2))
-        _sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._add_sample_data_3))
-        _sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._add_sample_data_4))
-        _sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._add_sample_data_5))
-        _sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._add_sample_data_6))
-        _sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._add_sample_data_7))
-        _sample_menu.addAction(Action("示例八（江家坝支管）", triggered=self._add_sample_data_8))
-        _sample_menu.addAction(Action("示例九（赛金支渠）", triggered=self._add_sample_data_9))
-        _sample_menu.addAction(Action("示例十（苏溪支渠）", triggered=self._add_sample_data_10))
-        btn_sample = DropDownPushButton("示例数据")
-        btn_sample.setMenu(_sample_menu)
-        _template_menu = RoundMenu(parent=self)
-        _template_menu.addAction(Action("示例一（综合演示）", triggered=lambda: self._open_excel_template_file("blank")))
-        _template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_excel_template_file("longtang")))
-        _template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_excel_template_file("luojisi")))
-        _template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_excel_template_file("feilong")))
-        _template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_excel_template_file("chating")))
-        _template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_excel_template_file("hezuo")))
-        _template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_excel_template_file("ganjiagou")))
-        _template_menu.addAction(Action("示例八（江家坝支管）", triggered=lambda: self._open_excel_template_file("jiangjiaba")))
-        _template_menu.addAction(Action("示例九（赛金支渠）", triggered=lambda: self._open_excel_template_file("saijin")))
-        _template_menu.addAction(Action("示例十（苏溪支渠）", triggered=lambda: self._open_excel_template_file("suxi")))
-        btn_template = DropDownPushButton("打开Excel模板")
-        btn_template.setMenu(_template_menu)
-        btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
-        self.detail_cb = CheckBox("展示详细计算过程")
+        self.detail_cb = CheckBox("展示详细计算过程", parent)
         self.detail_cb.setChecked(True)
-        self.inc_cb = CheckBox("考虑加大流量")
+        self.inc_cb = CheckBox("考虑加大流量", parent)
         self.inc_cb.setChecked(True)
-
-        for w in [btn_import, btn_calc, self._cancel_calculation_button, btn_sample, btn_template]:
-            tb1.addWidget(w)
-        tb1.addStretch()
-        tb1.addWidget(self.inc_cb)
-        tb1.addWidget(self.detail_cb)
-        lay.addLayout(tb1)
-
-        # 工具栏 —— 第二行：表格操作（左对齐）+ 提示（右对齐）
-        tb2 = QHBoxLayout()
-        tb2.setSpacing(6)
-
-        btn_add = PushButton("新增行"); btn_add.clicked.connect(self._add_row)
-        btn_insert = PushButton("插入行"); btn_insert.clicked.connect(self._insert_row)
-        btn_del = PushButton("删除行"); btn_del.clicked.connect(self._del_row)
-        btn_copy = PushButton("复制行"); btn_copy.clicked.connect(self._copy_row)
-        btn_clear = PushButton("清空输入"); btn_clear.clicked.connect(self._clear_input)
-        btn_param = PushButton("参数设置"); btn_param.clicked.connect(self._open_parameter_dialog)
-
-        for w in [btn_add, btn_insert, btn_del, btn_copy, btn_clear, btn_param]:
-            tb2.addWidget(w)
-        tb2.addStretch()
-        hint_label = QLabel("提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型")
-        hint_label.setStyleSheet("font-size:12px;font-weight:600;color:#0B5CAD;")
-        tb2.addWidget(hint_label)
-        lay.addLayout(tb2)
+        if show_toolbars:
+            self._build_input_toolbars(lay)
 
         # 输入表格
         self.input_table = FrozenColumnTableWidget(0, len(INPUT_HEADERS), frozen_count=4)
@@ -1034,13 +977,74 @@ class BatchPanel(QWidget):
         self.input_table.deleteFinished.connect(self._finish_delete_input_cells)
         self.input_table.currentCellChanged.connect(self._on_current_cell_changed_undo)
 
-        # 操作提示
-        hint = QLabel("提示: Ctrl+C 复制 | Ctrl+V 粘贴 | Ctrl+A 全选 | Ctrl+D 填充向下 | Ctrl+Z 撤销 | Ctrl+Y 重做 | Delete 清空 | Tab 右移 | Enter 下移 | 双击断面类型列可选择 | 右键菜单插入/删除行")
-        hint.setStyleSheet(
-            "font-size:12px;font-weight:600;color:#9A3412;"
-            "background:#FFF4E5;border:1px solid #F3C88B;border-radius:4px;padding:4px 8px;"
-        )
-        lay.addWidget(hint)
+        if show_toolbars:
+            # 独立界面的操作提示；嵌入工作区使用自己的提示栏。
+            hint = QLabel("提示: Ctrl+C 复制 | Ctrl+V 粘贴 | Ctrl+A 全选 | Ctrl+D 填充向下 | Ctrl+Z 撤销 | Ctrl+Y 重做 | Delete 清空 | Tab 右移 | Enter 下移 | 双击断面类型列可选择 | 右键菜单插入/删除行")
+            hint.setStyleSheet(
+                "font-size:12px;font-weight:600;color:#9A3412;"
+                "background:#FFF4E5;border:1px solid #F3C88B;border-radius:4px;padding:4px 8px;"
+            )
+            lay.addWidget(hint)
+
+    def _build_input_toolbars(self, lay):
+        """仅为独立批量界面创建菜单和操作栏，表格构造与编辑连线保持共享。"""
+        tb1 = QHBoxLayout()
+        tb1.setSpacing(6)
+        lbl = QLabel("输入参数表")
+        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
+        tb1.addWidget(lbl)
+
+        _sample_menu = RoundMenu(parent=self)
+        _sample_menu.addAction(Action("示例一（综合演示）", triggered=self._add_sample_data))
+        _sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._add_sample_data_2))
+        _sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._add_sample_data_3))
+        _sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._add_sample_data_4))
+        _sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._add_sample_data_5))
+        _sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._add_sample_data_6))
+        _sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._add_sample_data_7))
+        _sample_menu.addAction(Action("示例八（江家坝支管）", triggered=self._add_sample_data_8))
+        _sample_menu.addAction(Action("示例九（赛金支渠）", triggered=self._add_sample_data_9))
+        _sample_menu.addAction(Action("示例十（苏溪支渠）", triggered=self._add_sample_data_10))
+        btn_sample = DropDownPushButton("示例数据")
+        btn_sample.setMenu(_sample_menu)
+        _template_menu = RoundMenu(parent=self)
+        _template_menu.addAction(Action("示例一（综合演示）", triggered=lambda: self._open_excel_template_file("blank")))
+        _template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_excel_template_file("longtang")))
+        _template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_excel_template_file("luojisi")))
+        _template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_excel_template_file("feilong")))
+        _template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_excel_template_file("chating")))
+        _template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_excel_template_file("hezuo")))
+        _template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_excel_template_file("ganjiagou")))
+        _template_menu.addAction(Action("示例八（江家坝支管）", triggered=lambda: self._open_excel_template_file("jiangjiaba")))
+        _template_menu.addAction(Action("示例九（赛金支渠）", triggered=lambda: self._open_excel_template_file("saijin")))
+        _template_menu.addAction(Action("示例十（苏溪支渠）", triggered=lambda: self._open_excel_template_file("suxi")))
+        btn_template = DropDownPushButton("打开Excel模板")
+        btn_template.setMenu(_template_menu)
+        btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
+
+        for w in [btn_import, self._calculate_button, self._cancel_calculation_button, btn_sample, btn_template]:
+            tb1.addWidget(w)
+        tb1.addStretch()
+        tb1.addWidget(self.inc_cb)
+        tb1.addWidget(self.detail_cb)
+        lay.addLayout(tb1)
+
+        # 第二行表格操作与原独立界面保持一致。
+        tb2 = QHBoxLayout()
+        tb2.setSpacing(6)
+        btn_add = PushButton("新增行"); btn_add.clicked.connect(self._add_row)
+        btn_insert = PushButton("插入行"); btn_insert.clicked.connect(self._insert_row)
+        btn_del = PushButton("删除行"); btn_del.clicked.connect(self._del_row)
+        btn_copy = PushButton("复制行"); btn_copy.clicked.connect(self._copy_row)
+        btn_clear = PushButton("清空输入"); btn_clear.clicked.connect(self._clear_input)
+        btn_param = PushButton("参数设置"); btn_param.clicked.connect(self._open_parameter_dialog)
+        for w in [btn_add, btn_insert, btn_del, btn_copy, btn_clear, btn_param]:
+            tb2.addWidget(w)
+        tb2.addStretch()
+        hint_label = QLabel("提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型")
+        hint_label.setStyleSheet("font-size:12px;font-weight:600;color:#0B5CAD;")
+        tb2.addWidget(hint_label)
+        lay.addLayout(tb2)
 
     def _on_cell_changed(self, row, col):
         """单元格编辑完成后的回调（与原版_on_input_end_edit_cell一致）"""
@@ -1969,25 +1973,26 @@ class BatchPanel(QWidget):
     # ================================================================
     # 结果区
     # ================================================================
-    def _build_result_area(self, parent):
+    def _build_result_area(self, parent, *, show_toolbars=True):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
-        # 工具栏
-        tb = QHBoxLayout()
-        lbl = QLabel("计算结果")
-        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
-        tb.addWidget(lbl)
-        tb.addStretch()
-        btn_excel = PushButton("导出Excel报告"); btn_excel.clicked.connect(self._export_excel)
-        btn_word = PushButton("导出详细过程(Word)"); btn_word.clicked.connect(self._export_word)
-        btn_clr = PushButton("清空结果"); btn_clr.clicked.connect(self._clear_results)
+        # 嵌入模式保留导出状态接口，避免构造不会显示的重复操作栏。
+        btn_excel = PushButton("导出Excel报告", parent); btn_excel.clicked.connect(self._export_excel)
+        btn_word = PushButton("导出详细过程(Word)", parent); btn_word.clicked.connect(self._export_word)
         self._btn_export_excel = btn_excel
         self._btn_export_word = btn_word
-        for w in [btn_excel, btn_word, btn_clr]:
-            tb.addWidget(w)
-        lay.addLayout(tb)
+        if show_toolbars:
+            tb = QHBoxLayout()
+            lbl = QLabel("计算结果")
+            lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
+            tb.addWidget(lbl)
+            tb.addStretch()
+            btn_clr = PushButton("清空结果"); btn_clr.clicked.connect(self._clear_results)
+            for w in [btn_excel, btn_word, btn_clr]:
+                tb.addWidget(w)
+            lay.addLayout(tb)
 
         # 失败锁定警告条（初始隐藏）
         from PySide6.QtWidgets import QLabel as _QL
@@ -4611,8 +4616,8 @@ class BatchEditor(BatchPanel):
     def _init_ui(self):
         self.input_component = QWidget(self)
         self.result_component = QWidget(self)
-        self._build_input_area(self.input_component)
-        self._build_result_area(self.result_component)
+        self._build_input_area(self.input_component, show_toolbars=False)
+        self._build_result_area(self.result_component, show_toolbars=False)
         # 工作区会重新挂接可见控件，未嵌入的辅助设置容器不能遮挡父页面。
         self.hide()
 

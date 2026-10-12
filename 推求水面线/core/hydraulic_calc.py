@@ -191,6 +191,98 @@ class HydraulicCalculator:
             "effective_length": effective_length,
         }
 
+    def _gate_approach_reference(self, nodes, gate_index):
+        """闸本体没有断面参数，来流区间采用同流量段上游的有效断面。"""
+        gate = nodes[gate_index]
+        for index in range(gate_index - 1, -1, -1):
+            candidate = nodes[index]
+            if candidate.is_transition or self._is_gate_elevation_target(candidate):
+                continue
+            if str(candidate.flow_section) != str(gate.flow_section):
+                continue
+            slope = self._finite_float_or_none(candidate.slope_i)
+            if slope is not None and slope > 0:
+                return index, candidate
+            if candidate.water_depth > 0 and candidate.velocity > 0 and candidate.roughness > 0:
+                return index, candidate
+        return None, None
+
+    def _calculate_gate_approach_losses(self, nodes, previous_index, gate_index, transition_length):
+        """计入上游节点至闸的有长区间，闸体局部损失仍由过闸项单列。"""
+        previous = nodes[previous_index]
+        gate = nodes[gate_index]
+        context = self._build_effective_length_context(previous, gate, transition_length)
+        gate.head_loss_friction = 0.0
+        gate.head_loss_bend = 0.0
+        gate.head_loss_local = 0.0
+        gate.friction_calc_details = {}
+        gate.bend_calc_details = {}
+        if context['effective_length'] > ZERO_TOLERANCE:
+            reference_index, reference = self._gate_approach_reference(nodes, gate_index)
+            if reference is None:
+                raise ValueError(f"{gate.name or '闸'}上游至闸存在有长来流区间，但同流量段缺少有效底坡或断面，无法完整计算沿程损失")
+            # 临时借用水力断面，保留两个实际端点的桩号和弧段；不向闸写入虚构断面。
+            target = copy.copy(reference)
+            start = copy.copy(reference) if self._is_gate_elevation_target(previous) else copy.copy(previous)
+            for temporary, original in ((start, previous), (target, gate)):
+                for attribute in ('station_MC', 'station_BC', 'station_EC', 'arc_length', 'curve_length', 'turn_radius'):
+                    setattr(temporary, attribute, getattr(original, attribute))
+            gate.head_loss_friction = self.calculate_friction_loss(start, target, transition_length)
+            gate.friction_calc_details = dict(target.friction_calc_details)
+            gate.friction_calc_details.update(
+                source='gate_approach', reference_row=reference_index + 1,
+                reference_name=reference.name, reference_flow_section=reference.flow_section,
+            )
+            gate.head_loss_bend = self.calculate_open_channel_interval_bend_loss(start, target)
+            gate.bend_calc_details = dict(target.bend_calc_details)
+        gate.head_loss_total = (
+            gate.head_loss_friction + gate.head_loss_bend
+            + (gate.head_loss_reserve or 0.0) + (gate.head_loss_gate or 0.0)
+        )
+
+    @staticmethod
+    def _set_gate_water_levels(previous, gate, transition_loss):
+        """先到达实际闸前边界，再扣过闸损失，另列渐变损失不重复进入本行总损失。"""
+        incoming_loss = (
+            (gate.head_loss_friction or 0.0) + (gate.head_loss_bend or 0.0)
+            + (gate.head_loss_local or 0.0) + (gate.head_loss_reserve or 0.0)
+        )
+        gate.gate_upstream_water_level = previous.water_level - incoming_loss - transition_loss
+        gate.gate_downstream_water_level = gate.gate_upstream_water_level - (gate.head_loss_gate or 0.0)
+        gate.water_level = gate.gate_downstream_water_level
+
+    def _capture_auto_bed_overrides(self, nodes):
+        """完整重算前识别自动几何成果被单独改过的字段，保留明确输入。"""
+        for node in nodes:
+            if not node.is_auto_inserted_channel:
+                continue
+            source = node.connection_source_details
+            old = source.get('gate_bed_profile', {})
+            if not isinstance(old, dict) or not old.get('success'):
+                continue
+            for field in ('bottom_elevation', 'top_elevation'):
+                current = self._finite_float_or_none(getattr(node, field))
+                previous = self._finite_float_or_none(old.get(field))
+                if current is not None and previous is not None and not math.isclose(current, previous, abs_tol=1e-9):
+                    source['gate_bed_manual_' + field] = current
+
+    def _update_regular_elevations(self, node):
+        """常规行按设计水深拟床；闸后自动段的独立床面字段保持优先。"""
+        if node.water_depth <= 0:
+            return
+        source = node.connection_source_details if node.is_auto_inserted_channel else {}
+        manual_bottom = self._finite_float_or_none(source.get('gate_bed_manual_bottom_elevation'))
+        manual_top = self._finite_float_or_none(source.get('gate_bed_manual_top_elevation'))
+        node.bottom_elevation = manual_bottom if manual_bottom is not None else node.water_level - node.water_depth
+        if node.is_auto_inserted_channel and manual_bottom is None:
+            source['computed_profile_bottom_elevation'] = node.bottom_elevation
+        if manual_top is not None:
+            node.top_elevation = manual_top
+        elif node.structure_height > 0:
+            node.top_elevation = node.bottom_elevation + node.structure_height
+            if node.is_auto_inserted_channel:
+                source['computed_profile_top_elevation'] = node.top_elevation
+
     @staticmethod
     def _normalize_pressure_pipe_window_override(value) -> Dict[str, object]:
         """兼容旧计算入口，统一采用专项结果契约。"""
@@ -1937,6 +2029,11 @@ class HydraulicCalculator:
         - 渐变段行不显示水位和渠底高程
         - 渐变段损失计入下游节点的水位计算
         """
+        # 两侧水位属于本次闸计算成果，重算前清除历史字段及非闸残留。
+        for node in nodes:
+            node.gate_upstream_water_level = None
+            node.gate_downstream_water_level = None
+        self._capture_auto_bed_overrides(nodes)
         # 设置起点水位（第一个非渐变段节点）
         first_regular_node = None
         first_regular_node_idx = 0
@@ -1982,6 +2079,9 @@ class HydraulicCalculator:
         
         if first_regular_node:
             first_regular_node.water_level = self.settings.start_water_level
+            if getattr(first_regular_node, 'is_diversion_gate', False):
+                # 起点已知的是本行闸后水位，没有上游边界时不反推闸前。
+                first_regular_node.gate_downstream_water_level = first_regular_node.water_level
             if first_regular_node.water_depth > 0:
                 first_regular_node.bottom_elevation = first_regular_node.water_level - first_regular_node.water_depth
                 if first_regular_node.structure_height > 0:
@@ -2043,18 +2143,13 @@ class HydraulicCalculator:
             self._validate_spillway_downstream_boundary(prev_regular_node, curr_node)
             
             # ===== 闸类型特殊处理（分水闸/分水口/泄水闸/节制闸等） =====
-            # 闸是点状结构，仅产生过闸水头损失，不计算沿程/弯道/局部损失
+            # 闸体为点状，但上一常规节点至闸的有长来流区间仍须计损。
             if getattr(curr_node, 'is_diversion_gate', False):
-                head_loss_gate = getattr(curr_node, 'head_loss_gate', 0.0) or 0.0
-                
-                # 水位 = 前一节点水位 - 过闸水头损失
-                curr_node.water_level = prev_regular_node.water_level - head_loss_gate
-                
-                # 各项损失清零（仅过闸损失有效）
-                curr_node.head_loss_friction = 0.0
-                curr_node.head_loss_bend = 0.0
-                curr_node.head_loss_local = 0.0
-                curr_node.head_loss_total = head_loss_gate
+                transition_loss, transition_length = self._estimate_transition_loss_between(
+                    nodes, prev_regular_node_idx, i, prev_regular_node, curr_node,
+                )
+                self._calculate_gate_approach_losses(nodes, prev_regular_node_idx, i, transition_length)
+                self._set_gate_water_levels(prev_regular_node, curr_node, transition_loss)
                 
                 # 更新状态
                 prev_regular_node = curr_node
@@ -2185,11 +2280,7 @@ class HydraulicCalculator:
                 )
             
             # 计算渠底高程
-            if curr_node.water_depth > 0:
-                curr_node.bottom_elevation = curr_node.water_level - curr_node.water_depth
-                # 计算渠顶高程 = 渠底高程 + 结构高度
-                if curr_node.structure_height > 0:
-                    curr_node.top_elevation = curr_node.bottom_elevation + curr_node.structure_height
+            self._update_regular_elevations(curr_node)
             
             # 更新状态
             prev_regular_node = curr_node
@@ -2209,6 +2300,11 @@ class HydraulicCalculator:
         if not nodes:
             return
 
+        # 最终递推重新生成闸两侧水位，避免保留第一次递推的中间结果。
+        for node in nodes:
+            node.gate_upstream_water_level = None
+            node.gate_downstream_water_level = None
+
         # 找到第一个非渐变段节点，作为起点
         first_regular_node = None
         first_regular_idx = 0
@@ -2223,6 +2319,8 @@ class HydraulicCalculator:
 
         # 起点水位
         first_regular_node.water_level = self.settings.start_water_level
+        if getattr(first_regular_node, 'is_diversion_gate', False):
+            first_regular_node.gate_downstream_water_level = first_regular_node.water_level
         if first_regular_node.water_depth > 0:
             first_regular_node.bottom_elevation = first_regular_node.water_level - first_regular_node.water_depth
             if first_regular_node.structure_height > 0:
@@ -2264,14 +2362,10 @@ class HydraulicCalculator:
 
             self._validate_spillway_downstream_boundary(prev_regular_node, curr_node)
 
-            # 分水闸/分水口：仅考虑过闸损失
+            # 来流区间损失先到闸前，过闸损失只作用于闸前至闸后。
             if getattr(curr_node, 'is_diversion_gate', False):
-                head_loss_gate = getattr(curr_node, 'head_loss_gate', 0.0) or 0.0
-                curr_node.water_level = prev_regular_node.water_level - head_loss_gate
-                if curr_node.water_depth > 0:
-                    curr_node.bottom_elevation = curr_node.water_level - curr_node.water_depth
-                    if curr_node.structure_height > 0:
-                        curr_node.top_elevation = curr_node.bottom_elevation + curr_node.structure_height
+                transition_loss = self._actual_transition_loss_between(nodes, prev_regular_idx, i)
+                self._set_gate_water_levels(prev_regular_node, curr_node, transition_loss)
                 prev_regular_node = curr_node
                 prev_regular_idx = i
                 continue
@@ -2290,10 +2384,7 @@ class HydraulicCalculator:
             total_drop = hf + hj + hw + h_reserve + h_gate + h_siphon + transition_loss
             curr_node.water_level = prev_regular_node.water_level - total_drop
 
-            if curr_node.water_depth > 0:
-                curr_node.bottom_elevation = curr_node.water_level - curr_node.water_depth
-                if curr_node.structure_height > 0:
-                    curr_node.top_elevation = curr_node.bottom_elevation + curr_node.structure_height
+            self._update_regular_elevations(curr_node)
 
             prev_regular_node = curr_node
             prev_regular_idx = i
@@ -2356,7 +2447,11 @@ class HydraulicCalculator:
             
             # 计算参数
             H_u = upstream_channel.bottom_elevation  # 上游渠道末端底部高程
-            h_u = upstream_channel.water_depth        # 上游渠道设计水深
+            profile = (upstream_channel.connection_source_details or {}).get('gate_bed_profile', {})
+            # 闸后无台阶连接段的设计正常水深与当前几何实际水深分别保存。
+            # 公式中的上游水深须与已采用的渠底和水位对应，不能把两种水深混用。
+            actual_depth = self._finite_float_or_none(profile.get('actual_water_depth')) if isinstance(profile, dict) and profile.get('success') else None
+            h_u = actual_depth if actual_depth is not None and actual_depth > 0 else upstream_channel.water_depth
             h_d = downstream_channel.water_depth      # 下游渠道设计水深
             
             # ΔZ = 上下游水面总落差 = 上游水位 - 下游水位
@@ -2373,6 +2468,7 @@ class HydraulicCalculator:
             calc_details = {
                 'H_u': H_u,
                 'h_u': h_u,
+                'h_u_design': upstream_channel.water_depth,
                 'h_d': h_d,
                 'upstream_top_elevation': upstream_top,
                 'upstream_wl': upstream_wl,
@@ -2538,7 +2634,7 @@ class HydraulicCalculator:
 
     @staticmethod
     def _is_terminal_gate_backfill_donor(node: ChannelNode) -> bool:
-        """判断节点是否可作为末尾闸行高程回推的参考断面。"""
+        """判断节点是否可作为闸行高程推算的参考断面。"""
         if getattr(node, "is_transition", False):
             return False
         struct_type = getattr(node, "structure_type", None)
@@ -2547,6 +2643,7 @@ class HydraulicCalculator:
         sv = struct_type.value if hasattr(struct_type, "value") else str(struct_type)
         return sv in {
             "明渠-梯形",
+            "明渠-复式梯形",
             "明渠-矩形",
             "明渠-圆形",
             "明渠-U形",
@@ -2568,9 +2665,18 @@ class HydraulicCalculator:
         self, nodes: List[ChannelNode], target_index: int
     ) -> tuple[Optional[int], Optional[ChannelNode]]:
         """在同流量段内向上游查找同时具备水深和结构高度的参考断面。"""
+        return self._find_gate_backfill_donor(nodes, target_index, allow_downstream=False)
+
+    def _find_gate_backfill_donor(
+        self, nodes: List[ChannelNode], target_index: int, *, allow_downstream: bool
+    ) -> tuple[Optional[int], Optional[ChannelNode]]:
+        """优先同流量段上游可用断面，允许时再查找最近的下游断面。"""
         target = nodes[target_index]
         target_flow_section = getattr(target, "flow_section", "")
-        for idx in range(target_index - 1, -1, -1):
+        candidate_indices = list(range(target_index - 1, -1, -1))
+        if allow_downstream:
+            candidate_indices.extend(range(target_index + 1, len(nodes)))
+        for idx in candidate_indices:
             donor = nodes[idx]
             if getattr(donor, "is_transition", False):
                 continue
@@ -2578,11 +2684,133 @@ class HydraulicCalculator:
                 continue
             if not self._is_terminal_gate_backfill_donor(donor):
                 continue
-            donor_depth = float(getattr(donor, "water_depth", 0.0) or 0.0)
-            donor_height = float(getattr(donor, "structure_height", 0.0) or 0.0)
-            if donor_depth > 0 and donor_height > 0:
+            donor_depth = self._finite_float_or_none(getattr(donor, "water_depth", None))
+            donor_height = self._finite_float_or_none(getattr(donor, "structure_height", None))
+            if donor_depth is not None and donor_depth > 0 and donor_height is not None and donor_height > 0:
                 return idx, donor
         return None, None
+
+    @staticmethod
+    def _is_gate_elevation_target(node: ChannelNode) -> bool:
+        """识别当前闸结构，保留仅有旧闸标记的兼容入口。"""
+        if getattr(node, "is_transition", False):
+            return False
+        struct_type = getattr(node, "structure_type", None)
+        if struct_type is not None:
+            value = getattr(struct_type, "value", struct_type)
+            return StructureType.is_diversion_gate_str(str(value))
+        return bool(getattr(node, "is_diversion_gate", False))
+
+    def _clear_unchanged_auto_gate_elevations(self, node: ChannelNode) -> None:
+        """只清除仍等于上次自动结果的字段，人工改过的独立高程保持原值。"""
+        details = getattr(node, "terminal_gate_backfill_details", {}) or {}
+        if not isinstance(details, dict):
+            return
+        for field_name, detail_name in (("bottom_elevation", "bottom"), ("top_elevation", "top")):
+            if field_name not in details.get("filled_fields", []):
+                continue
+            field_details = details.get(detail_name, {})
+            if not isinstance(field_details, dict) or not field_details.get("success"):
+                continue
+            previous_result = self._finite_float_or_none(field_details.get("result"))
+            current_value = self._finite_float_or_none(getattr(node, field_name, None))
+            if previous_result is not None and current_value is not None and math.isclose(
+                current_value, previous_result, rel_tol=0.0, abs_tol=1e-9,
+            ):
+                setattr(node, field_name, 0.0)
+
+    def apply_gate_elevation_backfill(self, nodes: List[ChannelNode]) -> List[Dict]:
+        """对所有闸的缺失渠底、渠顶按同流量段参考断面推算并记录来源。
+
+        上游有效明渠/暗涵优先，缺少上游参考时使用下游；仅更新仍受
+        上次自动推算管理的字段，不向闸写入参考断面的水深或结构高度。
+        """
+        results = []
+        for target_index, target in enumerate(nodes):
+            if not self._is_gate_elevation_target(target):
+                target.terminal_gate_backfill_details = {}
+                continue
+            self._clear_unchanged_auto_gate_elevations(target)
+            details = self._apply_one_gate_elevation_backfill(nodes, target_index, allow_downstream=True)
+            if details is not None:
+                results.append(details)
+            self._apply_gate_downstream_connection_bed(nodes, target_index)
+        return results
+
+    def _known_reference_bottom(self, node):
+        """仅接受实际成果或有来源的零渠底，不把旧零占位当作水平基准。"""
+        bottom = self._finite_float_or_none(getattr(node, 'bottom_elevation', None))
+        if bottom is None:
+            return None
+        if bottom != 0.0:
+            return bottom
+        gate_details = getattr(node, 'terminal_gate_backfill_details', {}) or {}
+        bottom_detail = gate_details.get('bottom', {}) if isinstance(gate_details, dict) else {}
+        profile = (getattr(node, 'connection_source_details', {}) or {}).get('gate_bed_profile', {})
+        if bottom_detail.get('success') and bottom_detail.get('result') == 0.0:
+            return bottom
+        if isinstance(profile, dict) and profile.get('success') and profile.get('bottom_elevation') == 0.0:
+            return bottom
+        level = self._finite_float_or_none(getattr(node, 'water_level', None))
+        depth = self._finite_float_or_none(getattr(node, 'water_depth', None))
+        if level is not None and depth is not None and depth > 0 and math.isclose(level - depth, 0.0, abs_tol=1e-9):
+            return bottom
+        return None
+
+    def _apply_gate_downstream_connection_bed(self, nodes, gate_index):
+        """无独立台阶的自动连接段沿闸底和本段底坡延伸，不改设计正常水深。"""
+        gate = nodes[gate_index]
+        target_index = next((i for i in range(gate_index + 1, len(nodes)) if not nodes[i].is_transition), None)
+        if target_index is None:
+            return
+        target = nodes[target_index]
+        if not target.is_auto_inserted_channel:
+            return
+        source = target.connection_source_details
+        old = source.get('gate_bed_profile', {})
+        current_bottom = self._finite_float_or_none(target.bottom_elevation)
+        generated_bottom = self._finite_float_or_none(source.get('computed_profile_bottom_elevation'))
+        manual_bottom = self._finite_float_or_none(source.get('gate_bed_manual_bottom_elevation'))
+        manual_top = self._finite_float_or_none(source.get('gate_bed_manual_top_elevation'))
+        if isinstance(old, dict) and old.get('success'):
+            old_bottom = self._finite_float_or_none(old.get('bottom_elevation'))
+            if current_bottom is not None and old_bottom is not None and not math.isclose(current_bottom, old_bottom, abs_tol=1e-9):
+                if generated_bottom is None or not math.isclose(current_bottom, generated_bottom, abs_tol=1e-9):
+                    manual_bottom = current_bottom
+                    source['gate_bed_manual_bottom_elevation'] = current_bottom
+        elif current_bottom not in (None, 0.0) and generated_bottom is None:
+            manual_bottom = current_bottom
+            source['gate_bed_manual_bottom_elevation'] = current_bottom
+        gate_bottom = self._known_reference_bottom(gate)
+        slope = self._finite_float_or_none(target.slope_i)
+        distance = target.station_MC - gate.station_MC
+        profile = {
+            'success': False, 'method': 'bed_slope', 'gate_row': gate_index + 1,
+            'gate_name': gate.name, 'gate_bottom_elevation': gate_bottom,
+            'gate_station_MC': gate.station_MC, 'target_station_MC': target.station_MC,
+            'slope_i': slope, 'station_distance_m': distance,
+            'normal_water_depth': target.water_depth, 'failure_reason': '',
+        }
+        source['gate_bed_profile'] = profile
+        if gate_bottom is None or slope is None or slope <= 0 or distance < -ZERO_TOLERANCE:
+            profile['failure_reason'] = '缺少有效闸底、连接段底坡或递增桩号，不能延伸渠底'
+            return
+        bottom = manual_bottom if manual_bottom is not None else gate_bottom - slope * max(0.0, distance)
+        # 有来源的推算零高程消除浮点尾差，保留手工高程与其他完整精度。
+        if manual_bottom is None and abs(bottom) <= 1e-12:
+            bottom = 0.0
+        height = self._finite_float_or_none(target.structure_height)
+        actual_depth = target.water_level - bottom
+        if actual_depth <= 0:
+            raise ValueError(f"{gate.name or '闸'}下游连接段连续渠底不低于水位，请核对起算水位、过闸损失与底坡")
+        target.bottom_elevation = bottom
+        if manual_top is not None:
+            target.top_elevation = manual_top
+        elif height is not None and height > 0:
+            target.top_elevation = bottom + height
+        profile.update(success=True, bottom_elevation=bottom, top_elevation=target.top_elevation,
+                       actual_water_depth=actual_depth,
+                       preserved_fields=[field for field, value in (('bottom_elevation', manual_bottom), ('top_elevation', manual_top)) if value is not None])
 
     def apply_terminal_gate_elevation_backfill(
         self, nodes: List[ChannelNode]
@@ -2597,23 +2825,36 @@ class HydraulicCalculator:
         4. 参考断面只在相同 flow_section 内向上游搜索；
         5. 参考断面必须同时具备水深和结构高度。
         """
-        for node in nodes:
-            node.terminal_gate_backfill_details = {}
-
         target_index = self._find_last_non_transition_index(nodes)
         if target_index is None:
             return None
 
         target = nodes[target_index]
-        target_struct = target.structure_type.value if target.structure_type else ""
-        is_gate = bool(getattr(target, "is_diversion_gate", False)) or (
-            "闸" in target_struct or "分水" in target_struct
-        )
-        if not is_gate:
+        for idx, node in enumerate(nodes):
+            if idx != target_index:
+                node.terminal_gate_backfill_details = {}
+        if not self._is_gate_elevation_target(target):
+            target.terminal_gate_backfill_details = {}
             return None
+        self._clear_unchanged_auto_gate_elevations(target)
+        return self._apply_one_gate_elevation_backfill(nodes, target_index, allow_downstream=False)
 
-        need_bottom = not (float(getattr(target, "bottom_elevation", 0.0) or 0.0) > 0)
-        need_top = not (float(getattr(target, "top_elevation", 0.0) or 0.0) > 0)
+    def _apply_one_gate_elevation_backfill(
+        self, nodes: List[ChannelNode], target_index: int, *, allow_downstream: bool
+    ) -> Optional[Dict]:
+        """推算单个闸的缺失高程，正负有限高程均有效，零沿用缺失占位。"""
+        target = nodes[target_index]
+        target_struct = str(getattr(target.structure_type, "value", target.structure_type) or "")
+        target.terminal_gate_backfill_details = {}
+        bottom_value = self._finite_float_or_none(getattr(target, "bottom_elevation", None))
+        top_value = self._finite_float_or_none(getattr(target, "top_elevation", None))
+        # 非有限高程同样是缺失项；即使缺少参考断面，也不能将 NaN/Inf 留给界面。
+        if bottom_value is None:
+            target.bottom_elevation = 0.0
+        if top_value is None:
+            target.top_elevation = 0.0
+        need_bottom = bottom_value in (None, 0.0)
+        need_top = top_value in (None, 0.0)
         if not need_bottom and not need_top:
             return None
 
@@ -2632,6 +2873,9 @@ class HydraulicCalculator:
             "donor_structure_type": "",
             "donor_water_depth": 0.0,
             "donor_structure_height": 0.0,
+            "donor_direction": "",
+            "reference_scope": "upstream_then_downstream" if allow_downstream else "upstream_only",
+            "reference_source": "",
             "failure_reason": "",
             "bottom": {
                 "attempted": need_bottom,
@@ -2654,39 +2898,72 @@ class HydraulicCalculator:
         if need_top:
             details["requested_fields"].append("top_elevation")
 
-        donor_index, donor = self._find_terminal_gate_backfill_donor(nodes, target_index)
+        donor_index, donor = self._find_gate_backfill_donor(nodes, target_index, allow_downstream=allow_downstream)
         if donor is not None:
             donor_struct = donor.structure_type.value if donor.structure_type else ""
             details["donor_row"] = donor_index + 1
+            details["donor_direction"] = "上游" if donor_index < target_index else "下游"
             details["donor_name"] = donor.name or f"行{donor_index + 1}"
             details["donor_structure_type"] = donor_struct
+            details["reference_source"] = f"同流量段{details['donor_direction']}{donor_struct}参考断面"
             details["donor_water_depth"] = round(float(donor.water_depth or 0.0), ELEVATION_PRECISION)
             details["donor_structure_height"] = round(float(donor.structure_height or 0.0), ELEVATION_PRECISION)
         else:
-            details["failure_reason"] = "同流量段上游未找到同时具备水深和结构高度的明渠/暗涵参考断面"
+            direction = "上游或下游" if allow_downstream else "上游"
+            details["failure_reason"] = f"同流量段{direction}未找到同时具备水深和结构高度的明渠/暗涵参考断面"
 
         if need_bottom:
-            water_level = float(getattr(target, "water_level", 0.0) or 0.0)
-            if water_level <= 0:
-                details["bottom"]["failure_reason"] = "本行无可用水位，无法回推渠底高程"
-            elif donor is None:
+            if donor is None:
                 details["bottom"]["failure_reason"] = details["failure_reason"]
             else:
-                bottom_elevation = round(water_level - float(donor.water_depth or 0.0), ELEVATION_PRECISION)
-                target.bottom_elevation = bottom_elevation
-                details["bottom"]["success"] = True
-                details["bottom"]["result"] = bottom_elevation
-                details["filled_fields"].append("bottom_elevation")
+                reference_bottom = self._known_reference_bottom(donor)
+                slope = self._finite_float_or_none(donor.slope_i)
+                distance = target.station_MC - donor.station_MC
+                coordinate_distance = math.hypot(target.x - donor.x, target.y - donor.y)
+                stations_known = not (target.station_MC == donor.station_MC == 0.0 and coordinate_distance > ZERO_TOLERANCE)
+                bottom_details = details['bottom']
+                if reference_bottom is not None and slope is not None and slope > 0 and stations_known:
+                    bottom_elevation = reference_bottom - slope * distance
+                    bottom_details.update(
+                        method='bed_slope', formula=r'Z_b = Z_{b,ref} - i_{ref}(S_{gate}-S_{ref})',
+                        donor_bottom_elevation=reference_bottom, donor_station_MC=donor.station_MC,
+                        target_station_MC=target.station_MC, slope_i=slope, station_distance_m=distance,
+                    )
+                else:
+                    # 仅有正常水深时按参考侧水位推算；过闸落差不得搬到上游参考渠底。
+                    side_attribute = 'gate_upstream_water_level' if donor_index < target_index else 'gate_downstream_water_level'
+                    water_level = self._finite_float_or_none(getattr(target, side_attribute, None))
+                    if water_level is None:
+                        water_level = self._finite_float_or_none(target.water_level)
+                        if water_level is not None and donor_index < target_index:
+                            water_level += target.head_loss_gate or 0.0
+                    known_zero = self._finite_float_or_none(getattr(target, side_attribute, None)) == 0.0
+                    if water_level is None or (water_level == 0.0 and not known_zero):
+                        bottom_details['failure_reason'] = '参考侧水位未知且缺少可延伸渠底，无法推算渠底高程'
+                        bottom_elevation = None
+                    else:
+                        bottom_elevation = water_level - float(donor.water_depth or 0.0)
+                        bottom_details.update(method='normal_depth_fallback', incoming_water_level=water_level,
+                                              formula=r'Z_b = Z_{side} - h_{ref}')
+                if bottom_elevation is not None:
+                    # 几何或水深来源已确认的零高程不应留下浮点尾差。
+                    if abs(bottom_elevation) <= 1e-12:
+                        bottom_elevation = 0.0
+                    target.bottom_elevation = bottom_elevation
+                    bottom_details['success'] = True
+                    bottom_details['result'] = bottom_elevation
+                    details['filled_fields'].append('bottom_elevation')
 
         if need_top:
-            base_bottom = float(getattr(target, "bottom_elevation", 0.0) or 0.0)
-            details["top"]["base_bottom_elevation"] = round(base_bottom, ELEVATION_PRECISION)
+            base_bottom = self._finite_float_or_none(getattr(target, "bottom_elevation", None))
+            base_bottom = base_bottom if base_bottom is not None else 0.0
+            details["top"]["base_bottom_elevation"] = base_bottom
             if donor is None:
                 details["top"]["failure_reason"] = details["failure_reason"]
-            elif base_bottom <= 0:
+            elif base_bottom == 0 and not details["bottom"].get("success"):
                 details["top"]["failure_reason"] = "渠底高程仍为空，无法回推渠顶高程"
             else:
-                top_elevation = round(base_bottom + float(donor.structure_height or 0.0), ELEVATION_PRECISION)
+                top_elevation = base_bottom + float(donor.structure_height or 0.0)
                 target.top_elevation = top_elevation
                 details["top"]["success"] = True
                 details["top"]["result"] = top_elevation

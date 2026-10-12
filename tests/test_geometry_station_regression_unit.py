@@ -47,6 +47,31 @@ def _assert_station_tuple(node, expected):
     assert node.station_EC == pytest.approx(station_ec)
 
 
+def _assert_connection_entity_center(nodes, channel, left, right):
+    """按实际采用的两侧渐变长度核验连接实体中点及普通长度守恒。"""
+    left_index = next(i for i, node in enumerate(nodes) if node is left)
+    channel_index = next(i for i, node in enumerate(nodes) if node is channel)
+    right_index = next(i for i, node in enumerate(nodes) if node is right)
+    outlet_length = sum(
+        node.transition_length for node in nodes[left_index + 1:channel_index]
+        if node.is_transition
+    )
+    inlet_length = sum(
+        node.transition_length for node in nodes[channel_index + 1:right_index]
+        if node.is_transition
+    )
+    remaining_length = right.station_MC - left.station_MC - outlet_length - inlet_length
+    assert remaining_length > 0.0
+    expected_center = left.station_MC + outlet_length + remaining_length / 2.0
+    assert channel.station_MC == pytest.approx(expected_center)
+    assert channel.station_BC == channel.station_EC == channel.station_MC
+    first_half = channel.station_MC - left.station_MC - outlet_length
+    last_half = right.station_MC - channel.station_MC - inlet_length
+    assert first_half == pytest.approx(remaining_length / 2.0)
+    assert last_half == pytest.approx(remaining_length / 2.0)
+    assert first_half + last_half == pytest.approx(remaining_length)
+
+
 def _get_qapp():
     """获取测试用 Qt 应用实例。"""
     global _QAPP
@@ -178,14 +203,14 @@ def test_prepare_transitions_and_recalculate_geometry_preserve_real_node_station
     transition_rows = [node for node in prepared_nodes if node.is_transition]
     assert len(auto_channels) == 1
     assert len(transition_rows) == 2
-    assert auto_channels[0].station_MC == pytest.approx(100.0)
+    _assert_connection_entity_center(prepared_nodes, auto_channels[0], pipe_outlet, tunnel_inlet)
 
     for node in original_nodes:
         _assert_station_tuple(node, baseline_by_id[id(node)])
 
     calculator.calculate_geometry(prepared_nodes)
 
-    assert auto_channels[0].station_MC == pytest.approx(100.0)
+    _assert_connection_entity_center(prepared_nodes, auto_channels[0], pipe_outlet, tunnel_inlet)
     for node in original_nodes:
         _assert_station_tuple(node, baseline_by_id[id(node)])
 
@@ -261,7 +286,7 @@ def test_prepare_transitions_prefers_project_start_station_over_stale_first_row_
     auto_channels = [node for node in prepared_nodes if node.is_auto_inserted_channel]
     assert len(auto_channels) == 1
     assert prepared_nodes[0].station_MC == pytest.approx(settings.start_station)
-    assert auto_channels[0].station_MC == pytest.approx(settings.start_station + 100.0)
+    _assert_connection_entity_center(prepared_nodes, auto_channels[0], pipe_outlet, tunnel_inlet)
 
     for node in original_nodes:
         _assert_station_tuple(node, baseline_by_id[id(node)])

@@ -1,0 +1,70 @@
+{
+  "values_identical_without_optimizations": true,
+  "runs": [
+    {
+      "mode": "optimized",
+      "node_values": [
+        {
+          "name": "上游明渠",
+          "water_level": 100.0,
+          "gate_before": null,
+          "gate_after": null,
+          "loss_total": 0.0
+        },
+        {
+          "name": "双桥报告闸",
+          "water_level": 99.80000000000001,
+          "gate_before": 99.9,
+          "gate_after": 99.80000000000001,
+          "loss_total": 0.2
+        },
+        {
+          "name": "下游明渠",
+          "water_level": 99.70000000000002,
+          "gate_before": null,
+          "gate_after": null,
+          "loss_total": 0.1
+        }
+      ],
+      "report_gate_lines": [
+        "  闸前水位 = 99.900 m",
+        "  闸后水位 = 99.800 m"
+      ]
+    },
+    {
+      "mode": "eager",
+      "node_values": [
+        {
+          "name": "上游明渠",
+          "water_level": 100.0,
+          "gate_before": null,
+          "gate_after": null,
+          "loss_total": 0.0
+        },
+        {
+          "name": "双桥报告闸",
+          "water_level": 99.80000000000001,
+          "gate_before": 99.9,
+          "gate_after": 99.80000000000001,
+          "loss_total": 0.2
+        },
+        {
+          "name": "下游明渠",
+          "water_level": 99.70000000000002,
+          "gate_before": null,
+          "gate_after": null,
+          "loss_total": 0.1
+        }
+      ],
+      "report_gate_lines": [
+        "  闸前水位 = 99.900 m",
+        "  闸后水位 = 99.800 m"
+      ]
+    }
+  ],
+  "source_sha256": {
+    "app_渠系计算前端/water_profile/panel.py": "dabfc03a9a60625935b5e35070a6c02b9150c6701634132205a4c4b25ccc6d96",
+    "推求水面线/core/calculator.py": "f5739ba0a5888e414c2ab23a7390bdf8902f140db541dde30ae791bbfb70c0c0",
+    "推求水面线/core/hydraulic_calc.py": "23a1a0836ab3d0b2ea73c6154e66a829447a0e60960a41c190c19ecf883f8856"
+  }
+}

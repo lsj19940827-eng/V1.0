@@ -70,7 +70,7 @@ if _pkg_root not in sys.path:
 import 推求水面线.utils  # noqa: F401  # 建立顶层 utils 兼容别名，避免打包环境同名包冲突
 
 try:
-    from models.data_models import ProjectSettings
+    from models.data_models import ProjectSettings, restore_gate_water_levels
     from models.enums import StructureType, InOutType
     MODELS_AVAILABLE = True
 except ImportError:
@@ -3063,6 +3063,101 @@ def _profile_elevation_score(node):
     return score
 
 
+def _profile_optional_elevation(value, *, allow_zero=False):
+    """统一导出缺失高程语义，保留合法负高程及显式闸水位零值。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or (not allow_zero and abs(number) <= 1e-9):
+        return None
+    return number
+
+
+def _format_profile_elevation(value, decimals=3, *, allow_zero=False):
+    """缺失高程显示横杠，不能将缺失值误标成零高程。"""
+    number = _profile_optional_elevation(value, allow_zero=allow_zero)
+    return "—" if number is None else f"{number:.{int(decimals)}f}"
+
+
+def _is_profile_gate_node(node):
+    return _is_gate_name(_struct_val(getattr(node, "structure_type", None)))
+
+
+def _profile_node_optional_elevation(node, attr_name):
+    """仅凭一致的成功推算记录保留闸行合法零高程，旧零占位仍视为缺失。"""
+    value = getattr(node, attr_name, None)
+    allow_zero = False
+    if attr_name in {"bottom_elevation", "top_elevation"} and _is_profile_gate_node(node):
+        details = getattr(node, "terminal_gate_backfill_details", {})
+        if isinstance(details, dict):
+            detail = details.get("bottom" if attr_name == "bottom_elevation" else "top", {})
+            if isinstance(detail, dict) and detail.get("success") is True:
+                result = _profile_optional_elevation(detail.get("result"), allow_zero=True)
+                number = _profile_optional_elevation(value, allow_zero=True)
+                allow_zero = result is not None and number is not None and abs(result - number) <= 1e-9
+    return _profile_optional_elevation(value, allow_zero=allow_zero)
+
+
+def _format_profile_node_elevation(node, attr_name, decimals=3):
+    """节点高程文字与折线使用同一有效性判断。"""
+    number = _profile_node_optional_elevation(node, attr_name)
+    return "—" if number is None else f"{number:.{int(decimals)}f}"
+
+
+def _copy_profile_nodes_with_gate_levels(nodes):
+    """在导出副本恢复旧工程两侧水位，避免改变计算节点和保存状态。"""
+    copied_nodes = [copy.copy(node) for node in nodes]
+    restore_gate_water_levels(copied_nodes)
+    return copied_nodes
+
+
+def _resolve_profile_gate_group(group, station_value, tol=1e-6):
+    """归并同一闸的零损失边界重复行，拒绝同桩号不同物理闸。"""
+    gates = [node for node in group if _is_profile_gate_node(node)]
+    if not gates:
+        return None
+    first = gates[0]
+    previous = first
+    for gate in gates[1:]:
+        same_identity = (
+            _struct_val(getattr(first, "structure_type", None))
+            == _struct_val(getattr(gate, "structure_type", None))
+            and str(getattr(first, "name", "") or "").strip()
+            == str(getattr(gate, "name", "") or "").strip()
+            and all(
+                abs(float(getattr(first, coordinate, 0.0) or 0.0)
+                    - float(getattr(gate, coordinate, 0.0) or 0.0)) <= tol
+                for coordinate in ("x", "y")
+            )
+        )
+        previous_downstream = _profile_optional_elevation(
+            getattr(previous, "gate_downstream_water_level", None), allow_zero=True
+        )
+        current_upstream = _profile_optional_elevation(
+            getattr(gate, "gate_upstream_water_level", None), allow_zero=True
+        )
+        current_downstream = _profile_optional_elevation(
+            getattr(gate, "gate_downstream_water_level", None), allow_zero=True
+        )
+        zero_loss = abs(float(getattr(gate, "head_loss_gate", 0.0) or 0.0)) <= tol
+        continuous = (
+            previous_downstream is not None
+            and current_upstream is not None
+            and current_downstream is not None
+            and abs(previous_downstream - current_upstream) <= tol
+            and abs(current_upstream - current_downstream) <= tol
+        )
+        if not (same_identity and zero_loss and continuous):
+            raise ValueError(
+                f"纵断面导出检测到同桩号冲突：桩号 {station_value:.6f} 存在无法归并的多个闸节点"
+            )
+        previous = gate
+    merged_gate = copy.copy(first)
+    merged_gate.gate_downstream_water_level = getattr(previous, "gate_downstream_water_level", None)
+    return merged_gate
+
+
 def _is_profile_text_export_node(node):
     """判断节点是否属于纵断面文本行“真实节点”（排除渐变段与自动插入明渠段）。"""
     struct_str = node.get_structure_type_str() or ""
@@ -3077,10 +3172,10 @@ def _build_profile_text_nodes(nodes, station_resolver=None):
     """构建纵断面四行文本输出节点（真实节点过滤 + 同桩号归并 + 冲突校验）。"""
     grouped_by_station = {}
     station_order = []
-    for node in nodes:
+    for original, node in zip(nodes, _copy_profile_nodes_with_gate_levels(nodes)):
         if not _is_profile_text_export_node(node):
             continue
-        station_val = _resolve_profile_station_value(node, station_resolver)
+        station_val = _resolve_profile_station_value(original, station_resolver)
         station_key = round(station_val, 9)
         if station_key not in grouped_by_station:
             grouped_by_station[station_key] = []
@@ -3129,16 +3224,168 @@ def _build_profile_text_nodes(nodes, station_resolver=None):
     }
     for station_key in station_order:
         group = grouped_by_station[station_key]
-        representative = max(group, key=_profile_elevation_score)
+        gate = _resolve_profile_gate_group(group, station_key)
+        representative = gate if gate is not None else max(group, key=_profile_elevation_score)
         station_val = _profile_station_value(representative)
 
         merged = copy.copy(representative)
         merged.station_MC = station_val
         setattr(merged, "_xxpipe_identity_candidates", _build_xxpipe_identity_candidates_for_nodes(group))
         for attr_name, field_label in field_labels.items():
-            setattr(merged, attr_name, _resolve_elev(group, attr_name, field_label, station_val))
+            if attr_name == "water_level" and gate is not None:
+                allowed_values = [
+                    value for value in (
+                        getattr(gate, "gate_upstream_water_level", None),
+                        getattr(gate, "gate_downstream_water_level", None),
+                    ) if value is not None
+                ]
+                for group_node in group:
+                    value = _profile_optional_elevation(getattr(group_node, attr_name, None))
+                    if value is not None and not any(abs(value - allowed) <= 1e-6 for allowed in allowed_values):
+                        raise ValueError(
+                            f"纵断面导出检测到同桩号冲突：桩号 {station_val:.6f} 的设计水位与闸前、闸后均不一致"
+                        )
+                merged.water_level = getattr(gate, "gate_downstream_water_level", None)
+            else:
+                setattr(merged, attr_name, _resolve_elev(group, attr_name, field_label, station_val))
         merged_nodes.append(merged)
     return merged_nodes
+
+
+def _build_standard_profile_water_points(nodes, valid_nodes, sx, sy, profile_text_nodes):
+    """在同一闸桩号依次写入两侧水位，保留竖向落差且不绘制缺失值。"""
+    gates_by_station = {
+        round(_profile_station_value(node), 9): node
+        for node in profile_text_nodes if _is_profile_gate_node(node)
+    }
+    valid_ids = {id(node) for node in valid_nodes}
+    emitted_gates = set()
+    points = []
+    for original, node in zip(nodes, _copy_profile_nodes_with_gate_levels(nodes)):
+        station = _profile_station_value(node)
+        station_key = round(station, 9)
+        gate = gates_by_station.get(station_key)
+        if gate is not None:
+            if station_key in emitted_gates:
+                continue
+            emitted_gates.add(station_key)
+            for attr in ("gate_upstream_water_level", "gate_downstream_water_level"):
+                value = _profile_optional_elevation(getattr(gate, attr, None), allow_zero=True)
+                if value is not None:
+                    point = (sx(station), sy(value))
+                    if not points or point != points[-1]:
+                        points.append(point)
+            continue
+        value = _profile_optional_elevation(getattr(node, "water_level", None))
+        if id(original) in valid_ids and value is not None:
+            points.append((sx(station), sy(value)))
+    return points
+
+
+def _profile_water_text_horizontal_extents(text, text_x, height, rotation, *, descent=0.15, ascent=1.15):
+    """按完整字宽估计旋转水位文字的水平字框，兼容没有压缩字宽的TXT样式。"""
+    angle = math.radians(float(rotation))
+    sin_angle, cos_angle = math.sin(angle), math.cos(angle)
+    width = sum(1.1 if ord(char) > 127 else 0.8 for char in text) * height
+    values = [
+        float(text_x) + local_x * cos_angle - local_y * sin_angle
+        for local_x in (0.0, width)
+        for local_y in (-descent * height, ascent * height)
+    ]
+    return min(values), max(values)
+
+
+def _build_profile_gate_water_horizontal_bounds(profile_text_nodes, index, sx, row_info, settings, *, ordinary_x_offset):
+    """从实际导出相邻水位字框留出净距，自动补段和渐变段不占文字位置。"""
+    height = float(settings["text_height"])
+    rotation = float(settings.get("rotation", 90))
+    decimals = int(settings.get("elev_decimals", 3))
+    first_offset = height + 1.3
+    margin = 0.4
+
+    def neighbor_extents(neighbor_index):
+        neighbor = profile_text_nodes[neighbor_index]
+        station = _profile_station_value(neighbor)
+        text_x = sx(station) + (first_offset if _profile_text_uses_span_start_offset(neighbor, neighbor_index) else ordinary_x_offset)
+        if _is_profile_gate_node(neighbor):
+            specs = _build_profile_gate_water_text_specs(neighbor, text_x, row_info, settings)
+            extents = [
+                _profile_water_text_horizontal_extents(spec["text"], spec["x"], spec["height"], spec["rotation"], descent=0.3)
+                for spec in specs
+            ]
+            return min(bounds[0] for bounds in extents), max(bounds[1] for bounds in extents)
+        text = _format_profile_elevation(neighbor.water_level, decimals)
+        return _profile_water_text_horizontal_extents(text, text_x, height, rotation)
+
+    left = neighbor_extents(index - 1)[1] + margin if index > 0 else None
+    right = neighbor_extents(index + 1)[0] - margin if index + 1 < len(profile_text_nodes) else None
+    return left, right
+
+
+def _build_profile_gate_water_text_specs(node, text_x, row_info, settings, horizontal_bounds=None):
+    """按行高及相邻水位字框缩放两列闸文字，沿基线法向错开并保留净距。"""
+    decimals = int(settings.get("elev_decimals", 3))
+    rotation = float(settings.get("rotation", 90))
+    angle = math.radians(rotation)
+    sin_angle, cos_angle = math.sin(angle), math.cos(angle)
+    texts = [
+        label + _format_profile_elevation(getattr(node, attr, None), decimals, allow_zero=True)
+        for label, attr in (
+            ("闸前", "gate_upstream_water_level"),
+            ("闸后", "gate_downstream_water_level"),
+        )
+    ]
+    # 中文按全角加余量、数字按较宽字形估计，同时计入旋转后的字高及下降部。
+    # TXT 沿用当前文字样式且没有 DXF 的 0.7 宽度系数，因此按完整字宽预留。
+    width_units = [sum(1.1 if ord(char) > 127 else 0.8 for char in text) for text in texts]
+    available_height = max(0.1, float(row_info["height"]) - 2.0)
+    projected_units = abs(sin_angle) * max(width_units) + abs(cos_angle) * 3.2
+    height = min(float(settings["text_height"]), available_height / max(projected_units, 1e-9))
+    # 先按单位字高求整体旋转字框，再同时满足行高和相邻文字的水平空间。
+    unit_offsets = (0.9, -0.9)
+    x_unit_extents = [
+        local_x * cos_angle - (local_y + offset) * sin_angle
+        for offset, width_unit in zip(unit_offsets, width_units)
+        for local_x in (0.0, width_unit)
+        for local_y in (-0.3, 1.1)
+    ]
+    right_edge = float(text_x)
+    if horizontal_bounds is not None:
+        left_bound, right_bound = horizontal_bounds
+        if right_bound is not None:
+            right_edge = min(right_edge, float(right_bound))
+        if left_bound is not None:
+            width_unit = max(x_unit_extents) - min(x_unit_extents)
+            left_bound = float(left_bound)
+            if right_edge <= left_bound:
+                # 非竖排文字可能越过闸桩号，仍在两相邻字框之间寻找可用位置。
+                right_edge = float(right_bound) if right_bound is not None else left_bound + width_unit * height
+            if right_edge <= left_bound:
+                raise ValueError(f"闸前后水位标注空间不足：桩号 {_profile_station_value(node):.3f}，请调整横向比例或文字高度。")
+            height = min(height, (right_edge - left_bound) / max(width_unit, 1e-9))
+    spacing = 1.8 * height
+    offsets = (spacing / 2.0, -spacing / 2.0)
+    y_extents = []
+    x_extents = []
+    for offset, width_unit in zip(offsets, width_units):
+        for local_x in (0.0, width_unit * height):
+            for local_y in (-0.3 * height, 1.1 * height):
+                y_extents.append(local_x * sin_angle + (local_y + offset) * cos_angle)
+                x_extents.append(local_x * cos_angle - (local_y + offset) * sin_angle)
+    base_y = (row_info["bottom"] + row_info["top"] - min(y_extents) - max(y_extents)) / 2.0
+    # 与原旋转文字共用右边缘，避免第二列跨过节点竖线进入相邻单元格。
+    base_x = right_edge - max(x_extents)
+    return [
+        {
+            "text": text,
+            "x": base_x - offset * sin_angle,
+            "y": base_y + offset * cos_angle,
+            "height": height,
+            "rotation": rotation,
+            "width": 0.7,
+        }
+        for text, offset in zip(texts, offsets)
+    ]
 
 
 def _resolve_standard_profile_last_visible_mc(nodes):
@@ -10126,9 +10373,7 @@ def _draw_profile_on_msp(
         return _profile_meters_to_paper_mm(elev, scale_y)
 
     def fmt_elev(value):
-        if value is None:
-            return f"{0:.{elev_decimals}f}"
-        return f"{value:.{elev_decimals}f}"
+        return _format_profile_elevation(value, elev_decimals)
 
     last_visible_mc, profile_text_nodes = _resolve_standard_profile_last_visible_mc(nodes)
     layer_grid = layer_prefix + "表格线框"
@@ -10159,9 +10404,11 @@ def _draw_profile_on_msp(
         msp.add_line((0.0, hy), (sx(last_visible_mc), hy), dxfattribs={"layer": layer_grid})
 
     # ======== 4. 渠底/渠顶/水面折线 ========
-    bottom_pts = [(sx(n.station_MC), sy(n.bottom_elevation)) for n in valid_nodes if n.bottom_elevation]
-    top_pts = [(sx(n.station_MC), sy(n.top_elevation)) for n in valid_nodes if n.top_elevation]
-    water_pts = [(sx(n.station_MC), sy(n.water_level)) for n in valid_nodes if n.water_level]
+    bottom_pts = [(sx(n.station_MC), sy(value)) for n in valid_nodes
+                  if (value := _profile_node_optional_elevation(n, "bottom_elevation")) is not None]
+    top_pts = [(sx(n.station_MC), sy(value)) for n in valid_nodes
+               if (value := _profile_node_optional_elevation(n, "top_elevation")) is not None]
+    water_pts = _build_standard_profile_water_points(nodes, valid_nodes, sx, sy, profile_text_nodes)
 
     for segment in _build_standard_profile_polyline_segments(bottom_pts):
         msp.add_lwpolyline(segment, dxfattribs={"layer": layer_prefix + "渠底高程线"})
@@ -10206,10 +10453,19 @@ def _draw_profile_on_msp(
                     else sx(station_mc) - 1
                 )
                 if rid == "bottom_elev":
-                    text = fmt_elev(node.bottom_elevation)
+                    text = _format_profile_node_elevation(node, "bottom_elevation", elev_decimals)
                 elif rid == "top_elev":
-                    text = fmt_elev(node.top_elevation)
+                    text = _format_profile_node_elevation(node, "top_elevation", elev_decimals)
                 elif rid == "water_elev":
+                    if _is_profile_gate_node(node):
+                        bounds = _build_profile_gate_water_horizontal_bounds(
+                            profile_text_nodes, idx, sx, row_layout[rid], settings, ordinary_x_offset=-1.0,
+                        )
+                        for spec in _build_profile_gate_water_text_specs(node, text_x, row_layout[rid], settings, horizontal_bounds=bounds):
+                            gate_text_attrs = dict(text_attr_rot)
+                            gate_text_attrs.update(height=spec["height"], rotation=spec["rotation"], width=spec["width"])
+                            msp.add_text(spec["text"], dxfattribs=gate_text_attrs).set_placement((spec["x"], spec["y"]))
+                        continue
                     text = fmt_elev(node.water_level)
                 else:
                     text = _format_station_with_decimals(
@@ -10885,9 +11141,7 @@ def _build_standard_longitudinal_txt_lines(
         return _profile_meters_to_paper_mm(elev, scale_y)
 
     def fmt_elev(value):
-        if value is None:
-            return f"{0:.{elev_decimals}f}"
-        return f"{value:.{elev_decimals}f}"
+        return _format_profile_elevation(value, elev_decimals)
 
     last_visible_mc, profile_text_nodes = _resolve_standard_profile_last_visible_mc(nodes)
     lines = []
@@ -10918,9 +11172,11 @@ def _build_standard_longitudinal_txt_lines(
         lines.append(f"pl {fmt(sx(0))},{fmt(hy)} {last_mc_scaled},{fmt(hy)} ")
     lines.append("")
 
-    bottom_pts = [(sx(node.station_MC), sy(node.bottom_elevation)) for node in valid_nodes if node.bottom_elevation]
-    top_pts = [(sx(node.station_MC), sy(node.top_elevation)) for node in valid_nodes if node.top_elevation]
-    water_pts = [(sx(node.station_MC), sy(node.water_level)) for node in valid_nodes if node.water_level]
+    bottom_pts = [(sx(node.station_MC), sy(value)) for node in valid_nodes
+                  if (value := _profile_node_optional_elevation(node, "bottom_elevation")) is not None]
+    top_pts = [(sx(node.station_MC), sy(value)) for node in valid_nodes
+               if (value := _profile_node_optional_elevation(node, "top_elevation")) is not None]
+    water_pts = _build_standard_profile_water_points(nodes, valid_nodes, sx, sy, profile_text_nodes)
 
     for segment in _build_standard_profile_polyline_segments(bottom_pts):
         for x_value, y_value in segment:
@@ -10963,10 +11219,20 @@ def _build_standard_longitudinal_txt_lines(
                     else sx(station_mc)
                 )
                 if rid == "bottom_elev":
-                    text = fmt_elev(node.bottom_elevation)
+                    text = _format_profile_node_elevation(node, "bottom_elevation", elev_decimals)
                 elif rid == "top_elev":
-                    text = fmt_elev(node.top_elevation)
+                    text = _format_profile_node_elevation(node, "top_elevation", elev_decimals)
                 elif rid == "water_elev":
+                    if _is_profile_gate_node(node):
+                        bounds = _build_profile_gate_water_horizontal_bounds(
+                            profile_text_nodes, idx, sx, row_layout[rid], settings, ordinary_x_offset=0.0,
+                        )
+                        for spec in _build_profile_gate_water_text_specs(node, text_x, row_layout[rid], settings, horizontal_bounds=bounds):
+                            lines.append(
+                                f"-text {fmt(spec['x'])},{fmt(spec['y'])} {fmt(spec['height'])} "
+                                f"{fmt(spec['rotation'])} {spec['text']} "
+                            )
+                        continue
                     text = fmt_elev(node.water_level)
                 else:
                     text = _format_station_with_decimals(

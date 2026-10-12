@@ -217,7 +217,9 @@ except (ImportError, AttributeError):
 # 核心计算引擎
 CORE_ENGINE_LOAD_FAILURE = None
 try:
-    from 推求水面线.models.data_models import ChannelNode, ProjectSettings, TransitionLengthRule
+    from 推求水面线.models.data_models import (
+        ChannelNode, ProjectSettings, TransitionLengthRule, restore_gate_water_levels,
+    )
     from 推求水面线.models.enums import StructureType, InOutType
     from 推求水面线.core.calculator import WaterProfileCalculator
     from 推求水面线.core.spillway_steep_chute_adapter import (
@@ -1418,6 +1420,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         state.replace_table(table_state)
         for name in ('structure_heights', 'chamfer_params', 'u_params', 'velocity_increased'):
             state.row_parameters[name] = table_state.parameter_values(name)
+        self._refresh_gate_water_level_cells()
 
     def __init__(self, parent=None, siphon_manager=None, pressure_pipe_manager=None):
         super().__init__(parent)
@@ -4522,7 +4525,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     payload = first.data(Qt.UserRole) if first else None
                     if isinstance(payload, dict) and payload.get('_auto_channel'):
                         payload['_stat_length'] = record['length']
-                        first.setData(Qt.UserRole, payload)
+                        # 内部长度缓存不能被当成第0列用户编辑，避免误清拓扑状态和生成撤销记录。
+                        blocker = QSignalBlocker(table)
+                        try:
+                            first.setData(Qt.UserRole, payload)
+                        finally:
+                            del blocker
             self._last_building_lengths = records
             self._last_type_summary = type_summary
             self._last_channel_total_length = validation['channel_total']
@@ -4942,6 +4950,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     if item is not None:
                         item.setText("")
                         item.setToolTip("专项参数已修改，请重新推求水面线。")
+                first = table.item(row, 0)
+                if first is not None and isinstance(first.data(Qt.UserRole), dict):
+                    role = dict(first.data(Qt.UserRole))
+                    role.pop('_gate_upstream_water_level', None)
+                    role.pop('_gate_downstream_water_level', None)
+                    first.setData(Qt.UserRole, role)
             self.nodes = self._build_nodes_from_table()
             self.calculated_nodes = []
             if hasattr(self, "lbl_summary_info"):
@@ -5532,20 +5546,26 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         return True
 
     def _setup_header_tooltips(self):
-        """为表头设置悬浮提示（LaTeX公式渲染），使用自定义Fluent悬浮卡片"""
-        from app_渠系计算前端.water_profile.formula_dialog import COLUMN_FORMULAS, FormulaTooltipWidget
-
-        self._formula_tooltip = FormulaTooltipWidget()
-        self._formula_columns = set()
-        for col_idx, col_name in enumerate(NODE_ALL_HEADERS):
-            if col_name in COLUMN_FORMULAS:
-                self._formula_columns.add(col_idx)
-
+        """先连接表头事件，用户实际悬停时再加载公式提示。"""
+        self._formula_tooltip = None
+        self._formula_columns = None
         header = self.node_table.horizontalHeader()
         header.setMouseTracking(True)
         self._node_header = header
-        header.viewport().setMouseTracking(True)
-        header.viewport().installEventFilter(self)
+        self._node_header_viewport = header.viewport()
+        self._node_header_viewport.setMouseTracking(True)
+        self._node_header_viewport.installEventFilter(self)
+
+    def _ensure_header_tooltip(self):
+        """首次悬停创建一份提示卡片，随所属页面销毁。"""
+        if self._formula_tooltip is None:
+            from app_渠系计算前端.water_profile.formula_dialog import COLUMN_FORMULAS, FormulaTooltipWidget
+
+            self._formula_columns = {
+                index for index, name in enumerate(NODE_ALL_HEADERS) if name in COLUMN_FORMULAS
+            }
+            self._formula_tooltip = FormulaTooltipWidget(self)
+        return self._formula_tooltip
 
     def _on_node_cell_double_clicked(self, row, col):
         """双击单元格：结构形式列弹出选择面板；水头损失/高程列显示详细计算过程"""
@@ -6103,6 +6123,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             "cumulative": node.head_loss_cumulative or 0.0,
             "total_loss": node.head_loss_total or 0.0,
             "start_level_exact": round(float(start_level or 0.0), 6),
+            "gate_upstream_water_level": getattr(node, 'gate_upstream_water_level', None),
+            "gate_downstream_water_level": getattr(node, 'gate_downstream_water_level', None),
         }
         if is_first:
             details["cumulative_exact"] = self._calculate_exact_cumulative_loss_for_row(nodes, row_idx)
@@ -6116,6 +6138,19 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 head_loss_gate = getattr(node, 'head_loss_gate', 0.0) or 0.0
                 details["head_loss_gate"] = head_loss_gate
                 details["head_loss_gate_exact"] = round(float(head_loss_gate or 0.0), 6)
+                transition_step_loss = sum(
+                    float(nodes[j].head_loss_transition or 0.0)
+                    for j in range(prev_idx + 1, row_idx) if nodes[j].is_transition
+                )
+                incoming_loss = float(node.head_loss_total or 0.0) - float(head_loss_gate)
+                details["incoming_loss"] = incoming_loss
+                details["incoming_loss_exact"] = round(incoming_loss, 6)
+                details["transition_step_loss"] = transition_step_loss
+                details["transition_step_loss_exact"] = round(transition_step_loss, 6)
+                details["hf"] = node.head_loss_friction or 0.0
+                details["hj"] = getattr(node, 'head_loss_local', 0.0) or 0.0
+                details["hw"] = node.head_loss_bend or 0.0
+                details["h_reserve"] = getattr(node, 'head_loss_reserve', 0.0) or 0.0
                 cumulative_exact = self._calculate_exact_cumulative_loss_for_row(nodes, row_idx)
                 details["cumulative_exact"] = cumulative_exact
                 details["water_level_exact"] = round(float(start_level or 0.0) - cumulative_exact, 6)
@@ -6301,7 +6336,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         return True
 
     def _collect_terminal_gate_backfill_records(self, nodes=None):
-        """收集末尾闸行高程回推记录。"""
+        """收集所有闸行的高程参照推算记录。"""
         source_nodes = nodes if nodes is not None else (self.calculated_nodes or [])
         records = []
         for node in source_nodes:
@@ -6324,10 +6359,11 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             return "未找到有效参考断面"
         name = details.get("donor_name", f"行{row}") or f"行{row}"
         struct_type = details.get("donor_structure_type", "参考断面")
-        return f"第 {row} 行 {name}（{struct_type}）"
+        direction = details.get("donor_direction", "")
+        return f"{direction}第 {row} 行 {name}（{struct_type}）"
 
     def _build_terminal_gate_backfill_notice_lines(self, nodes=None):
-        """构建计算完成后的末尾闸行回推提示。"""
+        """构建计算完成后的闸行高程参照推算提示。"""
         records = self._collect_terminal_gate_backfill_records(nodes)
         lines = []
         for details in records:
@@ -6342,7 +6378,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 if top_ok:
                     fields.append("渠顶高程")
                 lines.append(
-                    f"末尾闸行 {target} 已按回推规则补齐{'、'.join(fields)}，参考来源：{source}"
+                    f"闸行 {target} 已按参考断面补齐{'、'.join(fields)}，参考来源：{source}"
                 )
                 continue
             if details.get("status") == "partial":
@@ -6357,7 +6393,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     or "未记录失败原因"
                 )
                 lines.append(
-                    f"末尾闸行 {target} 已部分回推{'、'.join(fields)}，参考来源：{source}；未完成部分原因：{failure_reason}"
+                    f"闸行 {target} 已部分参照推算{'、'.join(fields)}，参考来源：{source}；未完成部分原因：{failure_reason}"
                 )
                 continue
             failure_reason = details.get("failure_reason") or (
@@ -6366,19 +6402,19 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 or "未记录失败原因"
             )
             lines.append(
-                f"末尾闸行 {target} 未能完成高程回推，参考搜索范围为同流量段上游明渠/矩形暗涵；原因：{failure_reason}"
+                f"闸行 {target} 未能完成高程参照推算，参考搜索范围为同流量段上游或下游明渠/暗涵；原因：{failure_reason}"
             )
         return lines
 
     def _build_terminal_gate_backfill_report_lines(self, nodes=None):
-        """构建详细过程/导出中的末尾闸行回推说明。"""
+        """构建详细过程和导出中的闸行高程参照推算说明。"""
         records = self._collect_terminal_gate_backfill_records(nodes)
         if not records:
             return []
 
         lines = [
             "=" * 80,
-            "  末尾闸行高程回推说明",
+            "  闸行高程参照推算说明",
             "-" * 80,
         ]
         for details in records:
@@ -6386,19 +6422,32 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             source = self._format_terminal_gate_backfill_source(details)
             lines.append(f"  目标闸行: {target}")
             lines.append(
-                f"  搜索范围: 同流量段 {details.get('target_flow_section') or '-'} 上游明渠/矩形暗涵"
+                f"  搜索范围: 同流量段 {details.get('target_flow_section') or '-'}，优先上游明渠/暗涵，无可用上游断面时查下游"
             )
             lines.append(f"  参考来源: {source}")
 
             bottom = details.get("bottom") or {}
             if bottom.get("attempted"):
                 if bottom.get("success"):
-                    lines.append(
-                        "  渠底高程: "
-                        f"Zb = {details.get('target_water_level', 0.0):.3f} - "
-                        f"{details.get('donor_water_depth', 0.0):.3f} = "
-                        f"{bottom.get('result', 0.0):.3f} m"
-                    )
+                    if bottom.get("method") == "bed_slope":
+                        lines.append("  渠底连续条件: 无设计台阶，沿参考渠段底坡推进至闸桩号。")
+                        lines.append(
+                            f"  渠底高程: Zb = {bottom.get('donor_bottom_elevation', 0.0):.6f} - "
+                            f"{bottom.get('slope_i', 0.0):.6f} × {bottom.get('station_distance_m', 0.0):.6f} "
+                            f"= {bottom.get('result', 0.0):.6f} m"
+                        )
+                        lines.append(
+                            f"  桩号距离: {bottom.get('target_station_MC', 0.0):.6f} - "
+                            f"{bottom.get('donor_station_MC', 0.0):.6f} = "
+                            f"{bottom.get('station_distance_m', 0.0):.6f} m"
+                        )
+                    else:
+                        incoming_water = bottom.get('incoming_water_level', details.get('target_water_level', 0.0))
+                        lines.append(
+                            f"  渠底高程: Zb = {incoming_water:.3f} - "
+                            f"{details.get('donor_water_depth', 0.0):.3f} = "
+                            f"{bottom.get('result', 0.0):.3f} m（来水侧水位与参考水深推算）"
+                        )
                 else:
                     lines.append(
                         f"  渠底高程: 未回推。原因：{bottom.get('failure_reason') or '未记录失败原因'}"
@@ -6428,6 +6477,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         if gate_backfill.get("attempted") and (gate_backfill.get("bottom") or {}).get("attempted"):
             from app_渠系计算前端.water_profile.formula_dialog import show_terminal_gate_backfill_bottom_dialog
             show_terminal_gate_backfill_bottom_dialog(self, node.name or f"行{row_idx+1}", gate_backfill)
+            return
+        gate_bed_profile = (getattr(node, 'connection_source_details', None) or {}).get('gate_bed_profile', {})
+        if getattr(node, 'is_auto_inserted_channel', False) and gate_bed_profile.get('success'):
+            from app_渠系计算前端.water_profile.formula_dialog import show_gate_connection_bottom_dialog
+            show_gate_connection_bottom_dialog(self, node.name or f"行{row_idx+1}", gate_bed_profile,
+                                               node.water_level, node.water_depth)
             return
         # 倒虹吸出口节点：使用公式10.3.6专用弹窗
         try:
@@ -6580,15 +6635,186 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 # 联动计算列
                 node.head_loss_total = _rf(r, 39)
                 node.head_loss_cumulative = _rf(r, 40)
-                wl = _rf(r, 41)
-                if wl:
-                    node.water_level = wl
-                be = _rf(r, 42)
-                if be:
-                    node.bottom_elevation = be
-                te = _rf(r, 43)
-                if te:
-                    node.top_elevation = te
+                node.water_level = _rf(r, 41)
+                node.bottom_elevation = _rf(r, 42)
+                node.top_elevation = _rf(r, 43)
+        self._sync_gate_water_levels_from_table()
+
+    def _refresh_gate_elevation_cells(self):
+        """闸损编辑或旧工程恢复后重推自动高程，同时保持独立已有值。"""
+        nodes = getattr(self, 'calculated_nodes', None) or []
+        if not nodes:
+            return
+        from 推求水面线.core.hydraulic_calc import HydraulicCalculator
+        old_elevations = [(node.bottom_elevation, node.top_elevation) for node in nodes]
+        hyd_calc = HydraulicCalculator(getattr(self, '_settings', None) or ProjectSettings())
+        hyd_calc.apply_gate_elevation_backfill(nodes)
+        # 闸后自动渠底调整后，再同步相邻倒虹吸进出口渠底，不改变既有水损。
+        hyd_calc.apply_siphon_outlet_elevation(nodes)
+        blocker = QSignalBlocker(self.node_table)
+        for row, node in enumerate(nodes):
+            if row >= self.node_table.rowCount():
+                break
+            is_gate = self._is_gate_like_structure_text(node.get_structure_type_str()) and not node.is_transition
+            connection_details = getattr(node, 'connection_source_details', None) or {}
+            bed_profile = connection_details.get('gate_bed_profile', {})
+            is_gate_connection = bool(getattr(node, 'is_auto_inserted_channel', False) and bed_profile.get('success'))
+            elevation_changed = (node.bottom_elevation, node.top_elevation) != old_elevations[row]
+            if node.is_transition or not (is_gate or is_gate_connection or elevation_changed):
+                continue
+            first = self.node_table.item(row, 0)
+            if first is None:
+                continue
+            payload = first.data(Qt.UserRole)
+            payload = payload if isinstance(payload, dict) else {}
+            if is_gate:
+                payload['_gate_elevation_reference_details'] = copy.deepcopy(node.terminal_gate_backfill_details)
+            elif is_gate_connection:
+                payload['_connection_source_details'] = copy.deepcopy(connection_details)
+            numeric = payload.setdefault('_numeric_display_values', {})
+            for column, attribute in ((42, 'bottom_elevation'), (43, 'top_elevation')):
+                value = self._finite_gate_water_level(getattr(node, attribute, None))
+                item = self.node_table.item(row, column)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    self.node_table.setItem(row, column, item)
+                known_zero = self._gate_elevation_is_known_zero(node, attribute)
+                item.setText(f"{value:.3f}" if value is not None and (value or known_zero) else "-")
+                item.setToolTip(
+                    "渠底按相邻底坡连续推算，渠顶叠加参考结构高度；双击查看来源和代入过程。"
+                    if is_gate or is_gate_connection else
+                    "渠底、渠顶已同步倒虹吸相邻渠道的最新高程；双击查看来源和计算过程。"
+                )
+                numeric[str(column)] = {'text': item.text(), 'value': value if value is not None else 0.0}
+            first.setData(Qt.UserRole, payload)
+        blocker.unblock()
+
+    def _read_optional_table_water_level(self, row):
+        """原水位单元格可为两行文字，计算仍读取缓存中的闸后精确值。"""
+        item = self.node_table.item(row, 41)
+        if item is None or item.text().strip() in ("", "-", "—"):
+            return None
+        value = self._read_table_numeric_value(row, 41)
+        first = self.node_table.item(row, 0)
+        payload = first.data(Qt.UserRole) if first is not None else None
+        numeric = payload.get('_numeric_display_values', {}) if isinstance(payload, dict) else {}
+        exact = numeric.get('41', {}) if isinstance(numeric, dict) else {}
+        if isinstance(exact, dict) and exact.get('text') == item.text() and math.isfinite(value):
+            return value
+        try:
+            float(item.text().strip())
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
+    def _set_gate_table_levels(self, row, before, after):
+        """原水位列分两行展示闸前/闸后，隐藏字段保存两侧未截断值。"""
+        before = self._finite_gate_water_level(before)
+        after = self._finite_gate_water_level(after)
+        item = self.node_table.item(row, 41)
+        if item is None:
+            item = QTableWidgetItem("")
+            item.setTextAlignment(Qt.AlignCenter)
+            self.node_table.setItem(row, 41, item)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        before_text = "—" if before is None else f"{before:.3f}"
+        after_text = "—" if after is None else f"{after:.3f}"
+        item.setText(f"闸前 {before_text}\n闸后 {after_text}")
+        item.setToolTip(
+            "闸前水位由上一常规节点扣除至闸前的区间及渐变段损失；闸后再扣除过闸损失，供下游递推。"
+            "起算闸的闸前水位未知。双击查看计算过程。"
+        )
+        self.node_table.setRowHeight(row, max(self.node_table.rowHeight(row), self.node_table.fontMetrics().height() * 2 + 10))
+        first = self.node_table.item(row, 0)
+        if first is None:
+            first = QTableWidgetItem("")
+            self.node_table.setItem(row, 0, first)
+        if first is not None:
+            payload = first.data(Qt.UserRole)
+            payload = payload if isinstance(payload, dict) else {}
+            payload['_gate_upstream_water_level'] = before
+            payload['_gate_downstream_water_level'] = after
+            numeric = payload.setdefault('_numeric_display_values', {})
+            if after is None:
+                numeric.pop('41', None)
+            else:
+                numeric['41'] = {'text': item.text(), 'value': float(after)}
+            first.setData(Qt.UserRole, payload)
+
+    @staticmethod
+    def _finite_gate_water_level(value):
+        """隐藏字段也校验有限值，损坏或旧工程中的无效数值按缺失处理。"""
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @classmethod
+    def _gate_elevation_is_known_zero(cls, node, attribute):
+        """成功推算的零高程有来源证明，与旧工程的缺失零占位区分。"""
+        if cls._finite_gate_water_level(getattr(node, attribute, None)) != 0.0:
+            return False
+        bed_profile = (getattr(node, 'connection_source_details', None) or {}).get('gate_bed_profile', {})
+        if getattr(node, 'is_auto_inserted_channel', False) and bed_profile.get('success'):
+            return cls._finite_gate_water_level(bed_profile.get(attribute)) == 0.0
+        details = getattr(node, 'terminal_gate_backfill_details', None)
+        field = 'bottom' if attribute == 'bottom_elevation' else 'top'
+        result = details.get(field) if isinstance(details, dict) else None
+        return isinstance(result, dict) and bool(result.get('success')) and cls._finite_gate_water_level(result.get('result')) == 0.0
+
+    def _sync_gate_water_levels_from_table(self):
+        """人工改损失及撤销恢复后，两侧节点字段与表格采用值保持一致。"""
+        for row, node in enumerate(getattr(self, 'calculated_nodes', None) or []):
+            if row >= self.node_table.rowCount():
+                break
+            first = self.node_table.item(row, 0)
+            payload = first.data(Qt.UserRole) if first is not None else None
+            if self._is_gate_like_structure_text(node.get_structure_type_str()) and not node.is_transition:
+                payload = payload if isinstance(payload, dict) else {}
+                node.gate_upstream_water_level = self._finite_gate_water_level(payload.get('_gate_upstream_water_level'))
+                node.gate_downstream_water_level = self._finite_gate_water_level(payload.get('_gate_downstream_water_level'))
+            else:
+                node.gate_upstream_water_level = None
+                node.gate_downstream_water_level = None
+
+    def _refresh_gate_water_level_cells(self):
+        """恢复旧表格时更新原水位单元格，不改变既有水位或水头损失。"""
+        has_previous_regular = False
+        for row in range(self.node_table.rowCount()):
+            struct_item = self.node_table.item(row, 2)
+            structure = struct_item.text().strip() if struct_item else ""
+            is_transition = structure == "渐变段"
+            is_gate = not is_transition and self._is_gate_like_structure_text(structure)
+            before = after = None
+            current_level = self._read_optional_table_water_level(row)
+            first = self.node_table.item(row, 0)
+            payload = first.data(Qt.UserRole) if first is not None else None
+            payload = payload if isinstance(payload, dict) else {}
+            if is_gate:
+                after = current_level
+                if after == 0.0 and self._finite_gate_water_level(payload.get('_gate_downstream_water_level')) is None:
+                    # 旧成果的单一零水位没有显式两侧字段证明，沿用未计算占位语义。
+                    after = current_level = None
+                before = self._finite_gate_water_level(payload.get('_gate_upstream_water_level'))
+                if before is None and after is not None:
+                    gate_loss = self._finite_gate_water_level(self._read_table_numeric_value(row, 37))
+                    if gate_loss is not None and gate_loss >= 0.0:
+                        before = after + gate_loss
+                if not has_previous_regular or after is None:
+                    before = None
+                self._set_gate_table_levels(row, before, after)
+            elif first is not None:
+                payload.pop('_gate_upstream_water_level', None)
+                payload.pop('_gate_downstream_water_level', None)
+                first.setData(Qt.UserRole, payload)
+            if not is_transition:
+                has_previous_regular = True
+        self._sync_gate_water_levels_from_table()
 
     def _on_current_cell_changed(self, row, col, prev_row, prev_col):
         """切换单元格只记录原文，实际发生编辑时再生成整表撤销快照。"""
@@ -6611,7 +6837,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             for c in EDITABLE_COLS:
                 item = self.node_table.item(r, c)
                 snapshot[(r, c)] = item.text() if item else ""
-            # 也保存联动计算列（39-43）
+            # 两侧水位在原水位单元格和第0列附加数据中一同恢复。
             for c in range(39, 44):
                 item = self.node_table.item(r, c)
                 snapshot[(r, c)] = item.text() if item else ""
@@ -6892,12 +7118,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                         node.head_loss_total = _rf(r, 39)
                         node.head_loss_cumulative = _rf(r, 40)
                         node.water_level = _rf(r, 41)
-                        be = _rf(r, 42)
-                        if be:
-                            node.bottom_elevation = be
-                        te = _rf(r, 43)
-                        if te:
-                            node.top_elevation = te
+                        node.bottom_elevation = _rf(r, 42)
+                        node.top_elevation = _rf(r, 43)
 
             self._rebuild_calculation_summary_state(self._build_nodes_from_table())
 
@@ -6969,12 +7191,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                         node.head_loss_total = _rf(r, 39)
                         node.head_loss_cumulative = _rf(r, 40)
                         node.water_level = _rf(r, 41)
-                        be = _rf(r, 42)
-                        if be:
-                            node.bottom_elevation = be
-                        te = _rf(r, 43)
-                        if te:
-                            node.top_elevation = te
+                        node.bottom_elevation = _rf(r, 42)
+                        node.top_elevation = _rf(r, 43)
 
             self._rebuild_calculation_summary_state(self._build_nodes_from_table())
 
@@ -6992,6 +7210,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 continue
             payload = saved if isinstance(saved, dict) else {}
             node = nodes[row]
+            node.terminal_gate_backfill_details = copy.deepcopy(payload.get('_gate_elevation_reference_details', {}))
+            node.connection_source_details = copy.deepcopy(payload.get('_connection_source_details', {}))
             self._set_pressure_pipe_loss_override(node, payload.get(PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY))
             self._set_gate_loss_user_set(node, bool(payload.get(GATE_HEAD_LOSS_USER_SET_ROLE_KEY, False)))
             if node.is_transition:
@@ -7001,6 +7221,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
 
     def _after_loss_snapshot_restore(self):
         """撤销/重做后同步后续编辑的原文、操作控件与工程修改状态。"""
+        self._refresh_gate_water_level_cells()
         row, col = self.node_table.currentRow(), self.node_table.currentColumn()
         item = self.node_table.item(row, col)
         self._pre_edit_cell_value = (row, col, item.text() if item else '')
@@ -7245,6 +7466,11 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         for changed_row in sorted(changed_rows if changed_rows is not None else {edited_row}):
             if not _is_transition_row(changed_row):
                 new_total = sum(_rf(changed_row, c) for c in (34, 35, 36, 37, 38))
+                if changed_row < len(self.calculated_nodes):
+                    changed_node = self.calculated_nodes[changed_row]
+                    if getattr(changed_node, 'is_diversion_gate', False):
+                        # 闸来水区间的局部损失没有独立显示列，编辑过闸/预留值时仍须保留。
+                        new_total += float(getattr(changed_node, 'head_loss_local', 0.0) or 0.0)
                 _set(changed_row, 39, new_total)
                 # 同步节点对象，确保双击详情和后续完整计算读取到最新值。
                 if changed_row < len(self.calculated_nodes):
@@ -7294,6 +7520,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
 
             _set(r, 41, wl, ".3f")
 
+            struct_item = table.item(r, 2)
+            is_gate = self._is_gate_like_structure_text(struct_item.text() if struct_item else "")
+            if is_gate:
+                # 总损失已包含来水区间；仅加回过闸损失即为闸前水位。
+                self._set_gate_table_levels(r, wl + _rf(r, 37) if prev_regular_row >= 0 else None, wl)
+
             # 渠底高程 = 水位 - 水深
             h_depth = _rf(r, 27)
             if h_depth > 0:
@@ -7322,12 +7554,10 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     node.head_loss_total = _rf(r, 39)
                     node.head_loss_cumulative = _rf(r, 40)
                     node.water_level = _rf(r, 41)
-                    be = _rf(r, 42)
-                    if be:
-                        node.bottom_elevation = be
-                    te = _rf(r, 43)
-                    if te:
-                        node.top_elevation = te
+                    node.bottom_elevation = _rf(r, 42)
+                    node.top_elevation = _rf(r, 43)
+        self._sync_gate_water_levels_from_table()
+        self._refresh_gate_elevation_cells()
 
     # ================================================================
     def _add_node_row(self, data=None, _skip_undo=False, _from_table1_source=False, _defer_controls_refresh=False):
@@ -8697,7 +8927,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         calculator._update_total_head_loss(nodes)
         calculator.hyd_calc.recalculate_water_levels_with_transition_losses(nodes)
         calculator.hyd_calc.apply_siphon_outlet_elevation(nodes)
-        calculator.hyd_calc.apply_terminal_gate_elevation_backfill(nodes)
+        calculator.hyd_calc.apply_gate_elevation_backfill(nodes)
+        calculator.hyd_calc.apply_siphon_outlet_elevation(nodes)
         calculator._calculate_cumulative_head_loss(nodes)
         calculator._validate_real_node_station_conflicts(nodes)
         return nodes
@@ -8718,6 +8949,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         """用计算后的完整节点数据重建统一表格（输入列+结果列）"""
         with self._table_batch_update(self.node_table):
             self._update_table_from_nodes_full_impl(nodes, prefix)
+            self._refresh_gate_water_level_cells()
             # 计算前后的同一节点保留行身份，新增/复制节点由状态适配器分配新身份。
             for row, node in enumerate(nodes):
                 item = self.node_table.item(row, 0)
@@ -8764,6 +8996,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         return result
 
     def _update_table_from_nodes_full_impl(self, nodes, prefix=""):
+        restore_gate_water_levels(nodes)
         current_channel_level = self._get_current_channel_level_text()
         # 更新结构高度缓存（计算完成后可能已重新计算）
         self._node_structure_heights.clear()
@@ -8800,7 +9033,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             _is_auto_ch = getattr(node, 'is_auto_inserted_channel', False)
             _is_source_row = self._node_is_source_row(node)
 
-            # 构建完整46列数据，按列索引直接赋值
+            # 保持原44列，闸两侧水位在原水位单元格内展示。
             vals = [""] * len(NODE_ALL_HEADERS)
 
             # 基础输入列 (0-7)
@@ -8872,9 +9105,13 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 vals[40] = f"{node.head_loss_cumulative:.4f}" if node.head_loss_cumulative else "-"
 
                 # 高程列 (41-43)
-                vals[41] = f"{node.water_level:.3f}" if node.water_level else "-"
-                vals[42] = f"{node.bottom_elevation:.3f}" if node.bottom_elevation else "-"
-                vals[43] = f"{node.top_elevation:.3f}" if node.top_elevation else "-"
+                has_gate_level = getattr(node, 'gate_downstream_water_level', None) is not None
+                water_level = self._finite_gate_water_level(node.water_level)
+                bottom_elevation = self._finite_gate_water_level(node.bottom_elevation)
+                top_elevation = self._finite_gate_water_level(node.top_elevation)
+                vals[41] = f"{water_level:.3f}" if water_level is not None and (water_level or has_gate_level) else "-"
+                vals[42] = f"{bottom_elevation:.3f}" if bottom_elevation is not None and (bottom_elevation or self._gate_elevation_is_known_zero(node, 'bottom_elevation')) else "-"
+                vals[43] = f"{top_elevation:.3f}" if top_elevation is not None and (top_elevation or self._gate_elevation_is_known_zero(node, 'top_elevation')) else "-"
 
 
             # 渐变段行特有数据
@@ -8991,6 +9228,14 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     payload[GATE_HEAD_LOSS_USER_SET_ROLE_KEY] = True
                 else:
                     payload.pop(GATE_HEAD_LOSS_USER_SET_ROLE_KEY, None)
+                if self._is_gate_like_structure_text(node.get_structure_type_str()) and not node.is_transition:
+                    payload['_gate_upstream_water_level'] = getattr(node, 'gate_upstream_water_level', None)
+                    payload['_gate_downstream_water_level'] = getattr(node, 'gate_downstream_water_level', None)
+                    payload['_gate_elevation_reference_details'] = copy.deepcopy(node.terminal_gate_backfill_details)
+                else:
+                    payload.pop('_gate_upstream_water_level', None)
+                    payload.pop('_gate_downstream_water_level', None)
+                    payload.pop('_gate_elevation_reference_details', None)
                 # 持久化有压管道专用参数（表格无专门列，放在UserRole）
                 _sp = getattr(node, 'section_params', {}) or {}
                 _pm = str(_sp.get('pipe_material', '') or '').strip()
@@ -9114,8 +9359,15 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             lines.append(f"  进出口: {node.get_in_out_str()}")
             lines.append(f"  流量段: {node.flow_section}")
             lines.append(f"  坐标: ({node.x:.3f}, {node.y:.3f})")
-            if node.station_ip:
-                lines.append(f"  桩号: {ProjectSettings.format_station(node.station_ip, prefix)}")
+            if getattr(node, 'is_auto_inserted_channel', False) and not getattr(node, 'is_transition', False):
+                # 补段的原IP桩号沿用邻接节点，实际落位使用中心桩号，分开标注以免误读。
+                if node.station_MC is not None and math.isfinite(node.station_MC):
+                    lines.append(f"  中心桩号: {ProjectSettings.format_station(node.station_MC, prefix)}")
+                if node.station_ip is not None and math.isfinite(node.station_ip):
+                    lines.append(f"  关联IP桩号: {ProjectSettings.format_station(node.station_ip, prefix)}")
+            elif node.station_ip:
+                station_label = "关联IP桩号" if getattr(node, 'is_transition', False) else "桩号"
+                lines.append(f"  {station_label}: {ProjectSettings.format_station(node.station_ip, prefix)}")
             if node.azimuth:
                 lines.append(f"  方位角: {node.azimuth:.6f}°")
             if node.turn_angle:
@@ -9141,6 +9393,26 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 lines.append(f"  流速 v = {node.velocity:.3f} m/s")
             if node.water_level:
                 lines.append(f"  水位 Z = {node.water_level:.3f} m")
+            if getattr(node, 'is_diversion_gate', False):
+                before = getattr(node, 'gate_upstream_water_level', None)
+                after = getattr(node, 'gate_downstream_water_level', None)
+                lines.append(f"  闸前水位 = {before:.3f} m" if before is not None else "  闸前水位 = —（起算闸上游水位未知）")
+                lines.append(f"  闸后水位 = {after:.3f} m" if after is not None else "  闸后水位 = —")
+                lines.append("  闸前由上一常规节点扣除至闸前的区间及渐变段损失；闸后再扣过闸损失。")
+                incoming_loss = float(node.head_loss_total or 0.0) - float(node.head_loss_gate or 0.0)
+                lines.append(f"  来水区间损失（不含另列渐变段） = {incoming_loss:.6f} m")
+            gate_bed_profile = (getattr(node, 'connection_source_details', None) or {}).get('gate_bed_profile', {})
+            if getattr(node, 'is_auto_inserted_channel', False) and gate_bed_profile.get('success'):
+                lines.append(f"  渠底来源: 按第 {gate_bed_profile.get('gate_row', '-')} 行 "
+                             f"{gate_bed_profile.get('gate_name', '闸')} 渠底及本段底坡连续推进，无设计台阶。")
+                lines.append(
+                    f"  渠底连续推算: Zb = {gate_bed_profile.get('gate_bottom_elevation', 0.0):.6f} - "
+                    f"{gate_bed_profile.get('slope_i', 0.0):.6f} × "
+                    f"{gate_bed_profile.get('station_distance_m', 0.0):.6f} "
+                    f"= {gate_bed_profile.get('bottom_elevation', node.bottom_elevation):.6f} m"
+                )
+                lines.append(f"  设计水深 h设计 = {node.water_depth:.6f} m（原断面计算参数）")
+                lines.append(f"  实际水深 h实际 = {gate_bed_profile.get('actual_water_depth', 0.0):.6f} m（水位减连续渠底）")
             if node.bottom_elevation:
                 lines.append(f"  渠底高程 = {node.bottom_elevation:.3f} m")
             if node.top_elevation:
@@ -9245,7 +9517,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 current = self.start_station_edit.text()
                 value = parse_station_input(current)
                 self.start_station_edit.setText(str(value))
-        elif hasattr(self, '_node_header') and obj is self._node_header.viewport():
+        elif hasattr(self, '_node_header_viewport') and obj is self._node_header_viewport:
             header = self._node_header
             if event.type() == QEvent.Type.MouseMove:
                 try:
@@ -9253,16 +9525,19 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 except AttributeError:
                     pos = event.pos()
                 logical_idx = header.logicalIndexAt(pos)
+                if logical_idx >= 0:
+                    self._ensure_header_tooltip()
                 if logical_idx >= 0 and logical_idx in self._formula_columns:
                     col_name = NODE_ALL_HEADERS[logical_idx]
                     vp_x = header.sectionViewportPosition(logical_idx)
                     sec_w = header.sectionSize(logical_idx)
                     gp = header.mapToGlobal(QPoint(vp_x + sec_w // 2, header.height()))
                     self._formula_tooltip.show_for_column(col_name, gp)
-                else:
+                elif self._formula_tooltip is not None:
                     self._formula_tooltip.schedule_hide()
             elif event.type() == QEvent.Type.Leave:
-                self._formula_tooltip.schedule_hide()
+                if self._formula_tooltip is not None:
+                    self._formula_tooltip.schedule_hide()
         elif hasattr(self, "node_table") and self.node_table and obj in (self.node_table, self.node_table.viewport()):
             if obj is self.node_table.viewport() and event.type() == QEvent.Type.MouseButtonDblClick:
                 try:
@@ -9678,7 +9953,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             )
         elif has_gate_backfill_issue:
             InfoBar.warning(
-                "计算完成（末尾闸行回推未完成）",
+                "计算完成（部分闸行高程参照推算未完成）",
                 final_msg,
                 parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP,
             )
@@ -15479,12 +15754,16 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             for r in range(self.node_table.rowCount()):
                 for c in range(self.node_table.columnCount()):
                     item = self.node_table.item(r, c)
-                    ws.cell(row=r+4, column=c+1, value=item.text() if item else "")
+                    text = item.text() if item else ""
+                    cell = ws.cell(row=r+4, column=c+1, value=text)
+                    if "\n" in text:
+                        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                        ws.row_dimensions[r+4].height = max(ws.row_dimensions[r+4].height or 15, 30)
 
             note_lines = self._build_terminal_gate_backfill_report_lines(self.calculated_nodes)
             if note_lines:
                 note_start_row = self.node_table.rowCount() + 6
-                ws.cell(row=note_start_row, column=1, value="末尾闸行高程回推说明").font = Font(bold=True)
+                ws.cell(row=note_start_row, column=1, value="闸行高程参照推算说明").font = Font(bold=True)
                 ws.merge_cells(
                     start_row=note_start_row,
                     start_column=1,
@@ -15604,8 +15883,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='详细计算结果')
 
         gate_backfill_lines = self._build_terminal_gate_backfill_report_lines(nodes)
-        if gate_backfill_lines and "末尾闸行高程回推说明" not in calc_text:
-            doc_add_eng_h(doc, '末尾闸行高程回推说明')
+        if gate_backfill_lines and "闸行高程参照推算说明" not in calc_text:
+            doc_add_eng_h(doc, '闸行高程参照推算说明')
             for line in gate_backfill_lines[3:]:
                 if line.strip():
                     doc_add_eng_body(doc, line.strip())
@@ -15848,6 +16127,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             "project_settings": project_settings,
             "nodes": nodes_data,
             "calculated_nodes": calculated_nodes_data,
+            # 与计算结果一起保存详细过程，重开后可直接导出原计算书。
+            "detail_report_text": self.detail_text.toPlainText() if calculated_nodes_data else "",
             "table_state": table_state.to_dict(),
             "node_table_rows": table3_rows,
             "node_numeric_display_values": table3_numeric,
@@ -16168,6 +16449,9 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     first_item.setData(Qt.UserRole, payload)
             if restored_table_state is not None:
                 self._apply_profile_table_state(restored_table_state)
+            else:
+                self._refresh_gate_water_level_cells()
+            self._refresh_gate_elevation_cells()
             if self.calculated_nodes:
                 self._repair_missing_transition_length_details(self.calculated_nodes)
                 self._repair_missing_transition_loss_details(self.calculated_nodes)
@@ -16205,6 +16489,22 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             self._refresh_pressure_pipe_controls()
             self._switch_workspace_tab(self._tab_section_input)
             self._rebuild_calculation_summary_state(self._build_nodes_from_table())
+            # 详细过程属于当前工程；旧工程没有文本时按已存结果恢复，不重算水力。
+            saved_detail_report = d.get("detail_report_text", "")
+            if self.calculated_nodes:
+                if isinstance(saved_detail_report, str) and saved_detail_report.strip() and not migrated_named_group_result:
+                    self.detail_text.setPlainText(saved_detail_report)
+                else:
+                    self._generate_detail_report(
+                        self.calculated_nodes, self._settings,
+                        WaterProfileCalculator(self._settings) if self._settings else None,
+                    )
+                    self.detail_text.setPlainText(
+                        self.detail_text.toPlainText().replace("  计算时间:", "  报告恢复时间:", 1)
+                    )
+                    self._append_pressure_pipe_calc_details(self._pressure_pipe_calc_records)
+            else:
+                self.detail_text.clear()
             # 撤销只属于当前工程，不能把上一工程的行或单元格带回来。
             self._loss_undo_stack.clear()
             self._loss_redo_stack.clear()

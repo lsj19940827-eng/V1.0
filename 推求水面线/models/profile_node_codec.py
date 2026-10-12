@@ -5,7 +5,7 @@ import datetime
 import math
 import re
 
-from 推求水面线.models.data_models import ChannelNode
+from 推求水面线.models.data_models import ChannelNode, restore_gate_water_levels
 from 推求水面线.models.enums import StructureType, InOutType
 from 推求水面线.models.profile_state import SnapshotTable, USER_DATA_ROLE
 from 推求水面线.models.pressure_pipe_override import (
@@ -83,6 +83,12 @@ SPILLWAY_STEEP_CHUTE_ROLE_KEY = "_spillway_steep_chute"
 GATE_HEAD_LOSS_USER_SET_ROLE_KEY = "_gate_head_loss_user_set"
 
 GATE_HEAD_LOSS_USER_SET_PARAM_KEY = "gate_head_loss_user_set"
+
+GATE_UPSTREAM_WATER_LEVEL_ROLE_KEY = "_gate_upstream_water_level"
+
+GATE_DOWNSTREAM_WATER_LEVEL_ROLE_KEY = "_gate_downstream_water_level"
+
+GATE_ELEVATION_REFERENCE_DETAILS_ROLE_KEY = "_gate_elevation_reference_details"
 
 COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY = "_compound_trapezoid_params"
 
@@ -911,6 +917,17 @@ class ProfileNodeCodec(ProfileNodeRules):
                     pass
             return 0.0
 
+        def _read_gate_water_level(row, key):
+            """读取水位单元格的两侧隐藏值，保留零值并兼容旧工程缺失。"""
+            value = self._get_row_payload(row).get(key)
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
         def _read_text(row, col):
             item = table.item(row, col)
             if item:
@@ -1447,6 +1464,13 @@ class ProfileNodeCodec(ProfileNodeRules):
             _te = _read_float(r, 43)
             if _te != 0:
                 node.top_elevation = _te
+            if node.is_diversion_gate and not node.is_transition:
+                node.gate_upstream_water_level = _read_gate_water_level(r, GATE_UPSTREAM_WATER_LEVEL_ROLE_KEY)
+                node.gate_downstream_water_level = _read_gate_water_level(r, GATE_DOWNSTREAM_WATER_LEVEL_ROLE_KEY)
+                reference_details = self._get_row_payload(r).get(GATE_ELEVATION_REFERENCE_DETAILS_ROLE_KEY)
+                if isinstance(reference_details, dict):
+                    # 保存完整来源及上次自动结果，完整重算才能区别自动字段与人工高程。
+                    node.terminal_gate_backfill_details = copy.deepcopy(reference_details)
 
             # 恢复结构高度（用于计算渠顶高程，与Tkinter版 data_table.py 对齐）
             if r in self._node_structure_heights:
@@ -1491,6 +1515,7 @@ class ProfileNodeCodec(ProfileNodeRules):
 
             node.profile_row_id = self._state.rows[r].row_id
             nodes.append(node)
+        restore_gate_water_levels(nodes)
         self._pressure_turn_radius_fallback_groups = set()
         return nodes
 

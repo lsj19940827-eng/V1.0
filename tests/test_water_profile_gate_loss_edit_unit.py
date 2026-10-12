@@ -189,7 +189,8 @@ def test_recalc_downstream_uses_edited_gate_loss_for_total_and_water_level():
 
     assert panel.node_table.item(1, 39).text() == "0.0250"
     assert panel.node_table.item(1, 40).text() == "0.0250"
-    assert panel.node_table.item(1, 41).text() == "99.975"
+    assert panel.node_table.item(1, 41).text() == "闸前 100.000\n闸后 99.975"
+    assert panel_cls._read_table_numeric_value(panel, 1, 41) == 99.975
 
     _set_cell(panel.node_table, 1, 37, "0")
 
@@ -197,7 +198,8 @@ def test_recalc_downstream_uses_edited_gate_loss_for_total_and_water_level():
 
     assert panel.node_table.item(1, 39).text() == "0.0000"
     assert panel.node_table.item(1, 40).text() == "0.0000"
-    assert panel.node_table.item(1, 41).text() == "100.000"
+    assert panel.node_table.item(1, 41).text() == "闸前 100.000\n闸后 100.000"
+    assert panel_cls._read_table_numeric_value(panel, 1, 41) == 100.0
 
 
 def test_recalc_downstream_uses_edited_reserve_loss_for_total_and_water_level():

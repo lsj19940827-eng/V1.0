@@ -1,11 +1,27 @@
 # -*- coding: utf-8 -*-
-"""工具模块"""
+"""工具模块；Excel 依赖在实际使用读写接口时加载。"""
 
-from .excel_io import ExcelIO
 from .siphon_extractor import SiphonDataExtractor, SiphonGroup
 
 __all__ = ['ExcelIO', 'SiphonDataExtractor', 'SiphonGroup']
-"""推求水面线 utils 包初始化与打包导入兼容处理。"""
+
+
+def __getattr__(name):
+    """保留旧包级接口，避免数值工具导入时连带加载 Excel 组件。"""
+    if name == "ExcelIO":
+        from .excel_io import ExcelIO
+
+        globals()[name] = ExcelIO
+        return ExcelIO
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    """尚未加载的兼容接口也可通过交互式补全发现。"""
+    return sorted(set(globals()) | set(__all__))
+
+
+# 推求水面线 utils 包初始化与打包导入兼容处理。
 
 import sys
 

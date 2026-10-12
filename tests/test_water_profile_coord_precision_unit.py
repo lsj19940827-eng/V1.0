@@ -1300,7 +1300,7 @@ def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_
             self.hyd_calc = SimpleNamespace(
                 recalculate_water_levels_with_transition_losses=lambda _nodes: None,
                 apply_siphon_outlet_elevation=lambda _nodes: None,
-                apply_terminal_gate_elevation_backfill=lambda _nodes: None,
+                apply_gate_elevation_backfill=lambda _nodes: None,
             )
 
         @staticmethod

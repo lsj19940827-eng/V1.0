@@ -372,6 +372,7 @@ class GeometryCalculator:
         
         包括IP点桩号、BC桩号、MC桩号、EC桩号
         渐变段节点不参与桩号累计，继承前一节点的桩号。
+        单处自动连接段在真实桩号完成后，落在扣除两侧渐变段的实体区间中点。
         
         公式：
         - IP点桩号 = 起始桩号 + 累计直线距离
@@ -463,6 +464,10 @@ class GeometryCalculator:
             
             # 弯道长度 = EC - BC
             curr_node.curve_length = curr_node.station_EC - curr_node.station_BC
+
+        # 自动连接节点代表实体连接段的中心，不采用整个真实缺口的坐标中点。
+        # 两侧渐变段较长时，旧中点会落在渐变段内，导致分区间扣长不能守恒。
+        self._place_single_auto_channel_stations(nodes)
         
         # 第四步：计算复核长度（用于检查设计合理性，不能出现负数）
         for i in range(len(nodes)):
@@ -510,3 +515,66 @@ class GeometryCalculator:
             # 复核总长度 = L72 - J71 - J72 (当前IP直线间距 - 上一切线长 - 当前切线长)
             # 夹直线长度，检查两弯道之间是否有足够的直线段
             curr_node.check_total_length = curr_node.straight_distance - prev_tangent - curr_node.tangent_length
+
+    @staticmethod
+    def _place_single_auto_channel_stations(nodes: List[ChannelNode]) -> None:
+        """只重放单连接节点的内部桩号，保留真实IP、坐标和长度来源。"""
+        real_indices = [
+            i for i, node in enumerate(nodes)
+            if not getattr(node, 'is_transition', False)
+            and not getattr(node, 'is_auto_inserted_channel', False)
+        ]
+
+        def _positive_length(node: ChannelNode) -> float:
+            """无效或非正渐变长度不占用实体区间。"""
+            try:
+                value = float(getattr(node, 'transition_length', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+            return value if math.isfinite(value) and value > 0.0 else 0.0
+
+        for left_index, right_index in zip(real_indices, real_indices[1:]):
+            auto_indices = [
+                i for i in range(left_index + 1, right_index)
+                if getattr(nodes[i], 'is_auto_inserted_channel', False)
+                and not getattr(nodes[i], 'is_transition', False)
+            ]
+            # 多连接节点尚无子段分配契约，保持原落位，不猜测各段边界。
+            if len(auto_indices) != 1:
+                continue
+            auto_index = auto_indices[0]
+            left_station = float(nodes[left_index].station_MC)
+            right_station = float(nodes[right_index].station_MC)
+            gap_length = right_station - left_station
+            if not math.isfinite(gap_length) or gap_length < 0.0:
+                continue
+            upstream_length = sum(
+                _positive_length(nodes[i])
+                for i in range(left_index + 1, auto_index)
+                if getattr(nodes[i], 'is_transition', False)
+            )
+            downstream_length = sum(
+                _positive_length(nodes[i])
+                for i in range(auto_index + 1, right_index)
+                if getattr(nodes[i], 'is_transition', False)
+            )
+            # 截断只作用于代表桩号，不改渐变段实长或统计长度的来源记录。
+            upstream_length = min(upstream_length, gap_length)
+            downstream_length = min(downstream_length, gap_length - upstream_length)
+            remaining_length = gap_length - upstream_length - downstream_length
+            station = left_station + upstream_length + remaining_length / 2.0
+            auto_node = nodes[auto_index]
+            auto_node.station_MC = station
+            auto_node.station_BC = station
+            auto_node.station_EC = station
+            auto_node.curve_length = 0.0
+
+            # 下游渐变辅助行继续继承前一行桩号，避免残留旧连接中心。
+            for i in range(left_index + 1, right_index):
+                if getattr(nodes[i], 'is_transition', False):
+                    previous = nodes[i - 1]
+                    nodes[i].station_ip = previous.station_ip
+                    nodes[i].station_MC = previous.station_MC
+                    nodes[i].station_BC = previous.station_MC
+                    nodes[i].station_EC = previous.station_MC
+                    nodes[i].curve_length = 0.0

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from 推求水面线.models.data_models import restore_gate_water_levels as _restore_gate_water_levels
 
 
 class _SignalStub:
@@ -201,6 +202,8 @@ def _install_cad_tools_import_stubs():
     models_pkg = types.ModuleType("models")
     data_models_mod = types.ModuleType("models.data_models")
     data_models_mod.ProjectSettings = _ProjectSettingsStub
+    # 替身保留正式闸水位恢复接口，避免误判核心模型不可用。
+    data_models_mod.restore_gate_water_levels = _restore_gate_water_levels
 
     enums_mod = types.ModuleType("models.enums")
     enums_mod.StructureType = _make_stub_class("StructureType")

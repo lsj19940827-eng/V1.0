@@ -668,8 +668,12 @@ class WaterProfileCalculator:
         self.hyd_calc.apply_siphon_linear_water_level_distribution(nodes)
         checkpoint()
 
-        # 10. 对整表末尾闸行执行高程回推（仅补缺失项）
-        self.hyd_calc.apply_terminal_gate_elevation_backfill(nodes)
+        # 10. 所有闸行按同流量段参考断面补高程，并刷新上次自动推算的字段。
+        self.hyd_calc.apply_gate_elevation_backfill(nodes)
+        # 闸后自动连接渠沿连续床面延伸后，倒虹吸进口边界同步采用新渠底；
+        # 此时公式的实际水深与设计正常水深分开，水损不重算、不重复扣减。
+        if any((node.connection_source_details or {}).get('gate_bed_profile', {}).get('success') for node in nodes):
+            self.hyd_calc.apply_siphon_outlet_elevation(nodes)
         checkpoint()
         
         # 11. 计算累计总水头损失

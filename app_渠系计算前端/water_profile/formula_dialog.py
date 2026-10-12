@@ -1484,16 +1484,36 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
             {"title": "2. 计算参数", "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m"},
             {"title": "3. 计算结果", "formula": f"$Z_0 = {wl:.4f} \\ m$"},
         ]
+        if is_gate:
+            sections.append({"title": "4. 闸两侧水位", "values": f"闸前水位：—（起算闸上游水位未知）\n闸后水位：{wl:.4f} m",
+                             "content": "起始水位作为本闸已知的闸后水位，不用过闸损失反推未知闸前水位。"})
     elif is_gate:
         prev = details.get('prev_level', 0.0)
         h_gate = details.get('head_loss_gate', 0.0)
+        incoming = details.get('incoming_loss', float(details.get('total_loss', h_gate)) - float(h_gate))
+        transition_loss = details.get('transition_step_loss', 0.0)
+        before = details.get('gate_upstream_water_level')
+        if before is None:
+            before = wl + h_gate
+        prev_exact = details.get('prev_level_exact', prev)
+        incoming_exact = details.get('incoming_loss_exact', incoming)
+        transition_exact = details.get('transition_step_loss_exact', transition_loss)
+        gate_exact = details.get('head_loss_gate_exact', h_gate)
+        before_exact = float(before)
+        after_exact = details.get('gate_downstream_water_level')
+        if after_exact is None:
+            after_exact = wl
         sections = [
-            {"title": "1. 过闸水位推求公式", "formula": r"$Z_i = Z_{i-1} - h_{gate}$", "content": "闸类结构（分水闸/分水口/节制闸/泄水闸等）仅考虑过闸水头损失。"},
-            {"title": "2. 计算参数", "values": f"上一节点水位  $Z_{{i-1}} = {prev:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m"},
-            {"title": "3. 代入公式计算", "values": f"$Z_i = {prev:.4f} - {h_gate:.4f} = {wl:.4f}$ m"},
+            {"title": "1. 到闸前及过闸水位推求公式", "formula": r"$Z_{before} = Z_{prev} - h_{incoming} - h_{tr};\quad Z_{after} = Z_{before} - h_{gate}$", "content": "上一常规节点到闸前的沿程、弯道、局部及预留损失计入来水区间，另列渐变段独立扣除；到闸前后再扣过闸损失。表3本行水位为闸后水位。"},
+            {"title": "2. 计算参数", "values": f"上一常规节点水位  $Z_{{prev}} = {prev:.4f}$ m\n来水区间损失  $h_{{incoming}} = {incoming:.4f}$ m\n"
+                        f"沿程损失 $h_f = {details.get('hf', 0.0):.4f}$ m，弯道损失 $h_w = {details.get('hw', 0.0):.4f}$ m\n"
+                        f"局部损失 $h_j = {details.get('hj', 0.0):.4f}$ m，预留损失 $h_{{res}} = {details.get('h_reserve', 0.0):.4f}$ m\n"
+                        f"中间渐变段小计  $h_{{tr}} = {transition_loss:.4f}$ m\n闸前水位  $Z_{{before}} = {before:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m"},
+            {"title": "3. 代入公式计算（按 6 位精确值）", "values": f"$Z_{{before}} = {_fmt_exact(prev_exact)} - {_fmt_exact(incoming_exact)} - {_fmt_exact(transition_exact)} = {_fmt_exact(before_exact)}$ m\n"
+                        f"$Z_{{after}} = {_fmt_exact(before_exact)} - {_fmt_exact(gate_exact)} = {_fmt_exact(after_exact)}$ m"},
             {"title": "4. 校验", "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m\n累计总水头损失 $= {cumulative:.4f}$ m\n"
                                             f"$Z_{{start}}$ - 累计 $= {start_level - cumulative:.4f}$ m"},
-            {"title": "5. 计算结果", "formula": f"$Z_i = {wl:.4f} \\ m$"},
+            {"title": "5. 闸两侧水位", "values": f"闸前水位：{before:.4f} m\n闸后水位：{wl:.4f} m"},
         ]
     else:
         prev = details.get('prev_level', 0.0)
@@ -1610,25 +1630,28 @@ def show_top_elevation_dialog(parent, node_name: str, details: Dict[str, Any]):
 
 
 def show_terminal_gate_backfill_bottom_dialog(parent, node_name: str, details: Dict[str, Any]):
-    """末尾闸行渠底高程回推详情。"""
+    """闸行渠底高程参照推算详情。"""
     target_row = details.get('target_row', 0)
     target_wl = details.get('target_water_level', 0.0)
     donor_row = details.get('donor_row')
     donor_name = details.get('donor_name', '-')
     donor_type = details.get('donor_structure_type', '-')
+    donor_direction = details.get('donor_direction', '')
     donor_depth = details.get('donor_water_depth', 0.0)
     bottom = details.get('bottom', {}) or {}
     result = bottom.get('result', details.get('bottom_elevation', 0.0))
     reason = bottom.get('failure_reason') or details.get('failure_reason', '')
     donor_text = (
-        f"第 {donor_row} 行 {donor_name}（{donor_type}）" if donor_row else "未找到有效参考断面"
+        f"{donor_direction}第 {donor_row} 行 {donor_name}（{donor_type}）" if donor_row else "未找到有效参考断面"
     )
 
+    is_bed_slope = bottom.get('method') == 'bed_slope'
+    incoming_wl = bottom.get('incoming_water_level', target_wl)
     sections = [
         {
-            "title": "1. 末尾闸行渠底高程回推规则",
-            "formula": r"$Z_b = Z_{gate} - h_{ref}$",
-            "content": "其中: $Z_{gate}$=末尾闸行水位, $h_{ref}$=同流量段上游参考断面的水深",
+            "title": "1. 闸行渠底高程参照推算规则",
+            "formula": r"$Z_b = Z_{b,ref} - i_{ref}(S_{gate}-S_{ref})$" if is_bed_slope else r"$Z_b = Z_{incoming} - h_{ref}$",
+            "content": "无设计台阶，按参考渠底与底坡连续推算。优先同流量段上游明渠或暗涵，无有效上游参考时查找下游。" if is_bed_slope else "底坡与桩号不足时，用来水侧水位减同流量段参考断面水深推算。过闸损失不作为渠底跌坎。",
         },
         {
             "title": "2. 参考来源",
@@ -1636,15 +1659,28 @@ def show_terminal_gate_backfill_bottom_dialog(parent, node_name: str, details: D
         },
     ]
 
-    if bottom.get('success'):
+    if bottom.get('success') and is_bed_slope:
+        donor_bottom = bottom.get('donor_bottom_elevation', 0.0)
+        slope = bottom.get('slope_i', 0.0)
+        distance = bottom.get('station_distance_m', 0.0)
+        donor_station = bottom.get('donor_station_MC', 0.0)
+        target_station = bottom.get('target_station_MC', 0.0)
+        sections.extend([
+            {"title": "3. 连续渠底计算参数", "values": f"参考渠底 $Z_{{b,ref}} = {donor_bottom:.6f}$ m\n参考底坡 $i_{{ref}} = {slope:.6f}$\n"
+             f"参考中心桩号 $S_{{ref}} = {donor_station:.6f}$ m\n闸中心桩号 $S_{{gate}} = {target_station:.6f}$ m\n"
+             f"桩号距离 $\\Delta S = {target_station:.6f} - {donor_station:.6f} = {distance:.6f}$ m"},
+            {"title": "4. 代入公式计算", "values": f"$Z_b = {donor_bottom:.6f} - {slope:.6f} \\times {distance:.6f} = {result:.6f}$ m"},
+            {"title": "5. 计算结果", "formula": f"$Z_b = {result:.4f} \\ m$"},
+        ])
+    elif bottom.get('success'):
         sections.extend([
             {
                 "title": "3. 计算参数",
-                "values": f"末尾闸行水位  $Z_{{gate}} = {target_wl:.4f}$ m\n参考断面水深  $h_{{ref}} = {donor_depth:.4f}$ m",
+                "values": f"来水侧水位  $Z_{{incoming}} = {incoming_wl:.4f}$ m\n参考断面水深  $h_{{ref}} = {donor_depth:.4f}$ m",
             },
             {
                 "title": "4. 代入公式计算",
-                "values": f"$Z_b = {target_wl:.4f} - {donor_depth:.4f} = {result:.4f}$ m",
+                "values": f"$Z_b = {incoming_wl:.4f} - {donor_depth:.4f} = {result:.4f}$ m",
             },
             {
                 "title": "5. 计算结果",
@@ -1654,7 +1690,7 @@ def show_terminal_gate_backfill_bottom_dialog(parent, node_name: str, details: D
     else:
         sections.extend([
             {
-                "title": "3. 回推失败原因",
+                "title": "3. 参照推算失败原因",
                 "values": reason or "未记录失败原因",
             },
             {
@@ -1663,29 +1699,53 @@ def show_terminal_gate_backfill_bottom_dialog(parent, node_name: str, details: D
             },
         ])
 
-    FormulaDialog(parent, f"{node_name} - 渠底高程回推详情", sections)
+    FormulaDialog(parent, f"{node_name} - 渠底高程参照推算详情", sections)
+
+
+def show_gate_connection_bottom_dialog(parent, node_name: str, details: Dict[str, Any], water_level: float,
+                                      design_water_depth: float):
+    """闸后自动补段按底坡连续推算，区分设计水深和结果实际水深。"""
+    base_bottom = details.get('gate_bottom_elevation', 0.0)
+    slope = details.get('slope_i', 0.0)
+    distance = details.get('station_distance_m', 0.0)
+    bottom = details.get('bottom_elevation', 0.0)
+    actual_depth = details.get('actual_water_depth', water_level - bottom)
+    sections = [
+        {"title": "1. 连续渠底规则", "formula": r"$Z_b = Z_{b,gate} - i(S-S_{gate})$",
+         "content": "闸后没有设计台阶，按闸渠底和本补段底坡推进。表3水深h设计、设计流速及断面参数保留原断面计算值；实际水深由结果水位减连续渠底得到。"},
+        {"title": "2. 参考来源及参数", "values": f"参考闸：第 {details.get('gate_row', '-')} 行 {details.get('gate_name', '闸')}\n"
+         f"闸渠底 $Z_{{b,gate}} = {base_bottom:.6f}$ m\n补段底坡 $i = {slope:.6f}$\n"
+         f"闸中心桩号 $S_{{gate}} = {details.get('gate_station_MC', 0.0):.6f}$ m\n"
+         f"补段中心桩号 $S = {details.get('target_station_MC', 0.0):.6f}$ m\n桩号距离 $\\Delta S = {distance:.6f}$ m"},
+        {"title": "3. 代入公式计算", "values": f"$Z_b = {base_bottom:.6f} - {slope:.6f} \\times {distance:.6f} = {bottom:.6f}$ m"},
+        {"title": "4. 设计与实际水深", "values": f"设计水深 $h_{{design}} = {design_water_depth:.6f}$ m（原断面计算参数）\n"
+         f"结果水位 $Z = {water_level:.6f}$ m\n实际水深 $h_{{actual}} = {water_level:.6f} - {bottom:.6f} = {actual_depth:.6f}$ m"},
+        {"title": "5. 计算结果", "formula": f"$Z_b = {bottom:.4f} \\ m$"},
+    ]
+    FormulaDialog(parent, f"{node_name} - 渠底高程连续推算详情", sections)
 
 
 def show_terminal_gate_backfill_top_dialog(parent, node_name: str, details: Dict[str, Any]):
-    """末尾闸行渠顶高程回推详情。"""
+    """闸行渠顶高程参照推算详情。"""
     target_row = details.get('target_row', 0)
     donor_row = details.get('donor_row')
     donor_name = details.get('donor_name', '-')
     donor_type = details.get('donor_structure_type', '-')
+    donor_direction = details.get('donor_direction', '')
     donor_height = details.get('donor_structure_height', 0.0)
     top = details.get('top', {}) or {}
     base_bottom = top.get('base_bottom_elevation', details.get('bottom_elevation', 0.0))
     result = top.get('result', details.get('top_elevation', 0.0))
     reason = top.get('failure_reason') or details.get('failure_reason', '')
     donor_text = (
-        f"第 {donor_row} 行 {donor_name}（{donor_type}）" if donor_row else "未找到有效参考断面"
+        f"{donor_direction}第 {donor_row} 行 {donor_name}（{donor_type}）" if donor_row else "未找到有效参考断面"
     )
 
     sections = [
         {
-            "title": "1. 末尾闸行渠顶高程回推规则",
+            "title": "1. 闸行渠顶高程参照推算规则",
             "formula": r"$Z_t = Z_b + H_{ref}$",
-            "content": "其中: $Z_b$=末尾闸行渠底高程, $H_{ref}$=同流量段上游参考断面的结构高度",
+            "content": "其中: $Z_b$=闸行渠底高程, $H_{ref}$=同流量段渠道参考断面的结构高度。结果表示渠道参照渠顶，不作为闸墩或工作桥顶高程。",
         },
         {
             "title": "2. 参考来源",
@@ -1697,7 +1757,7 @@ def show_terminal_gate_backfill_top_dialog(parent, node_name: str, details: Dict
         sections.extend([
             {
                 "title": "3. 计算参数",
-                "values": f"末尾闸行渠底高程  $Z_b = {base_bottom:.4f}$ m\n参考结构高度  $H_{{ref}} = {donor_height:.4f}$ m",
+                "values": f"闸行渠底高程  $Z_b = {base_bottom:.4f}$ m\n参考结构高度  $H_{{ref}} = {donor_height:.4f}$ m",
             },
             {
                 "title": "4. 代入公式计算",
@@ -1711,7 +1771,7 @@ def show_terminal_gate_backfill_top_dialog(parent, node_name: str, details: Dict
     else:
         sections.extend([
             {
-                "title": "3. 回推失败原因",
+                "title": "3. 参照推算失败原因",
                 "values": reason or "未记录失败原因",
             },
             {
@@ -1720,7 +1780,7 @@ def show_terminal_gate_backfill_top_dialog(parent, node_name: str, details: Dict
             },
         ])
 
-    FormulaDialog(parent, f"{node_name} - 渠顶高程回推详情", sections)
+    FormulaDialog(parent, f"{node_name} - 渠顶高程参照推算详情", sections)
 
 
 def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any],

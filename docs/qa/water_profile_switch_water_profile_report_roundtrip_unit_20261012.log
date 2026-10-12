@@ -1,0 +1,15 @@
+FF.                                                                      [100%]
+================================== FAILURES ===================================
+_ test_reopened_report_and_word_keep_saved_nodes_without_hydraulic_recalculation[False] _
+tests\test_water_profile_report_roundtrip_unit.py:69: in test_reopened_report_and_word_keep_saved_nodes_without_hydraulic_recalculation
+    assert "闸前水位 = 100.000 m" in text
+E   AssertionError: assert '闸前水位 = 100.000 m' in '================================================================================\n  飞龙报告复验推求水面线 — 详细计算结果\n===========...============================\n  计算完毕\n================================================================================'
+_ test_reopened_report_and_word_keep_saved_nodes_without_hydraulic_recalculation[True] _
+tests\test_water_profile_report_roundtrip_unit.py:69: in test_reopened_report_and_word_keep_saved_nodes_without_hydraulic_recalculation
+    assert "闸前水位 = 100.000 m" in text
+E   AssertionError: assert '闸前水位 = 100.000 m' in '================================================================================\n  飞龙报告复验推求水面线 — 详细计算结果\n===========...============================\n  计算完毕\n================================================================================'
+=========================== short test summary info ===========================
+FAILED tests/test_water_profile_report_roundtrip_unit.py::test_reopened_report_and_word_keep_saved_nodes_without_hydraulic_recalculation[False]
+FAILED tests/test_water_profile_report_roundtrip_unit.py::test_reopened_report_and_word_keep_saved_nodes_without_hydraulic_recalculation[True]
+2 failed, 1 passed in 1.68s
+

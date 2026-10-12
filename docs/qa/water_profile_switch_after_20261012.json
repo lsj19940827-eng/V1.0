@@ -1,0 +1,133 @@
+{
+  "runs": [
+    {
+      "import_ms": 91.53010000591166,
+      "construct_ms": 246.22820000513457,
+      "click_handler_ms": 430.7241999922553,
+      "first_display_ms": 513.9889999991283,
+      "event_loop_max_gap_ms": 432.04069999046624,
+      "input_rows": 0,
+      "platform": "windows",
+      "python_version": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+      "pyside_version": "6.11.0",
+      "window_visible": true,
+      "repeat_display_ms": [
+        32.84449999046046,
+        19.69509999617003,
+        30.711100000189617
+      ],
+      "source_sha256": {
+        "推求水面线/utils/__init__.py": "4407d05beebcd895040d09020727d0d471aaa3a0c2ad44bcf69a7680fa4738e2",
+        "app_渠系计算前端/water_profile/panel.py": "11c2e0493e50ced2886e258aa08018ac7bf8840bd9d143f16bf00c7a8d2467be",
+        "app_渠系计算前端/batch/panel.py": "9368c85925096792f603a2d0aa742ec8a1ecc6035a27244c68f850d056bf7477",
+        "app_渠系计算前端/app.py": "28107ccad69d8af8134cbadb6cc7746874c5baaec4eca0ceed260bf4087617b9"
+      }
+    },
+    {
+      "import_ms": 67.61279999045655,
+      "construct_ms": 192.75930000003427,
+      "click_handler_ms": 326.76910000736825,
+      "first_display_ms": 366.001900008996,
+      "event_loop_max_gap_ms": 328.9102999988245,
+      "input_rows": 0,
+      "platform": "windows",
+      "python_version": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+      "pyside_version": "6.11.0",
+      "window_visible": true,
+      "repeat_display_ms": [
+        23.592900004587136,
+        19.913900003302842,
+        19.447400001809
+      ],
+      "source_sha256": {
+        "推求水面线/utils/__init__.py": "4407d05beebcd895040d09020727d0d471aaa3a0c2ad44bcf69a7680fa4738e2",
+        "app_渠系计算前端/water_profile/panel.py": "11c2e0493e50ced2886e258aa08018ac7bf8840bd9d143f16bf00c7a8d2467be",
+        "app_渠系计算前端/batch/panel.py": "9368c85925096792f603a2d0aa742ec8a1ecc6035a27244c68f850d056bf7477",
+        "app_渠系计算前端/app.py": "28107ccad69d8af8134cbadb6cc7746874c5baaec4eca0ceed260bf4087617b9"
+      }
+    },
+    {
+      "import_ms": 73.57009999395814,
+      "construct_ms": 207.53800000238698,
+      "click_handler_ms": 352.42969999671914,
+      "first_display_ms": 395.43759998923633,
+      "event_loop_max_gap_ms": 352.5595999963116,
+      "input_rows": 0,
+      "platform": "windows",
+      "python_version": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+      "pyside_version": "6.11.0",
+      "window_visible": true,
+      "repeat_display_ms": [
+        45.94799999904353,
+        29.86830000008922,
+        21.123799990164116
+      ],
+      "source_sha256": {
+        "推求水面线/utils/__init__.py": "4407d05beebcd895040d09020727d0d471aaa3a0c2ad44bcf69a7680fa4738e2",
+        "app_渠系计算前端/water_profile/panel.py": "11c2e0493e50ced2886e258aa08018ac7bf8840bd9d143f16bf00c7a8d2467be",
+        "app_渠系计算前端/batch/panel.py": "9368c85925096792f603a2d0aa742ec8a1ecc6035a27244c68f850d056bf7477",
+        "app_渠系计算前端/app.py": "28107ccad69d8af8134cbadb6cc7746874c5baaec4eca0ceed260bf4087617b9"
+      }
+    },
+    {
+      "import_ms": 185.4163999960292,
+      "construct_ms": 242.9212999995798,
+      "click_handler_ms": 506.362000000081,
+      "first_display_ms": 555.1123000041116,
+      "event_loop_max_gap_ms": 506.4791999902809,
+      "input_rows": 0,
+      "platform": "windows",
+      "python_version": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+      "pyside_version": "6.11.0",
+      "window_visible": true,
+      "repeat_display_ms": [
+        21.551600002567284,
+        21.02990000275895,
+        24.626799990073778
+      ],
+      "source_sha256": {
+        "推求水面线/utils/__init__.py": "4407d05beebcd895040d09020727d0d471aaa3a0c2ad44bcf69a7680fa4738e2",
+        "app_渠系计算前端/water_profile/panel.py": "11c2e0493e50ced2886e258aa08018ac7bf8840bd9d143f16bf00c7a8d2467be",
+        "app_渠系计算前端/batch/panel.py": "9368c85925096792f603a2d0aa742ec8a1ecc6035a27244c68f850d056bf7477",
+        "app_渠系计算前端/app.py": "28107ccad69d8af8134cbadb6cc7746874c5baaec4eca0ceed260bf4087617b9"
+      }
+    },
+    {
+      "import_ms": 79.1824999905657,
+      "construct_ms": 219.85019999556243,
+      "click_handler_ms": 369.81899999955203,
+      "first_display_ms": 409.26289999333676,
+      "event_loop_max_gap_ms": 370.0057999958517,
+      "input_rows": 0,
+      "platform": "windows",
+      "python_version": "3.13.3 (tags/v3.13.3:6280bb5, Apr  8 2025, 14:47:33) [MSC v.1943 64 bit (AMD64)]",
+      "pyside_version": "6.11.0",
+      "window_visible": true,
+      "repeat_display_ms": [
+        22.459300002083182,
+        22.96539999952074,
+        30.956799993873574
+      ],
+      "source_sha256": {
+        "推求水面线/utils/__init__.py": "4407d05beebcd895040d09020727d0d471aaa3a0c2ad44bcf69a7680fa4738e2",
+        "app_渠系计算前端/water_profile/panel.py": "11c2e0493e50ced2886e258aa08018ac7bf8840bd9d143f16bf00c7a8d2467be",
+        "app_渠系计算前端/batch/panel.py": "9368c85925096792f603a2d0aa742ec8a1ecc6035a27244c68f850d056bf7477",
+        "app_渠系计算前端/app.py": "28107ccad69d8af8134cbadb6cc7746874c5baaec4eca0ceed260bf4087617b9"
+      }
+    }
+  ],
+  "source_sha256": {
+    "推求水面线/utils/__init__.py": "4407d05beebcd895040d09020727d0d471aaa3a0c2ad44bcf69a7680fa4738e2",
+    "app_渠系计算前端/water_profile/panel.py": "11c2e0493e50ced2886e258aa08018ac7bf8840bd9d143f16bf00c7a8d2467be",
+    "app_渠系计算前端/batch/panel.py": "9368c85925096792f603a2d0aa742ec8a1ecc6035a27244c68f850d056bf7477",
+    "app_渠系计算前端/app.py": "28107ccad69d8af8134cbadb6cc7746874c5baaec4eca0ceed260bf4087617b9"
+  },
+  "median_ms": {
+    "import_ms": 79.1824999905657,
+    "construct_ms": 219.85019999556243,
+    "click_handler_ms": 369.81899999955203,
+    "first_display_ms": 409.26289999333676,
+    "event_loop_max_gap_ms": 370.0057999958517
+  },
+  "repeat_median_ms": 22.96539999952074
+}

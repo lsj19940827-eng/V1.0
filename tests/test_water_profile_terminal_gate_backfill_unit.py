@@ -26,6 +26,7 @@ def _make_node(
     bottom_elevation=0.0,
     top_elevation=0.0,
     is_gate=False,
+    gate_upstream_water_level=None,
 ):
     node = ChannelNode()
     node.name = name
@@ -37,6 +38,9 @@ def _make_node(
     node.bottom_elevation = float(bottom_elevation)
     node.top_elevation = float(top_elevation)
     node.is_diversion_gate = bool(is_gate)
+    node.gate_upstream_water_level = gate_upstream_water_level
+    if is_gate:
+        node.gate_downstream_water_level = float(water_level)
     return node
 
 
@@ -54,6 +58,7 @@ def test_terminal_gate_backfill_fills_bottom_and_top_from_same_section_upstream_
         structure_type=StructureType.DISCHARGE_GATE,
         flow_section="1",
         water_level=358.524,
+        gate_upstream_water_level=358.624,
         is_gate=True,
     )
 
@@ -61,8 +66,8 @@ def test_terminal_gate_backfill_fills_bottom_and_top_from_same_section_upstream_
 
     assert details is target.terminal_gate_backfill_details
     assert details["status"] == "success"
-    assert target.bottom_elevation == pytest.approx(357.324)
-    assert target.top_elevation == pytest.approx(359.824)
+    assert target.bottom_elevation == pytest.approx(357.424)
+    assert target.top_elevation == pytest.approx(359.924)
     assert details["donor_row"] == 1
     assert details["filled_fields"] == ["bottom_elevation", "top_elevation"]
 
@@ -116,6 +121,7 @@ def test_terminal_gate_backfill_skips_empty_candidate_and_uses_earlier_valid_don
         structure_type=StructureType.DIVERSION_GATE,
         flow_section="3",
         water_level=365.5,
+        gate_upstream_water_level=365.6,
         is_gate=True,
     )
 
@@ -124,7 +130,7 @@ def test_terminal_gate_backfill_skips_empty_candidate_and_uses_earlier_valid_don
     assert details["status"] == "success"
     assert details["donor_row"] == 1
     assert details["donor_name"] == "更上游有效明渠"
-    assert target.bottom_elevation == pytest.approx(363.9)
+    assert target.bottom_elevation == pytest.approx(364.0)
 
 
 def test_terminal_gate_backfill_does_not_cross_flow_section_and_keeps_fields_empty_when_missing():

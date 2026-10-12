@@ -1,0 +1,122 @@
+{
+  "files": [
+    {
+      "file": "test_water_profile_utils_alias_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "1 passed in 0.35s"
+      ],
+      "elapsed_s": 0.6802839000010863,
+      "log": "docs\\qa\\water_profile_switch_water_profile_utils_alias_unit_20261012.log"
+    },
+    {
+      "file": "test_water_profile_package_imports_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "2 passed in 0.93s"
+      ],
+      "elapsed_s": 1.3968772000080207,
+      "log": "docs\\qa\\water_profile_switch_water_profile_package_imports_unit_20261012.log"
+    },
+    {
+      "file": "test_water_profile_init_shared_batch_results_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "3 passed in 1.49s"
+      ],
+      "elapsed_s": 2.0988579999975627,
+      "log": "docs\\qa\\water_profile_switch_water_profile_init_shared_batch_results_unit_20261012.log"
+    },
+    {
+      "file": "test_water_profile_collapsible_layout_regression_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "6 passed in 3.98s"
+      ],
+      "elapsed_s": 4.6803862000087975,
+      "log": "docs\\qa\\water_profile_switch_water_profile_collapsible_layout_regression_unit_20261012.log"
+    },
+    {
+      "file": "test_app_panel_registry_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "1 passed in 1.04s"
+      ],
+      "elapsed_s": 1.524152600002708,
+      "log": "docs\\qa\\water_profile_switch_app_panel_registry_unit_20261012.log"
+    },
+    {
+      "file": "test_project_lazy_save_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "24 passed in 4.08s"
+      ],
+      "elapsed_s": 4.848457499989308,
+      "log": "docs\\qa\\water_profile_switch_project_lazy_save_unit_20261012.log"
+    },
+    {
+      "file": "test_batch_editing_lifecycle_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "26 passed in 11.66s"
+      ],
+      "elapsed_s": 12.652716399999917,
+      "log": "docs\\qa\\water_profile_switch_batch_editing_lifecycle_unit_20261012.log"
+    },
+    {
+      "file": "test_table_interaction_performance_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "12 passed in 2.28s"
+      ],
+      "elapsed_s": 2.929040699993493,
+      "log": "docs\\qa\\water_profile_switch_table_interaction_performance_unit_20261012.log"
+    },
+    {
+      "file": "test_water_profile_lazy_tooltip_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "1 passed in 3.58s"
+      ],
+      "elapsed_s": 3.9044309000018984,
+      "log": "docs\\qa\\water_profile_switch_water_profile_lazy_tooltip_unit_20261012.log"
+    },
+    {
+      "file": "test_water_profile_report_roundtrip_unit.py",
+      "exit_code": 1,
+      "summaries": [
+        "2 failed, 1 passed in 1.68s"
+      ],
+      "elapsed_s": 2.2473978999914834,
+      "log": "docs\\qa\\water_profile_switch_water_profile_report_roundtrip_unit_20261012.log"
+    },
+    {
+      "file": "test_water_profile_lazy_excel_import_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "6 passed in 3.04s"
+      ],
+      "verification_source": "独立子任务提供的真实工具退出记录"
+    },
+    {
+      "file": "test_water_profile_batch_sync_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "11 passed in 0.86s"
+      ],
+      "verification_source": "独立子任务提供的真实工具退出记录"
+    },
+    {
+      "file": "test_task_runner_and_batch_async_unit.py",
+      "exit_code": 0,
+      "summaries": [
+        "10 passed in 1.11s"
+      ],
+      "verification_source": "独立子任务提供的真实工具退出记录"
+    }
+  ],
+  "passed": 104,
+  "failed": 2,
+  "report_control": "docs/qa/water_profile_switch_report_control_20261012.json",
+  "boundary": "收尾期间闸计算与报告代码有并行更新，报告两项新失败的数值在恢复优化前加载/构造方式后相同；不计为通过。"
+}

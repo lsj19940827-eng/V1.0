@@ -1392,7 +1392,7 @@ def test_siphon_inner_water_level_distribution_skips_invalid_groups(mutate):
 
 
 def test_calculate_all_runs_siphon_distribution_after_outlet_elevation(monkeypatch):
-    """完整计算链路在出口渠底修正后、末尾闸回推前执行倒虹吸水位分布。"""
+    """完整计算链路在出口渠底修正后、全部闸高程回填前执行倒虹吸水位分布。"""
     node = ChannelNode()
     node.structure_type = StructureType.from_string("明渠-矩形")
     calls = []
@@ -1426,8 +1426,8 @@ def test_calculate_all_runs_siphon_distribution_after_outlet_elevation(monkeypat
     )
     monkeypatch.setattr(
         calculator.hyd_calc,
-        "apply_terminal_gate_elevation_backfill",
-        lambda _nodes: calls.append("terminal_gate"),
+        "apply_gate_elevation_backfill",
+        lambda _nodes: calls.append("gate_elevation"),
     )
     monkeypatch.setattr(calculator, "_calculate_cumulative_head_loss", lambda _nodes: calls.append("cumulative"))
     monkeypatch.setattr(calculator, "_validate_real_node_station_conflicts", lambda _nodes: calls.append("validate"))
@@ -1444,7 +1444,7 @@ def test_calculate_all_runs_siphon_distribution_after_outlet_elevation(monkeypat
         "recalc",
         "outlet_elevation",
         "siphon_distribution",
-        "terminal_gate",
+        "gate_elevation",
         "cumulative",
         "validate",
     ]

@@ -6,6 +6,7 @@
 """
 
 from dataclasses import dataclass, field
+import math
 from typing import Optional, Dict, Any, List, Literal
 from .enums import StructureType, InOutType
 from .pressure_pipe_override import (
@@ -64,6 +65,8 @@ class ChannelNode:
     structure_height: float = 0.0               # 结构高度（m），根据结构类型不同取值不同
     water_depth: float = 0.0                    # 水深 h（m）
     water_level: float = 0.0                    # 水位 Z（m）
+    gate_upstream_water_level: Optional[float] = None    # 闸前水位（m），扣除上一常规节点至闸前的区间及渐变损失
+    gate_downstream_water_level: Optional[float] = None  # 闸后水位（m），与闸节点 water_level 一致
     velocity: float = 0.0                       # 流速 v（m/s）
     velocity_increased: float = 0.0             # 加大流速 v_inc（m/s），批量计算的加大流量工况流速
     head_loss_friction: float = 0.0             # 沿程水头损失（m）
@@ -79,7 +82,7 @@ class ChannelNode:
     bend_calc_details: Dict[str, Any] = field(default_factory=dict)      # 完整弯道核查及本行半弯道分配详情
     friction_calc_details: Dict[str, Any] = field(default_factory=dict)  # 沿程损失计算详情
     siphon_outlet_elev_details: Dict[str, Any] = field(default_factory=dict)  # 倒虹吸出口渠底高程计算详情（公式10.3.6）
-    terminal_gate_backfill_details: Dict[str, Any] = field(default_factory=dict)  # 末尾闸行高程回推详情
+    terminal_gate_backfill_details: Dict[str, Any] = field(default_factory=dict)  # 闸行高程参照推算详情（沿用旧项目键）
     
     # ========== 特殊标记 ==========
     is_inverted_siphon: bool = False            # 是否为倒虹吸（水损需外部导入）
@@ -89,7 +92,7 @@ class ChannelNode:
     pressure_pipe_window_override: Dict[str, Any] = field(default_factory=dict)  # 有压管道窗口专项结果覆盖
     pressure_pipe_named_group_result: Dict[str, Any] = field(default_factory=dict)  # 命名承压组隐藏结果元数据
     pressure_pipe_loss_override_m: Optional[float] = None  # 表3 第38列人工采用值（m）
-    is_diversion_gate: bool = False             # 是否为闸类结构（分水闸/分水口/节制闸/泄水闸等，仅过闸水头损失）
+    is_diversion_gate: bool = False             # 是否为闸类结构（计入至闸前区间损失及过闸水头损失）
     is_auto_inserted_channel: bool = False      # 是否为自动插入的明渠段（渐变段间连接段，不分配IP编号）
     connection_source_details: Dict[str, Any] = field(default_factory=dict)  # 连接断面来源及两工况复算结果
     stat_length: float = 0.0                    # 统计用长度（结构类型汇总用，不参与导出）
@@ -225,6 +228,8 @@ class ChannelNode:
             "渐变段长度": self.transition_length,
             "水头损失": self.head_loss_total,
             "水位": self.water_level,
+            "闸前水位": self.gate_upstream_water_level,
+            "闸后水位": self.gate_downstream_water_level,
             "渠底高程": self.bottom_elevation,
             "渠顶高程": self.top_elevation,
             "结构高度": self.structure_height,
@@ -278,6 +283,8 @@ class ChannelNode:
             "structure_height": self.structure_height,
             "water_depth": self.water_depth,
             "water_level": self.water_level,
+            "gate_upstream_water_level": self.gate_upstream_water_level,
+            "gate_downstream_water_level": self.gate_downstream_water_level,
             "velocity": self.velocity,
             "velocity_increased": self.velocity_increased,
             "head_loss_friction": self.head_loss_friction,
@@ -400,6 +407,8 @@ class ChannelNode:
         node.structure_height = d.get("structure_height", 0.0)
         node.water_depth = d.get("water_depth", 0.0)
         node.water_level = d.get("water_level", 0.0)
+        node.gate_upstream_water_level = _optional_finite_elevation(d.get("gate_upstream_water_level"))
+        node.gate_downstream_water_level = _optional_finite_elevation(d.get("gate_downstream_water_level"))
         node.velocity = d.get("velocity", 0.0)
         node.velocity_increased = d.get("velocity_increased", 0.0)
         node.head_loss_friction = d.get("head_loss_friction", 0.0)
@@ -463,7 +472,60 @@ class ChannelNode:
         node.transition_length_calc_details = d.get("transition_length_calc_details", {})
         
         get_pressure_pipe_window_override(node)
+        if not _is_gate_water_level_node(node):
+            node.gate_upstream_water_level = None
+            node.gate_downstream_water_level = None
         return node
+
+
+def _optional_finite_elevation(value: Any) -> Optional[float]:
+    """将可选高程转为有限数值，显式零高程仍是有效值。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _is_gate_water_level_node(node: ChannelNode) -> bool:
+    """按节点当前结构判断闸，兼容仅带旧闸标记的节点。"""
+    structure_type = getattr(node, "structure_type", None)
+    if structure_type is not None:
+        return StructureType.is_diversion_gate_str(str(getattr(structure_type, "value", structure_type)))
+    return bool(getattr(node, "is_diversion_gate", False))
+
+
+def restore_gate_water_levels(nodes: List[ChannelNode]) -> None:
+    """为旧成果补闸两侧显示值，不重算或覆盖原水位和水头损失。
+
+    旧节点的 water_level 零值是未计算占位，不能据此生成闸水位；
+    已保存的显式两侧字段可为零。首个常规闸只知道起算闸后水位。
+    """
+    previous_regular = None
+    for node in nodes:
+        if getattr(node, "is_transition", False) or not _is_gate_water_level_node(node):
+            node.gate_upstream_water_level = None
+            node.gate_downstream_water_level = None
+        else:
+            upstream = _optional_finite_elevation(getattr(node, "gate_upstream_water_level", None))
+            downstream = _optional_finite_elevation(getattr(node, "gate_downstream_water_level", None))
+            legacy_water_level = _optional_finite_elevation(getattr(node, "water_level", None))
+            if downstream is None and legacy_water_level not in (None, 0.0):
+                downstream = legacy_water_level
+            # 未计算旧行没有正式闸后成果，不仅凭上一行生成闸前水位。
+            if previous_regular is None:
+                upstream = None
+            elif upstream is None and downstream is not None:
+                gate_loss = _optional_finite_elevation(getattr(node, "head_loss_gate", None))
+                if gate_loss is not None and gate_loss >= 0.0:
+                    # 旧成果只补两侧显示，使用本闸的已存结果，不能把上一区间水损抹掉。
+                    upstream = downstream + gate_loss
+            node.gate_upstream_water_level = upstream
+            node.gate_downstream_water_level = downstream
+        if not getattr(node, "is_transition", False):
+            previous_regular = node
 
 
 @dataclass
