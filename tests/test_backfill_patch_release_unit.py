@@ -5,6 +5,7 @@ import json
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -270,9 +271,8 @@ def test_build_backfilled_version_data_preserves_full_package_fields(tmp_path):
     assert merged["changelog"] == existing["changelog"]
     assert merged["patch_url"] == "https://github.com/example/patch.zip"
     assert merged["patch_url_direct"] == "https://github.com/example/patch.zip"
-    assert merged["patch_url_proxy"] == backfill_patch_release.release._proxied_url(
-        "https://github.com/example/patch.zip"
-    )
+    assert merged["patch_url_proxy"] == "https://github.com/example/patch.zip"
+    assert merged["patch_url_mirrors"] == []
     assert merged["patch_size_mb"] == 5.4
     assert merged["patch_sha256"] == release_snapshot.sha256_file(str(patch_zip))
     assert merged["min_patch_version"] == "1.3.0"
@@ -283,6 +283,8 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
     """主流程应补挂 patch 资产，并只补齐 Gist 的 patch 字段。"""
     patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.4-patch.zip"
     patch_zip.write_bytes(b"patch-data")
+    full_zip = tmp_path / "full.zip"
+    full_zip.write_bytes(b"full-data")
     captured = {
         "deleted_urls": [],
         "patched_gist": None,
@@ -299,6 +301,17 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
         "file_size_mb": 351.1,
         "channel": "stable",
     }
+    original_version_data = dict(existing_version_data)
+    gate = SimpleNamespace(assets={"patch_zip": str(patch_zip)},
+                           binding={"patch_zip": release_snapshot.sha256_file(str(patch_zip))},
+                           output=tmp_path, local_report={}, assert_unchanged=lambda: None)
+    gate.record = lambda key, data: gate.local_report.update({key: data})
+    def remote(acceptance, data):
+        captured["remote_verified"] = True
+        acceptance.local_report["remote"] = {"status": "passed", "binding": acceptance.binding, "version_data": data}
+    monkeypatch.setattr(backfill_patch_release.release_acceptance, "prepare_local", lambda *_args, **_kwargs: gate)
+    monkeypatch.setattr(backfill_patch_release.release_acceptance, "verify_remote", remote)
+    monkeypatch.setattr(backfill_patch_release.release_acceptance, "verify_online", lambda *_args: captured.update(online_verified=True))
 
     monkeypatch.setattr(
         backfill_patch_release,
@@ -310,12 +323,15 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
                 "size_mb": 5.4,
                 "min_version": "1.3.0",
                 "patch_name": patch_zip.name,
+                "source_versions": ["1.3.0"], "changed_count": 7, "deleted_count": 0,
             },
             "patch_result": {
                 "changed_count": 7,
                 "deleted_count": 0,
                 "min_version": "1.3.0",
             },
+            "target_snapshot": {"full_zip": {"path": str(full_zip), "sha256": release_snapshot.sha256_file(str(full_zip))},
+                                "manifest": {"path": str(tmp_path / "manifest.json")}},
         },
     )
     monkeypatch.setattr(backfill_patch_release.release, "_get_token", lambda: "token")
@@ -347,7 +363,9 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
                 }
             }
         if method == "PATCH" and url.endswith(f"/gists/{backfill_patch_release.GIST_ID}"):
+            assert captured.get("remote_verified")
             captured["patched_gist"] = data
+            existing_version_data.update(json.loads(data["files"]["version.json"]["content"]))
             return {}
         raise AssertionError(f"未预期的 API 调用：{method} {url}")
 
@@ -367,22 +385,22 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
         base_version="1.3.0",
     )
 
-    assert captured["deleted_urls"] == [
-        "https://api.github.com/repos/lsj19940827-eng/V1.0/releases/assets/101"
-    ]
+    assert captured["deleted_urls"] == []
     assert captured["uploaded"] == (
         "https://uploads.github.com/repos/example/releases/1/assets{?name,label}",
-        str(patch_zip),
+        gate.assets["patch_zip"],
         "token",
     )
     patched_content = json.loads(
         captured["patched_gist"]["files"]["version.json"]["content"]
     )
-    assert patched_content["download_url"] == existing_version_data["download_url"]
+    assert patched_content["download_url"] == original_version_data["download_url"]
     assert patched_content["patch_url"] == "https://github.com/example/patch.zip"
     assert patched_content["patch_sha256"] == release_snapshot.sha256_file(str(patch_zip))
     assert patched_content["min_patch_version"] == "1.3.0"
     assert result["patch_url_direct"] == "https://github.com/example/patch.zip"
+    assert captured["online_verified"] and result["deleted_old_asset"] is False
+    assert gate.binding["patch_zip"][:12] in Path(captured["uploaded"][1]).name
 
 
 def test_backfill_patch_release_stops_before_upload_when_gist_version_mismatched(

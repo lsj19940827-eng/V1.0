@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
+import shutil
 import sys
 import tempfile
 import urllib.request
@@ -22,10 +24,10 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PROJECT_ROOT)
 
 from repo_config import GIST_ID, GITHUB_OWNER, GITHUB_REPO
-from tools import patch_builder, patch_policy, release, release_snapshot
+from tools import patch_builder, patch_policy, release, release_snapshot, release_acceptance
 from version import APP_NAME_EN, APP_VERSION
 
-DEFAULT_MIN_VERSION = "1.3.0"
+DEFAULT_MIN_VERSION = patch_policy.DEFAULT_MIN_VERSION
 DEFAULT_BASE_VERSION = DEFAULT_MIN_VERSION
 
 
@@ -259,7 +261,8 @@ def build_backfilled_version_data(
     merged = dict(existing_version_data)
     merged["patch_url"] = patch_url_direct
     merged["patch_url_direct"] = patch_url_direct
-    merged["patch_url_proxy"] = release._proxied_url(patch_url_direct)
+    merged["patch_url_proxy"] = patch_url_direct
+    merged["patch_url_mirrors"] = []
     merged["patch_size_mb"] = patch_size_mb
     merged["min_patch_version"] = min_patch_version
     merged["patch_base_version"] = min_patch_version
@@ -339,32 +342,52 @@ def backfill_patch_release(
             f"与目标版本 {target_version} 不一致，已停止回补。"
         )
 
+    # 回补也验收完整安装链路；缺少正式字节或原生证据时，禁止上传或改写清单。
+    snapshot = artifacts["target_snapshot"]
+    cache = Path(artifacts["patch_zip"]).parent / ".backfill-baselines"
+    cache.mkdir(exist_ok=True)
+    full_zip = _ensure_snapshot_file(snapshot["full_zip"], str(cache))
+    info = artifacts["patch_info"]
+    assets = {"full_zip": full_zip, "manifest_path": snapshot["manifest"]["path"],
+              "patch_zip": artifacts["patch_zip"], "patch_min_version": info["min_version"],
+              "patch_source_versions": info["source_versions"], "patch_changed_count": info["changed_count"],
+              "patch_deleted_count": info["deleted_count"], "patch_size_mb": info["size_mb"],
+              "full_size_mb": os.path.getsize(full_zip) / (1024 * 1024)}
+    acceptance = release_acceptance.prepare_local(target_version, assets, root=PROJECT_ROOT,
+        python=release._project_python(), snapshot_root=snapshot_root)
+    # 同版本修正使用新名字，验收失败恢复清单时旧附件仍然可以下载。
+    original = Path(acceptance.assets["patch_zip"])
+    patch = original.with_name(f"{APP_NAME_EN}-V{target_version}-patch-{acceptance.binding['patch_zip'][:12]}.zip")
+    shutil.copy2(original, patch)
+    acceptance.assets["patch_zip"] = str(patch)
+    acceptance.assert_unchanged()
+
     release_obj = _get_release_by_tag(tag_name, token)
-    patch_name = os.path.basename(artifacts["patch_zip"])
-    deleted_old_asset = _delete_asset_if_exists(release_obj, patch_name, token)
-    patch_url_direct = release._upload_release_asset(
-        release_obj.get("upload_url", ""),
-        artifacts["patch_zip"],
-        token,
-    )
+    existing = next((asset for asset in release_obj.get("assets", []) if asset.get("name") == patch.name), None)
+    patch_url_direct = existing.get("browser_download_url") if existing else None
+    if not patch_url_direct:
+        patch_url_direct = release._upload_release_asset(release_obj.get("upload_url", ""), str(patch), token)
 
     merged_version_data = build_backfilled_version_data(
         current_version_data,
         patch_url_direct=patch_url_direct,
-        patch_zip_path=artifacts["patch_zip"],
+        patch_zip_path=str(patch),
         patch_size_mb=artifacts["patch_info"]["size_mb"],
         min_patch_version=min_version,
     )
-    _save_gist_version_data(token, merged_version_data)
+    release_acceptance.verify_remote(acceptance, merged_version_data)
+    release.activate_version_data(merged_version_data, token, acceptance=acceptance,
+                                  previous_version_data=current_version_data)
     return {
         "tag_name": tag_name,
         "release_url": release_obj.get("html_url", ""),
-        "patch_zip": artifacts["patch_zip"],
+        "patch_zip": str(patch),
         "patch_info_path": artifacts["patch_info_path"],
         "patch_info": artifacts["patch_info"],
         "patch_result": artifacts["patch_result"],
         "patch_url_direct": patch_url_direct,
-        "deleted_old_asset": deleted_old_asset,
+        "deleted_old_asset": False,
+        "acceptance_report": str(acceptance.output / "acceptance.json"),
         "version_data": merged_version_data,
     }
 
@@ -376,7 +399,7 @@ def main():
     parser.add_argument(
         "--min-version",
         default=None,
-        help="补丁覆盖的旧版本下限，默认 1.3.0",
+        help=f"补丁覆盖的旧版本下限，默认 {DEFAULT_MIN_VERSION}",
     )
     parser.add_argument(
         "--base-version",

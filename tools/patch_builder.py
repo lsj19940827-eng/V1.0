@@ -155,8 +155,9 @@ def diff_manifests(old_manifest: dict, new_manifest: dict) -> DiffResult:
     Returns:
         DiffResult
     """
-    old_files = old_manifest.get("files", {})
-    new_files = new_manifest.get("files", {})
+    # 历史清单也要按当前规则过滤，避免旧用户数据重新进入补丁或删除列表。
+    old_files = _program_manifest_files(old_manifest)
+    new_files = _program_manifest_files(new_manifest)
 
     result = DiffResult()
 
@@ -171,6 +172,15 @@ def diff_manifests(old_manifest: dict, new_manifest: dict) -> DiffResult:
             result.deleted.append(path)
 
     return result
+
+
+def _program_manifest_files(manifest: dict) -> dict[str, str]:
+    """读取可更新的程序文件，不改写正式发布快照。"""
+    return {
+        path: digest
+        for path, digest in manifest.get("files", {}).items()
+        if not is_runtime_artifact(path)
+    }
 
 
 # ============================================================
@@ -250,7 +260,7 @@ def build_universal_patch(
         dict with min_version, file_path, size_mb, changed_count, deleted_count
         如果没有任何变化则返回 None
     """
-    new_files = new_manifest.get("files", {})
+    new_files = _program_manifest_files(new_manifest)
     source_versions = sorted(
         [str(old_ver) for old_ver, _old_manifest in old_manifests],
         key=_version_key,

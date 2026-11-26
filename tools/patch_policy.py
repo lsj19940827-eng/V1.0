@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """补丁发布安全策略，供构建、正式发版和回补脚本共用。"""
 
+DEFAULT_MIN_VERSION = "1.3.0"
 MAX_PATCH_DELETED_COUNT = 100
 MAX_PATCH_TOTAL_COVERAGE = 300
 DEFAULT_MAX_PATCH_TO_FULL_RATIO = 0.70

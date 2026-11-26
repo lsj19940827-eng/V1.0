@@ -20,7 +20,7 @@ class _TINBuildThread(QThread):
     error    = Signal(str)
 
     def __init__(self, pts_xyz, tp_list=None, edges=None,
-                 cache_path=None, src_files=None, filter_outliers=False):
+                 cache_path=None, src_files=None, filter_outliers=True):
         super().__init__()
         self._pts             = pts_xyz
         self._tp_list         = tp_list  or []
@@ -32,36 +32,37 @@ class _TINBuildThread(QThread):
     def run(self):
         try:
             from 土石方计算.core.tin_builder import TINBuilder
-            from 土石方计算.models.terrain import TerrainPoint, TINModel
+            from 土石方计算.models.terrain import TerrainPoint
             builder = TINBuilder()
-            if self._tp_list:
+            tp = [TerrainPoint(x=float(p[0]), y=float(p[1]), z=float(p[2]),
+                               source=self._tp_list[index].source if len(self._tp_list) == len(self._pts) else "")
+                  for index, p in enumerate(self._pts)]
+            if self._edges:
                 self.progress.emit("载入地形点及约束边…")
-                builder.add_contour_points(self._tp_list, self._edges)
+                builder.add_contour_points(tp, self._edges)
             else:
                 self.progress.emit("转换地形点…")
-                tp = [TerrainPoint(x=float(p[0]), y=float(p[1]), z=float(p[2]))
-                      for p in self._pts]
                 builder.add_elevation_points(tp)
             if self._filter_outliers:
-                self.progress.emit("过滤异常高程点（IQR法）…")
-                removed = builder.filter_outliers()
-                if removed > 0:
-                    self.progress.emit(f"已过滤 {removed} 个异常高程点")
+                self.progress.emit("根据附近测量资料筛查明显异常高程点和等高线…")
             try:
-                self.progress.emit("执行约束 Delaunay 三角剖分（CDT）…")
+                self.progress.emit("构建三角网并按局部测量点距自动裁剪范围…")
                 if self._cache:
                     import os as _os
                     _os.makedirs(_os.path.dirname(self._cache), exist_ok=True)
                 tin = builder.build(cache_path=self._cache,
-                                    source_files=self._srcs)
+                                    source_files=self._srcs,
+                                    filter_outliers=self._filter_outliers)
             except ImportError:
-                self.progress.emit("triangle 未安装，回退到 scipy.Delaunay（无约束边）…")
-                from scipy.spatial import Delaunay, KDTree
-                pts = (np.array([[p.x, p.y, p.z] for p in self._tp_list], dtype=np.float64)
-                       if self._tp_list else self._pts)
-                tri = Delaunay(pts[:, :2])
-                tin = TINModel(points=pts, triangles=tri.simplices.astype(int))
-                tin.spatial_index = KDTree(pts[:, :2])
+                if self._edges:
+                    raise RuntimeError("存在地形约束边，不能降级为无约束三角网；请安装 triangle")
+                raise
+            quality = getattr(tin, "quality_report", {})
+            removed = quality.get("removed_vertex_count", 0)
+            if removed:
+                self.progress.emit(f"已剔除 {removed} 个异常顶点（含 {quality.get('removed_contour_count', 0)} 条异常等高线）")
+            boundary = getattr(tin, "boundary_report", {})
+            self.progress.emit(f"自动范围已裁去 {boundary.get('removed_face_count', 0)} 个跨接三角面")
             self.finished.emit(tin)
         except Exception:
             self.error.emit(traceback.format_exc())
@@ -188,6 +189,7 @@ class _EarthworkPanelHandlers:
         if not path or not os.path.isfile(path):
             self._infobar("错误", "请先选择地形文件", "error"); return
         try:
+            tp = []; edges = []
             if "CSV" in fmt or "TXT" in fmt:
                 try:
                     pts = np.loadtxt(path, delimiter=',', comments='#')
@@ -207,13 +209,8 @@ class _EarthworkPanelHandlers:
                         layer=layer or "等高线",
                         interval=self._contour_step.value()
                     )
-                    self._terrain_tp_list = tp
-                    self._terrain_edges   = edges
                 else:
                     tp = reader.read_elevation_points(layer=layer or "高程点")
-                    self._terrain_tp_list = tp
-                    self._terrain_edges   = []
-                self._terrain_src_files = [path]
                 pts = np.array([[p.x, p.y, p.z] for p in tp], dtype=np.float64)
             elif "Excel" in fmt:
                 from 土石方计算.io.excel_reader import ExcelTerrainReader
@@ -226,10 +223,12 @@ class _EarthworkPanelHandlers:
                 raise ValueError(f"地形点数太少 ({len(pts)})，至少需要 4 个点")
             pts[:, 0] -= ox; pts[:, 1] -= oy
             self._terrain_pts = pts
-            if not getattr(self, '_terrain_tp_list', []):
-                self._terrain_tp_list = []; self._terrain_edges = []
-            if not getattr(self, '_terrain_src_files', []):
-                self._terrain_src_files = [path] if path else []
+            from 土石方计算.models.terrain import TerrainPoint
+            self._terrain_tp_list = [TerrainPoint(*map(float, point),
+                                                 source=tp[index].source if len(tp) == len(pts) else "")
+                                     for index, point in enumerate(pts)]
+            self._terrain_edges = edges
+            self._terrain_src_files = [path]
             self._terrain_lbl.setText(f"已载入 {len(pts)} 个高程点")
             self._btn_tin.setEnabled(True)
             self._tin_stat.setText("地形数据就绪，等待构建 TIN")
@@ -279,16 +278,22 @@ class _EarthworkPanelHandlers:
             pts_new[:, 0] -= ox; pts_new[:, 1] -= oy
 
             # 合并到现有数据
+            offset = 0 if self._terrain_pts is None else len(self._terrain_pts)
             if self._terrain_pts is None:
                 self._terrain_pts = pts_new
             else:
                 self._terrain_pts = np.vstack([self._terrain_pts, pts_new])
-            if tp_new:
-                offset = len(getattr(self, '_terrain_tp_list', []))
-                self._terrain_tp_list = list(getattr(self, '_terrain_tp_list', [])) + tp_new
-                from 土石方计算.models.terrain import ConstraintEdge
-                for e in edges_new:
-                    self._terrain_edges.append(ConstraintEdge(i=e.i + offset, j=e.j + offset))
+            from 土石方计算.models.terrain import ConstraintEdge, TerrainPoint
+            # 所有数据源都占据点索引；CSV/Excel 点不得因已有等高线而漏入建网。
+            prior_points = list(getattr(self, '_terrain_tp_list', []))
+            if len(prior_points) != offset:
+                prior_points = [TerrainPoint(*map(float, point)) for point in self._terrain_pts[:offset]]
+            shifted_points = [TerrainPoint(*map(float, point),
+                                            source=tp_new[index].source if len(tp_new) == len(pts_new) else "")
+                              for index, point in enumerate(pts_new)]
+            self._terrain_tp_list = prior_points + shifted_points
+            self._terrain_edges = list(getattr(self, '_terrain_edges', [])) + [
+                ConstraintEdge(i=edge.i + offset, j=edge.j + offset) for edge in edges_new]
             if path not in getattr(self, '_terrain_src_files', []):
                 self._terrain_src_files = list(getattr(self, '_terrain_src_files', [])) + [path]
 
@@ -347,7 +352,7 @@ class _EarthworkPanelHandlers:
             cache_dir = os.path.join(self._project_dir, '.cache')
             cache_path = os.path.join(cache_dir, 'terrain.npz')
         filter_outliers = getattr(self, '_tin_filter_chk', None)
-        filter_outliers = filter_outliers.isChecked() if filter_outliers else False
+        filter_outliers = filter_outliers.isChecked() if filter_outliers else True
         self._build_thread = _TINBuildThread(
             self._terrain_pts,
             tp_list=getattr(self, '_terrain_tp_list', []),
@@ -439,6 +444,13 @@ class _EarthworkPanelHandlers:
         self._long_canvas.redraw()
 
     def _on_cut_sections(self):
+        self._sections = []
+        self._volume_result = None
+        self._vol_table.setRowCount(0)
+        self._vol_summary.setText("断面已更新，尚未生成当前方量")
+        self._btn_vol.setEnabled(False)
+        self._btn_xlsx.setEnabled(False)
+        self._btn_cs_dxf.setEnabled(False)
         if self._interp is None:
             self._infobar("提示", "请先构建 TIN", "warning"); return
         try:
@@ -472,7 +484,9 @@ class _EarthworkPanelHandlers:
                     half_width=self._cs_hw.value(), sample_step=self._cs_sample.value())
             from 土石方计算.models.section import BackfillConfig
             for sec in self._sections:
-                inv = dp.get_invert_at_station(sec.station) or self._dp_e0.value()
+                inv = dp.get_invert_at_station(sec.station)
+                if inv is None:
+                    raise ValueError(f"桩号 {sec.station} 缺少设计底高程")
                 # 若有地质分层，附加地质剖面数据
                 if geo_mgr and geo_mgr.layer_names:
                     ground_center = next(
@@ -497,6 +511,7 @@ class _EarthworkPanelHandlers:
             self._sec_tabs.setCurrentIndex(1)
         except Exception as exc:
             self._log_msg(f"横断面切割失败: {exc}", "ERR")
+            self._sections = []
             self._infobar("失败", str(exc)[:100], "error")
 
     def _refresh_cs_plot(self):
@@ -533,6 +548,10 @@ class _EarthworkPanelHandlers:
 
     # ── Tab 4：工程量计算 ─────────────────────────────────────
     def _on_compute_volume(self):
+        self._volume_result = None
+        self._vol_table.setRowCount(0)
+        self._vol_summary.setText("尚未生成当前方量")
+        self._vol_stat.setText("等待计算")
         if not self._sections:
             self._infobar("提示", "请先切割横断面", "warning"); return
         try:
@@ -552,17 +571,16 @@ class _EarthworkPanelHandlers:
                     item = QTableWidgetItem(v); item.setTextAlignment(0x0004 | 0x0080)
                     tbl.setItem(r, c, item)
             tbl.resizeColumnsToContents()
-            diff = VolumeCalculator.comparison_table(res)["diff_exc_pct"]
             self._vol_summary.setText(
                 f"开挖总量（平均断面法）：{res.total_excavation_avg:.1f} m³    "
-                f"（棱台法）：{res.total_excavation_prismatoid:.1f} m³    "
-                f"两法差异：{diff:.2f}%    "
+                "中点面积由端面积均值估算，尚未完成独立棱台法复核。    "
                 f"回填总量：{res.total_fill_avg:.1f} m³")
             self._vol_stat.setText("✅ 计算完成")
             self._log_msg(f"工程量计算完成：开挖 {res.total_excavation_avg:.0f} m³", "OK")
             self._infobar("计算完成", f"开挖 {res.total_excavation_avg:.0f} m³", "success")
         except Exception as exc:
             self._log_msg(f"工程量计算失败: {exc}", "ERR")
+            self._vol_stat.setText("计算失败，当前结果不可用")
             self._infobar("失败", str(exc)[:100], "error")
 
     # ── Tab 5：成果导出 ───────────────────────────────────────

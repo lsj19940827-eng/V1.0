@@ -72,13 +72,16 @@ def build_length_records(nodes, effective_type):
         if is_point_type(types[index]):
             continue
         node = nodes[index]
-        same = (previous is not None and _name(node) == _name(nodes[previous])
+        name = _name(node)
+        same = (previous is not None and name == _name(nodes[previous])
                 and types[index] == types[previous]
                 and not (_role(nodes[previous]) == '出' and _role(node) == '进'))
         key = owner[previous] if same else f'building:{index}'
         owner[index] = key
         if key not in groups:
-            groups[key] = {'name': _name(node) or '(未命名渠段)',
+            if not name and types[index] != '有压管道':
+                name = '(未命名渠段)'
+            groups[key] = {'name': name,
                            'structure_type': types[index] or UNASSIGNED_TYPE,
                            'count_key': key, 'indices': [], 'kind': 'building'}
         groups[key]['indices'].append(index)

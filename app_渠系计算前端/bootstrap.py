@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
+from app_渠系计算前端.runtime_platform import ensure_safe_windows_platform_queries
+
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -31,7 +33,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APP_ICON_FILE = PROJECT_ROOT / "icon.ico"
 SHARED_LOGO_ICON_FILE = PROJECT_ROOT / "app_渠系计算前端" / "resources" / "logo.ico"
 APP_USER_MODEL_ID = "CanalHydraulicCalc.App"
-_PLATFORM_WMI_GUARD_FLAG = "_v1_platform_wmi_guard_installed"
 
 
 def _resolve_app_icon_path() -> str:
@@ -55,33 +56,6 @@ def _set_windows_app_user_model_id() -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             APP_USER_MODEL_ID
         )
-    except Exception:
-        pass
-
-
-def ensure_safe_windows_platform_queries() -> None:
-    """禁用 Python platform 的 Windows WMI 查询，避免第三方库导入时卡住。"""
-    if not sys.platform.startswith("win"):
-        return
-    try:
-        import platform as std_platform
-    except Exception:
-        return
-
-    if getattr(std_platform, _PLATFORM_WMI_GUARD_FLAG, False):
-        return
-
-    def _disabled_wmi_query(*_args, **_kwargs):
-        """让 platform 立即走非 WMI 回退路径。"""
-        raise OSError("Windows WMI query disabled to avoid startup hang")
-
-    try:
-        std_platform._wmi_query = _disabled_wmi_query
-        if hasattr(std_platform, "_wmi"):
-            std_platform._wmi = None
-        if hasattr(std_platform, "_uname_cache"):
-            std_platform._uname_cache = None
-        setattr(std_platform, _PLATFORM_WMI_GUARD_FLAG, True)
     except Exception:
         pass
 
@@ -284,6 +258,9 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     if trace_enabled:
         print("[StartupTrace] main_window_constructor_start", flush=True)
     window = MainWindow(startup_context)
+    if "--earthwork" in argv_list:
+        index = next(i for i, descriptor in enumerate(window._panel_registry.descriptors) if descriptor.key == "earthwork")
+        window._switch_to(index)
     if trace_enabled:
         print("[StartupTrace] main_window_constructor_returned", flush=True)
     if open_update_dialog:
@@ -311,7 +288,10 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
         app.aboutToQuit.connect(
             lambda: print("[StartupTrace] application_about_to_quit", flush=True)
         )
-    exit_code = app.exec()
+    try:
+        exit_code = app.exec()
+    finally:
+        window.finish_silent_update_check()
     if trace_enabled:
         print(
             f"[StartupTrace] event_loop_returned exit_code={exit_code}",

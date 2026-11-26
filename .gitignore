@@ -40,6 +40,7 @@ nul
 
 # 输出文件
 output/
+outputs/release_acceptance/
 logs/
 *.dwl
 *.dwl2
@@ -56,6 +57,16 @@ V1.00207的备份/
 
 # 工具临时输出
 tools/_tmp_test_outputs/
+
+# 独立地形读取器：只保留经清单绑定的离线运行资源，下载缓存不入版本库
+/tools/terrain_mesh_reader/vendor/
+/tools/terrain_mesh_reader/bin/*.partial
+!/tools/terrain_mesh_reader/bin/
+!/tools/terrain_mesh_reader/bin/TerrainMeshReader.exe
+!/tools/terrain_mesh_reader/bin/Rhino3dm.dll
+!/tools/terrain_mesh_reader/bin/librhino3dm_native.dll
+!/tools/terrain_mesh_reader/bin/LICENSE-Rhino3dm.txt
+!/tools/terrain_mesh_reader/build-manifest.json
 
 # 运行时缓存
 .matplotlib/

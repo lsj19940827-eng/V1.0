@@ -86,6 +86,12 @@ def is_gate_like_section_type(section_type) -> bool:
     text = normalize_section_type_name(section_type)
     return "闸" in text or "分水" in text
 
+def infer_gate_section_type(section_type, building_name) -> str:
+    """结构形式留空时，以闸名识别点状建筑物。"""
+    structure = str(section_type or "").strip()
+    name = str(building_name or "").strip()
+    return structure or (name if name.endswith("闸") else "")
+
 def is_tunnel_section_type(section_type) -> bool:
     """判断结构类型是否为隧洞。"""
     return "隧洞" in normalize_section_type_name(section_type)

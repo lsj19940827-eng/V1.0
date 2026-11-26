@@ -56,20 +56,17 @@ class VolumeCalculator:
         -------
         VolumeResult
         """
-        # 过滤无面积结果的断面
-        valid = [s for s in sections if s.area_result is not None]
-        if len(valid) < 2:
-            return VolumeResult()
-
-        # 按桩号排序
-        valid.sort(key=lambda s: s.station)
+        valid = self._validated_sections(sections)
+        if compute_tin_volume and (ground_tin is None or design_tin is None):
+            raise ValueError("TIN 体积计算必须同时提供地面和设计 TIN")
 
         segments: list[SegmentVolume] = []
         for i in range(len(valid) - 1):
             seg = self._compute_segment(valid[i], valid[i + 1], alignment)
             segments.append(seg)
 
-        result = VolumeResult(segments=segments)
+        result = VolumeResult(segments=segments, prismatoid_source="endpoint_average",
+                              prismatoid_independent=False)
 
         if compute_tin_volume and ground_tin and design_tin:
             exc_vol, fill_vol = self._tin_volume_method(
@@ -78,6 +75,52 @@ class VolumeCalculator:
             result.tin_volume_excavation = exc_vol
             result.tin_volume_fill = fill_vol
 
+        return result
+
+    @staticmethod
+    def _validated_sections(sections: list[CrossSectionData]) -> list[CrossSectionData]:
+        """拒绝缺失断面，避免静默跨越无效区间；允许输入乱序后排序。"""
+        for sec in sections:
+            if not math.isfinite(sec.station):
+                raise ValueError("断面桩号必须有限")
+            ar = sec.area_result
+            if ar is None:
+                raise ValueError(f"桩号 {sec.station} 缺少面积结果，不能跳过区间")
+            if not math.isfinite(ar.station) or not math.isclose(
+                    sec.station, ar.station, rel_tol=0.0, abs_tol=1e-8):
+                raise ValueError("面积结果桩号与断面桩号不一致")
+            areas = [ar.excavation_total, ar.fill_area, *ar.excavation_by_layer.values()]
+            if any(not math.isfinite(value) or value < 0 for value in areas):
+                raise ValueError(f"桩号 {sec.station} 的面积必须有限且非负")
+            components = (ar.backfill_area, ar.embankment_area)
+            if any(value is not None for value in components):
+                if any(value is None for value in components):
+                    raise ValueError(f"桩号 {sec.station} 的恢复回填与设计填筑面积须同时给定")
+                if any(not math.isfinite(value) or value < 0 for value in components):
+                    raise ValueError(f"桩号 {sec.station} 的填方分项面积必须有限且非负")
+                if not math.isclose(math.fsum(components), ar.fill_area, rel_tol=1e-9, abs_tol=1e-9):
+                    raise ValueError(f"桩号 {sec.station} 的恢复回填与设计填筑之和不等于填方总面积")
+        ordered = sorted(sections, key=lambda sec: sec.station)
+        if any(b.station - a.station <= 1e-8 for a, b in zip(ordered, ordered[1:])):
+            raise ValueError("断面桩号重复或间距过小")
+        return ordered
+
+    @staticmethod
+    def _fill_component(area: SectionAreaResult, name: str) -> Optional[float]:
+        value = getattr(area, name)
+        # 无填方的断面可确定两项均为零；有填方却未分类时保留未知。
+        return 0.0 if value is None and area.fill_area == 0 else value
+
+    def _component_volumes(self, areas, length, *, actual_midpoint=False):
+        result = {}
+        for area_name, prefix in (("backfill_area", "backfill"), ("embankment_area", "embankment")):
+            values = [self._fill_component(area, area_name) for area in areas]
+            endpoint_values = (values[0], values[-1])
+            result[prefix+"_avg"] = None if any(value is None for value in endpoint_values) else (
+                self._average_section(*endpoint_values, length))
+            result[prefix+"_prismatoid"] = None if any(value is None for value in values) else (
+                self._prismatoid(values[0], values[-1], values[1] if actual_midpoint else
+                                 (values[0]+values[-1])/2, length))
         return result
 
     # ------------------------------------------------------------------
@@ -113,7 +156,7 @@ class VolumeCalculator:
             a_m_layer = (a_area + b_area) / 2.0
             exc_by_layer_prism[layer] = self._prismatoid(a_area, b_area, a_m_layer, length)
 
-        # --- 棱台法 ---
+        # 兼容旧结果：中点为端面积均值，不能作为独立棱台法复核。
         a_m_exc = (ar_a.excavation_total + ar_b.excavation_total) / 2.0
         a_m_fill = (ar_a.fill_area + ar_b.fill_area) / 2.0
         exc_prism = self._prismatoid(ar_a.excavation_total,
@@ -131,6 +174,7 @@ class VolumeCalculator:
             excavation_by_layer_prismatoid=exc_by_layer_prism,
             fill_avg=fill_avg,
             fill_prismatoid=fill_prism,
+            **self._component_volumes([ar_a, ar_b], length),
         )
 
     @staticmethod
@@ -158,17 +202,20 @@ class VolumeCalculator:
 
         Parameters
         ----------
-        sections : 端部断面列表（偶数下标对应 mid_sections）
+        sections : 端部断面列表
         mid_sections : 中点断面列表（len = len(sections) - 1）
         """
-        valid = [s for s in sections if s.area_result is not None]
-        valid_mid = [s for s in mid_sections if s.area_result is not None]
+        valid = self._validated_sections(sections)
+        valid_mid = self._validated_sections(mid_sections)
 
         if len(valid) < 2 or len(valid_mid) != len(valid) - 1:
             raise ValueError("端部断面数量与中点断面数量不匹配")
 
         segments: list[SegmentVolume] = []
         for i in range(len(valid) - 1):
+            midpoint = (valid[i].station + valid[i + 1].station) / 2.0
+            if not math.isclose(valid_mid[i].station, midpoint, rel_tol=0.0, abs_tol=1e-8):
+                raise ValueError(f"中点断面桩号不匹配：应为 {midpoint}")
             ar_a = valid[i].area_result
             ar_b = valid[i + 1].area_result
             ar_m = valid_mid[i].area_result
@@ -187,6 +234,15 @@ class VolumeCalculator:
             fill_avg = self._average_section(ar_a.fill_area,
                                               ar_b.fill_area, length)
 
+            layers = set(ar_a.excavation_by_layer) | set(ar_b.excavation_by_layer) | set(ar_m.excavation_by_layer)
+            layer_avg = {name: self._average_section(
+                ar_a.excavation_by_layer.get(name, 0.0),
+                ar_b.excavation_by_layer.get(name, 0.0), length) for name in layers}
+            layer_prism = {name: self._prismatoid(
+                ar_a.excavation_by_layer.get(name, 0.0),
+                ar_b.excavation_by_layer.get(name, 0.0),
+                ar_m.excavation_by_layer.get(name, 0.0), length) for name in layers}
+
             segments.append(SegmentVolume(
                 station_start=valid[i].station,
                 station_end=valid[i + 1].station,
@@ -195,9 +251,13 @@ class VolumeCalculator:
                 excavation_prismatoid=exc_prism,
                 fill_avg=fill_avg,
                 fill_prismatoid=fill_prism,
+                excavation_by_layer_avg=layer_avg,
+                excavation_by_layer_prismatoid=layer_prism,
+                **self._component_volumes([ar_a, ar_m, ar_b], length, actual_midpoint=True),
             ))
 
-        return VolumeResult(segments=segments)
+        return VolumeResult(segments=segments, prismatoid_source="actual_mid_sections",
+                            prismatoid_independent=True)
 
     # ------------------------------------------------------------------
     # TIN 体积法
@@ -210,55 +270,115 @@ class VolumeCalculator:
         alignment: Alignment,
     ) -> tuple[float, float]:
         """
-        TIN 体积法：地面 TIN 与设计面 TIN 之间的三维体积差。
+        两个分片线性高程面的共同有效域体积差，不代表埋管施工实体量。
 
-        方法：遍历地面 TIN 的三角形，对每个三角形的三个顶点
-        分别查询设计面高程，计算三角棱柱体积（正值为挖，负值为填）。
+        先求两套三角片的平面交集，使每片内两个高程面均为平面，
+        再按零高差线分开挖填区域并精确积分。部分覆盖只计算交集，
+        调用方必须另行检查工程范围覆盖完整性；无正面积交集则报错。
 
         Returns
         -------
         (excavation_volume, fill_volume) 单位 m³
         """
-        from 土石方计算.core.tin_interpolator import TINInterpolator
+        from shapely.strtree import STRtree
 
-        if design_tin.is_empty or ground_tin.is_empty:
-            return 0.0, 0.0
+        # 两个模型使用同一局部原点，避免大地坐标引起几何求交精度损失。
+        if ground_tin.is_empty or design_tin.is_empty:
+            raise ValueError("TIN 体积计算不接受空模型")
+        origin = np.asarray(ground_tin.points, dtype=float)[0, :2]
+        ground = VolumeCalculator._prepare_tin_faces(ground_tin, origin, "地面")
+        design = VolumeCalculator._prepare_tin_faces(design_tin, origin, "设计")
+        tree = STRtree([face[0] for face in design])
+        excavation, fill = [], []
+        common_area = 0.0
+        for g_polygon, g_xy0, g_z0, g_gradient in ground:
+            for index in tree.query(g_polygon, predicate="intersects"):
+                d_polygon, d_xy0, d_z0, d_gradient = design[int(index)]
+                overlap = g_polygon.intersection(d_polygon)
+                if overlap.is_empty or overlap.area == 0:
+                    continue
+                # 两个非退化三角形的正面积交集必为凸多边形。
+                if overlap.geom_type != "Polygon":
+                    raise ValueError("三角片交集不是有效多边形")
+                common_area += overlap.area
+                xy = np.asarray(overlap.exterior.coords[:-1], dtype=float)
+                difference = (g_z0 - d_z0
+                              + (xy - g_xy0) @ g_gradient
+                              - (xy - d_xy0) @ d_gradient)
+                vertices = np.column_stack([xy, difference])
+                excavation.append(VolumeCalculator._positive_piece_volume(vertices))
+                vertices[:, 2] *= -1.0
+                fill.append(VolumeCalculator._positive_piece_volume(vertices))
+        if common_area <= 0:
+            raise ValueError("地面和设计 TIN 没有正面积共同有效域")
+        return math.fsum(excavation), math.fsum(fill)
 
-        design_interp = TINInterpolator(design_tin)
-        g_pts = ground_tin.points      # shape=(N, 3)
-        g_tris = ground_tin.triangles  # shape=(M, 3)
+    @staticmethod
+    def _prepare_tin_faces(tin: TINModel, origin: np.ndarray, label: str):
+        """校验单值高程网格，返回三角片及局部平面系数，拒绝重复覆盖。"""
+        from shapely.geometry import Polygon
+        from shapely.strtree import STRtree
 
-        total_exc = 0.0
-        total_fill = 0.0
+        points = np.asarray(tin.points, dtype=float)
+        triangles = np.asarray(tin.triangles)
+        if (points.ndim != 2 or points.shape[1] != 3
+                or not np.isfinite(points).all()):
+            raise ValueError(f"{label} TIN 顶点必须是有限的三维坐标")
+        if (triangles.ndim != 2 or triangles.shape[1] != 3 or len(triangles) == 0
+                or not np.issubdtype(triangles.dtype, np.integer)
+                or np.any(triangles < 0) or np.any(triangles >= len(points))):
+            raise ValueError(f"{label} TIN 三角片索引无效")
+        faces = []
+        xy = points[:, :2] - origin
+        for indices in triangles:
+            corners, heights = xy[indices], points[indices, 2]
+            polygon = Polygon(corners)
+            delta = corners[1:] - corners[0]
+            determinant = float(np.linalg.det(delta))
+            if (not polygon.is_valid or polygon.area <= 0
+                    or abs(determinant) <= np.finfo(float).eps * np.max(np.abs(delta)) ** 2 * 8):
+                raise ValueError(f"{label} TIN 存在退化三角片")
+            gradient = np.linalg.solve(delta, heights[1:] - heights[0])
+            if not np.isfinite(gradient).all():
+                raise ValueError(f"{label} TIN 面方程无效")
+            faces.append((polygon, corners[0], heights[0], gradient))
+        polygons = [face[0] for face in faces]
+        tree = STRtree(polygons)
+        for i, polygon in enumerate(polygons):
+            for j in tree.query(polygon, predicate="intersects"):
+                if j <= i:
+                    continue
+                # 共享边允许；正面积重叠会导致重复计量，不能自动修复。
+                overlap = polygon.intersection(polygons[int(j)]).area
+                tolerance = np.finfo(float).eps * max(polygon.area, polygons[int(j)].area) * 64
+                if overlap > tolerance:
+                    raise ValueError(f"{label} TIN 三角片平面覆盖重叠")
+        return faces
 
-        # 批量查询所有地面 TIN 顶点在设计面的高程
-        design_z = design_interp.query_batch(g_pts[:, :2])
-        # nan 表示超出设计面范围，跳过
-        diff_z = g_pts[:, 2] - np.where(np.isnan(design_z), g_pts[:, 2], design_z)
-
-        for tri in g_tris:
-            i0, i1, i2 = tri
-            d0, d1, d2 = diff_z[i0], diff_z[i1], diff_z[i2]
-            # 跳过任何顶点在设计面范围外的三角形
-            if any(np.isnan([d0, d1, d2])):
-                continue
-            # 三角形面积
-            p0 = g_pts[i0, :2]
-            p1 = g_pts[i1, :2]
-            p2 = g_pts[i2, :2]
-            tri_area = 0.5 * abs(
-                (p1[0] - p0[0]) * (p2[1] - p0[1])
-                - (p2[0] - p0[0]) * (p1[1] - p0[1])
-            )
-            # 棱柱体积（顶部平均高差 × 底面积）
-            avg_diff = (d0 + d1 + d2) / 3.0
-            vol = tri_area * avg_diff
-            if vol > 0:
-                total_exc += vol
-            else:
-                total_fill += abs(vol)
-
-        return total_exc, total_fill
+    @staticmethod
+    def _positive_piece_volume(vertices: np.ndarray) -> float:
+        """将凸多边形按线性高差非负半平面裁切，再按三角扇积分。"""
+        clipped = []
+        previous = vertices[-1]
+        for current in vertices:
+            previous_inside, current_inside = previous[2] >= 0, current[2] >= 0
+            if previous_inside != current_inside:
+                fraction = previous[2] / (previous[2] - current[2])
+                crossing = previous + fraction * (current - previous)
+                crossing[2] = 0.0
+                clipped.append(crossing)
+            if current_inside:
+                clipped.append(current)
+            previous = current
+        if len(clipped) < 3:
+            return 0.0
+        contributions = []
+        first = clipped[0]
+        for left, right in zip(clipped[1:-1], clipped[2:]):
+            a, b = left[:2] - first[:2], right[:2] - first[:2]
+            area = abs(a[0] * b[1] - a[1] * b[0]) / 2.0
+            contributions.append(area * (first[2] + left[2] + right[2]) / 3.0)
+        return max(0.0, math.fsum(contributions))
 
     # ------------------------------------------------------------------
     # 汇总统计辅助
@@ -270,7 +390,7 @@ class VolumeCalculator:
         return result.total_by_layer_avg()
 
     @staticmethod
-    def comparison_table(result: VolumeResult) -> dict[str, float]:
+    def comparison_table(result: VolumeResult) -> dict[str, float | str | bool | None]:
         """
         生成三种方法的对比汇总。
 
@@ -283,7 +403,7 @@ class VolumeCalculator:
         avg_exc = result.total_excavation_avg
         prism_exc = result.total_excavation_prismatoid
         avg_fill = result.total_fill_avg
-        prism_fill = result.total_fill_avg  # 棱台法回填
+        prism_fill = result.total_fill_prismatoid
 
         diff_pct = (
             abs(prism_exc - avg_exc) / avg_exc * 100.0
@@ -296,6 +416,12 @@ class VolumeCalculator:
             "tin_exc": result.tin_volume_excavation,
             "avg_section_fill": avg_fill,
             "prismatoid_fill": prism_fill,
+            "avg_section_backfill": result.total_backfill_avg,
+            "prismatoid_backfill": result.total_backfill_prismatoid,
+            "avg_section_embankment": result.total_embankment_avg,
+            "prismatoid_embankment": result.total_embankment_prismatoid,
             "tin_fill": result.tin_volume_fill,
             "diff_exc_pct": diff_pct,
+            "prismatoid_source": result.prismatoid_source,
+            "prismatoid_independent": result.prismatoid_independent,
         }

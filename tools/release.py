@@ -46,8 +46,9 @@ from repo_config import (
     GITEE_OWNER,
     GITEE_REPO,
     GITEE_API_BASE,
+    GITHUB_VERSION_URL,
 )
-from tools import patch_policy, release_snapshot
+from tools import patch_policy, release_snapshot, release_acceptance
 
 
 def _proxied_url(url: str) -> str:
@@ -159,7 +160,8 @@ def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) 
         "latest_version": version,
         "download_url": download_url_direct,
         "download_url_direct": download_url_direct,
-        "download_url_proxy": _proxied_url(download_url_direct),
+        # 不把未经完整回读的代理地址写进正式清单；默认复用已核验直连地址。
+        "download_url_proxy": urls.get("download_url_proxy", download_url_direct),
         "download_url_mirrors": list(urls.get("download_url_mirrors", []) or []),
         "download_sha256": release_snapshot.sha256_file(assets["full_zip"]),
         "changelog": changelog or f"V{version} 版本发布",
@@ -185,7 +187,7 @@ def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) 
         patch_url_direct = urls["patch_url"]
         version_data["patch_url"] = patch_url_direct
         version_data["patch_url_direct"] = patch_url_direct
-        version_data["patch_url_proxy"] = _proxied_url(patch_url_direct)
+        version_data["patch_url_proxy"] = urls.get("patch_url_proxy", patch_url_direct)
         version_data["patch_url_mirrors"] = list(urls.get("patch_url_mirrors", []) or [])
         version_data["patch_size_mb"] = assets.get("patch_size_mb", 0)
         version_data["min_patch_version"] = assets.get("patch_min_version", "")
@@ -358,10 +360,13 @@ def step_build() -> dict:
     importlib.reload(version_module)
     app_version = version_module.APP_VERSION
     dist_dir = os.path.join(PROJECT_ROOT, "dist")
+    return collect_assets(dist_dir, app_version)
+
+
+def collect_assets(dist_dir: str, app_version: str) -> dict:
+    """只读取候选产物，只验收模式不运行构建或版本递增。"""
     full_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{app_version}.zip")
-    if not os.path.exists(full_zip):
-        print(f"[错误] 找不到全量包: {full_zip}")
-        sys.exit(1)
+    release_acceptance.require(os.path.isfile(full_zip), f"找不到候选全量包: {full_zip}")
 
     assets = {
         "full_zip": full_zip,
@@ -525,23 +530,72 @@ def step_create_gitee_release_and_upload_assets(
     }
 
 
+def load_gist_version(token: str, gist_id: str = GIST_ID) -> dict:
+    data = _github_api("GET", f"https://api.github.com/gists/{gist_id}", token)
+    content = data.get("files", {}).get("version.json", {}).get("content", "")
+    release_acceptance.require(content, "正式 Gist 缺少 version.json")
+    return json.loads(content)
+
+
+def save_gist_version(token: str, version_data: dict, gist_id: str = GIST_ID):
+    _github_api("PATCH", f"https://api.github.com/gists/{gist_id}", token, data={
+        "files": {"version.json": {"content": json.dumps(version_data, ensure_ascii=False, indent=4)}}})
+
+
 def step_update_gist(version: str, urls: dict, assets: dict, token: str,
-                     changelog: str, gist_id: str) -> dict:
+                     changelog: str, gist_id: str, *, acceptance=None, previous_version_data=None) -> dict:
     print(f"\n{'=' * 60}")
     print("  [步骤 6/6] 更新 GitHub Gist version.json（正式通道）")
     print(f"{'=' * 60}\n")
 
     version_data = _build_version_data(version, urls, assets, changelog)
+    return activate_version_data(version_data, token, acceptance=acceptance,
+                                 previous_version_data=previous_version_data, gist_id=gist_id)
 
-    gist_url = f"https://api.github.com/gists/{gist_id}"
-    data = {"files": {"version.json": {"content": json.dumps(version_data, ensure_ascii=False, indent=4)}}}
-    _github_api("PATCH", gist_url, token, data=data)
-    print(f"  Gist 更新成功! (gist={gist_id})")
-    print(f"  内容: {json.dumps(version_data, ensure_ascii=False, indent=2)}")
+
+def activate_version_data(version_data, token, *, acceptance, previous_version_data,
+                          gist_id=GIST_ID, after_acceptance=None):
+    """清单切换、线上验收与失败恢复共用入口，补丁回补也不能绕过。"""
+    release_acceptance.require(acceptance is not None and previous_version_data is not None,
+                               "缺少发布验收上下文，禁止直接切换 Gist")
+    release_acceptance.require_remote_receipt(acceptance, version_data)
+    previous = previous_version_data
+    acceptance.record("previous_manifest", previous)
+    try:
+        release_acceptance.require(load_gist_version(token, gist_id) == previous,
+                                   "正式清单被其它发布改变，停止切换")
+        print("[步骤 6/6] 切换已通过远端验收的正式更新清单", flush=True)
+        acceptance.record("switch", {"status": "attempting", "version_data": version_data})
+        save_gist_version(token, version_data, gist_id)
+        release_acceptance.require(load_gist_version(token, gist_id) == version_data, "Gist 回写核验失败")
+        print("[验收 U09] 从正式旧版应用内完成线上下载、安装与新版启动...", flush=True)
+        release_acceptance.verify_online(acceptance, version_data, GITHUB_VERSION_URL)
+        if after_acceptance:
+            after_acceptance()
+        acceptance.record("status", "passed")
+    except BaseException as exc:
+        # 写入结果不明确时也核对清单；发生并发修改则停止，避免覆盖其它人的发布。
+        recovery = {"status": "not_needed"}
+        try:
+            current = load_gist_version(token, gist_id)
+            if current == version_data:
+                save_gist_version(token, previous, gist_id)
+                release_acceptance.require(load_gist_version(token, gist_id) == previous, "旧清单恢复核验失败")
+                visible = release_acceptance.wait_for_manifest(GITHUB_VERSION_URL, previous)
+                recovery = {"status": "restored_previous_manifest", "ordinary_manifest": visible}
+            elif current != previous:
+                recovery = {"status": "conflict", "message": "清单已由其它发布改变，未覆盖"}
+        except Exception as recovery_exc:
+            recovery = {"status": "failed", "error_type": type(recovery_exc).__name__}
+        acceptance.record("failure", {"status": "failed", "error_type": type(exc).__name__, "recovery": recovery})
+        acceptance.record("status", "failed")
+        raise release_acceptance.AcceptanceError(
+            f"上线验收未通过，发布停止；清单恢复结果：{recovery['status']}；记录：{acceptance.output}") from exc
     return version_data
 
 
-def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: str = ""):
+def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: str = "", *,
+            candidate_dir: str = ""):
     token = _get_token()
     gitee_token = _get_gitee_token()
 
@@ -594,10 +648,31 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
     release_name = f"V{new_ver}" + (f" ({suffix})" if suffix else "")
     commit_message = f"release: {tag_name}"
 
-    assets = step_build()
+    if candidate_dir:
+        release_acceptance.require(no_bump, "重用候选包时版本必须与已构建版本一致")
+        print(f"[候选包] 重用现有产物并重新执行全部发版验收：{candidate_dir}")
+        assets = collect_assets(candidate_dir, new_ver)
+    else:
+        assets = step_build()
+    if assets.get("patch_zip"):
+        release_acceptance.require(assets.get("patch_min_version") == patch_policy.DEFAULT_MIN_VERSION,
+                                   "候选补丁覆盖下限与正式发版设置不一致")
+    print("[验收 U01-U07] 检查候选包并运行正式 EXE 升级、回退及恢复验收...", flush=True)
+    # 本地产物验收在 Git commit/tag/push 和所有发布写操作之前执行。
+    previous = load_gist_version(token)
+    previous_version = previous.get("latest_version")
+    if previous_version == new_ver:
+        previous_version = None
+    acceptance = release_acceptance.prepare_local(
+        new_ver, assets, root=PROJECT_ROOT, python=_project_python(), previous_version=previous_version)
+    assets = acceptance.assets
+    acceptance.assert_unchanged()
     step_git_commit_and_tag(tag_name, branch, commit_message)
+    acceptance.assert_unchanged()
     release_obj = step_create_release(tag_name, release_name, token, changelog)
+    acceptance.assert_unchanged()
     urls = step_upload_assets(release_obj, assets, token)
+    acceptance.assert_unchanged()
     urls.update(
         step_create_gitee_release_and_upload_assets(
             tag_name,
@@ -608,18 +683,20 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
             branch=branch,
         )
     )
-    version_data = step_update_gist(new_ver, urls, assets, token, changelog, gist_id=GIST_ID)
-    snapshot_file = release_snapshot.write_release_snapshot(
-        version=new_ver,
-        tag_name=tag_name,
-        full_zip_path=assets["full_zip"],
-        full_download_url=urls.get("download_url", ""),
-        version_data=version_data,
-        manifest_path=assets.get("manifest_path", ""),
-        patch_zip_path=assets.get("patch_zip", "") if urls.get("patch_url") else "",
-        patch_download_url=urls.get("patch_url", ""),
-    )
-    print(f"  - 发布快照: {snapshot_file}")
+    version_data = _build_version_data(new_ver, urls, assets, changelog)
+    print("[验收 U08] 完整回读所有正式下载地址并校验 SHA256...", flush=True)
+    release_acceptance.verify_remote(acceptance, version_data)
+    def snapshot_after_acceptance():
+        snapshot_file = release_snapshot.write_release_snapshot(
+            version=new_ver, tag_name=tag_name, full_zip_path=assets["full_zip"],
+            full_download_url=urls.get("download_url", ""), version_data=version_data,
+            manifest_path=assets.get("manifest_path", ""),
+            patch_zip_path=assets.get("patch_zip", "") if urls.get("patch_url") else "",
+            patch_download_url=urls.get("patch_url", ""))
+        print(f"  - 发布快照: {snapshot_file}")
+    activate_version_data(version_data, token, acceptance=acceptance, previous_version_data=previous,
+                          after_acceptance=snapshot_after_acceptance)
+    print(f"  - 更新验收记录: {acceptance.output / 'acceptance.json'}")
 
     print(f"\n{'=' * 60}")
     print(f"  {tag_name} 正式发布完成")
@@ -629,7 +706,7 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
     print(f"{'=' * 60}\n")
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="一键发版：bump -> build -> git -> release -> gist",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -641,7 +718,7 @@ if __name__ == "__main__":
   python tools/release.py patch --no-bump --tag-suffix rc.20260317.1
 """,
     )
-    parser.add_argument("level", choices=["hotfix", "patch", "minor", "major"],
+    parser.add_argument("level", nargs="?", choices=["hotfix", "patch", "minor", "major"],
                         help="版本递增级别（--no-bump 时仅作兼容占位）")
     parser.add_argument("-m", "--message", default="",
                         help="更新日志（用 \\n 分隔多条）")
@@ -650,5 +727,37 @@ if __name__ == "__main__":
     parser.add_argument("--tag-suffix", default="",
                         help="tag 后缀，例如 rc.20260317.1，生成 vX.Y.Z-<suffix>")
 
-    args = parser.parse_args()
-    release(args.level, args.message, no_bump=args.no_bump, tag_suffix=args.tag_suffix)
+    parser.add_argument("--verify-only", action="store_true", help="只验收现有候选产物，不发布、不修改版本或 Git")
+    parser.add_argument("--assets-dir", default=os.path.join(PROJECT_ROOT, "dist"), help="只验收模式的候选产物目录")
+    parser.add_argument("--version", help="只验收模式的目标版本，默认当前源码版本")
+    parser.add_argument("--use-existing-candidate", action="store_true",
+                        help="按当前版本重用候选包，完整重跑所有发版验收")
+    args = parser.parse_args(argv)
+    try:
+        if args.verify_only:
+            if args.use_existing_candidate:
+                parser.error("只验收模式直接用 --assets-dir 指定候选产物")
+            target = args.version or step_get_current_version()
+            assets = collect_assets(os.path.abspath(args.assets_dir), target)
+            result = release_acceptance.prepare_local(target, assets, root=PROJECT_ROOT, python=_project_python())
+            print(f"本地验收通过，未执行发布：{result.output / 'acceptance.json'}")
+        else:
+            if args.level is None:
+                parser.error("正式发布必须提供版本级别；只验收请使用 --verify-only")
+            if args.version:
+                parser.error("--version 仅供只验收模式使用")
+            if args.use_existing_candidate and not args.no_bump:
+                parser.error("--use-existing-candidate 必须与 --no-bump 一起使用")
+            options = {"candidate_dir": os.path.abspath(args.assets_dir)} if args.use_existing_candidate else {}
+            release(args.level, args.message, no_bump=args.no_bump, tag_suffix=args.tag_suffix, **options)
+        return 0
+    except (release_acceptance.AcceptanceError, subprocess.TimeoutExpired) as exc:
+        print(f"[验收未通过] {exc}\n已停止后续发布步骤。", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"[发布停止] {type(exc).__name__}，请查看当前步骤的日志处理失败项。", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

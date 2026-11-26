@@ -77,10 +77,10 @@ class BackfillMode(Enum):
 
 @dataclass
 class BackfillConfig:
-    """回填配置"""
-    mode: BackfillMode = BackfillMode.FIXED_THICKNESS
-    thickness: float = 0.3          # 固定厚度模式下的回填厚度（m）
-    include_slope_backfill: bool = True  # 是否包含贴坡回填
+    """历史断面入口的回填配置；完整施工回填由显式土体区域定义。"""
+    mode: BackfillMode = BackfillMode.TO_DESIGN_SURFACE
+    thickness: float = 0.0          # 不再隐式生成固定厚度的回填量
+    include_slope_backfill: bool = False  # 贴坡回填须提供真实几何边界
 
 
 # ============================================================
@@ -220,11 +220,14 @@ class SectionAreaResult:
     station: float
     excavation_total: float = 0.0              # 开挖总面积（m²）
     excavation_by_layer: dict[str, float] = field(default_factory=dict)  # 按地质层分
-    fill_area: float = 0.0                     # 回填总面积（m²）
+    fill_area: float = 0.0                     # 填方总面积（m²），含恢复回填与新增填筑
     excavation_width: float = 0.0             # 横断面开挖总宽度（m）
     ground_elevation_center: float = 0.0      # 中心线处地面高程（m）
     design_invert_elevation: float = 0.0      # 设计底高程（m）
     cut_depth: float = 0.0                    # 挖深（地面 - 设计底，正值为挖）
+    # None 表示仅有地表差分填方，未提供可区分施工阶段的显式区域。
+    backfill_area: Optional[float] = None     # 本次开挖范围内的恢复回填（m²）
+    embankment_area: Optional[float] = None   # 原地面以上的设计填筑（m²）
 
     @property
     def is_cut(self) -> bool:
@@ -293,6 +296,10 @@ class SegmentVolume:
     excavation_by_layer_prismatoid: dict[str, float] = field(default_factory=dict)
     fill_avg: float = 0.0
     fill_prismatoid: float = 0.0
+    backfill_avg: Optional[float] = None
+    backfill_prismatoid: Optional[float] = None
+    embankment_avg: Optional[float] = None
+    embankment_prismatoid: Optional[float] = None
 
 
 @dataclass
@@ -301,6 +308,9 @@ class VolumeResult:
     segments: list[SegmentVolume] = field(default_factory=list)
     tin_volume_excavation: Optional[float] = None   # TIN体积法结果
     tin_volume_fill: Optional[float] = None
+    # 端面积均值代替中点时只是兼容估算，不构成独立复核。
+    prismatoid_source: str = "endpoint_average"
+    prismatoid_independent: bool = False
 
     @property
     def total_excavation_avg(self) -> float:
@@ -331,3 +341,24 @@ class VolumeResult:
     @property
     def total_fill_prismatoid(self) -> float:
         return sum(s.fill_prismatoid for s in self.segments)
+
+    def _total_fill_component(self, name: str) -> Optional[float]:
+        """任一分段未识别回填种类时，全线分项仍为未知，不能按零计。"""
+        values = [getattr(segment, name) for segment in self.segments]
+        return None if any(value is None for value in values) else math.fsum(values)
+
+    @property
+    def total_backfill_avg(self) -> Optional[float]:
+        return self._total_fill_component("backfill_avg")
+
+    @property
+    def total_backfill_prismatoid(self) -> Optional[float]:
+        return self._total_fill_component("backfill_prismatoid")
+
+    @property
+    def total_embankment_avg(self) -> Optional[float]:
+        return self._total_fill_component("embankment_avg")
+
+    @property
+    def total_embankment_prismatoid(self) -> Optional[float]:
+        return self._total_fill_component("embankment_prismatoid")

@@ -348,3 +348,45 @@ def test_generate_manifest_excludes_runtime_autosave_artifacts(tmp_path):
     assert "keep.txt" in manifest["files"]
     assert "_internal/data/siphon_autosave.json" not in manifest["files"]
     assert "_internal/data/autosave/draft.qxproj" not in manifest["files"]
+
+
+def test_historical_manifests_do_not_put_user_cases_back_into_patch(tmp_path):
+    dist_dir = tmp_path / "dist"
+    cases_dir = dist_dir / "_internal" / "data" / "siphon_cases"
+    cases_dir.mkdir(parents=True)
+    case_path = "_internal/data/siphon_cases/工况1.siphon.json"
+    deleted_case = "_internal/data/siphon_cases/工况2.siphon.json"
+    autosave_path = "_internal/data/siphon_autosave.json"
+    (cases_dir / "工况1.siphon.json").write_text("bundled-case", encoding="utf-8")
+    (dist_dir / "program.txt").write_text("new-program", encoding="utf-8")
+    new_manifest = {
+        "version": "1.4.6",
+        "files": {
+            "program.txt": "new-program-hash",
+            case_path: "bundled-case-hash",
+        },
+    }
+    old_manifests = [
+        ("1.4.5", {"files": {
+            "program.txt": "old-program-hash",
+            case_path: "old-case-hash",
+            deleted_case: "deleted-case-hash",
+            autosave_path: "old-autosave-hash",
+        }}),
+    ]
+    output_path = tmp_path / "patch.zip"
+
+    patch_builder.build_universal_patch(
+        str(dist_dir), old_manifests, new_manifest, str(output_path),
+    )
+    with zipfile.ZipFile(output_path) as archive:
+        meta = json.loads(archive.read("patch_manifest.json"))
+        assert archive.namelist() == ["patch_manifest.json", "program.txt"]
+
+    assert meta["included_files"] == ["program.txt"]
+    assert meta["deleted"] == []
+    assert meta["target_files"] == {"program.txt": "new-program-hash"}
+    assert meta["source_versions"] == ["1.4.5"]
+    assert new_manifest["files"][case_path] == "bundled-case-hash"
+    generated = patch_builder.generate_manifest(str(dist_dir), version="1.4.6")
+    assert case_path not in generated["files"]

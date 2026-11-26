@@ -89,9 +89,9 @@ class DXFTerrainReader:
         self,
         layer: Optional[str] = None,
         layer_filter: Optional[list[str]] = None,
-        read_text: bool = True,
-        z_min: float = -1000.0,
-        z_max: float = 9000.0,
+        read_text: bool = False,
+        z_min: float = -math.inf,
+        z_max: float = math.inf,
     ) -> list[TerrainPoint]:
         """
         读取离散高程点，支持三种实体类型：
@@ -120,15 +120,13 @@ class DXFTerrainReader:
             if etype == "POINT":
                 loc = entity.dxf.location
                 z = float(loc.z)
-                if abs(z) < 1e-9:
-                    continue
                 if z_min <= z <= z_max:
                     result.append(TerrainPoint(
                         x=float(loc.x), y=float(loc.y), z=z,
                         source="elevation_point"
                     ))
 
-            elif read_text and etype in ("TEXT", "MTEXT"):
+            elif read_text and (layer or layer_filter) and etype in ("TEXT", "MTEXT"):
                 try:
                     if etype == "TEXT":
                         text_str = entity.dxf.text.strip()
@@ -257,19 +255,186 @@ class DXFTerrainReader:
         try:
             if entity.dxftype() == "LWPOLYLINE":
                 # LWPOLYLINE 本身是 2D，Z 来自 dxf.elevation 或折点扩展数据
-                elev = getattr(entity.dxf, "elevation", 0.0)
-                for v in entity.vertices():
-                    pts.append((float(v[0]), float(v[1]), float(elev)))
+                if entity.has_arc:
+                    from ezdxf.path import make_path
+                    pts = [tuple(map(float, p)) for p in make_path(entity).flattening(0.05)]
+                else:
+                    pts = [tuple(map(float, p)) for p in entity.vertices_in_wcs()]
+                    if entity.closed and pts:
+                        pts.append(pts[0])
             elif entity.dxftype() == "POLYLINE":
-                for v in entity.vertices:
-                    loc = v.dxf.location
-                    pts.append((float(loc.x), float(loc.y), float(loc.z)))
+                if entity.is_2d_polyline and any(v.dxf.get("bulge", 0) for v in entity.vertices):
+                    from ezdxf.path import make_path
+                    pts = [tuple(map(float, p)) for p in make_path(entity).flattening(0.05)]
+                else:
+                    pts = [tuple(map(float, p)) for p in entity.points_in_wcs()]
+                    if entity.is_closed and pts:
+                        pts.append(pts[0])
             elif entity.dxftype() == "SPLINE":
-                for pt in entity.control_points:
-                    pts.append((float(pt[0]), float(pt[1]), float(pt[2])))
+                pts = [tuple(map(float, p)) for p in entity.flattening(0.05)]
         except Exception:
             pass
         return pts
+
+    def read_terrain_sources(self, *, terrain_options=None, cancelled=None, corridor=None, on_scanned=None):
+        """Read source identities and WCS heights for the independent workbench.
+
+        Layer selection is conservative: unknown survey layers are returned as
+        confirmation items. Numeric labels never become independent XYZ points.
+        A caller may explicitly pair labels with selected point markers.
+        """
+        options = dict(terrain_options or {})
+        point_names = {"GCD", "高程点", "测点", "测量点", "ELEVATION", "SPOT_HEIGHT", "SURVEY_POINTS"}
+        contour_names = {"SQX", "JQX", "等高线", "计曲线", "首曲线", "CONTOUR", "CONTOURS"}
+        explicit_points = options.get("point_layers")
+        explicit_contours = options.get("contour_layers")
+        if isinstance(explicit_points, str) or isinstance(explicit_contours, str):
+            raise ValueError("测点/等高线图层应为图层名称列表")
+        point_layers = {str(v).upper() for v in explicit_points} if explicit_points is not None else point_names
+        contour_layers = {str(v).upper() for v in explicit_contours} if explicit_contours is not None else contour_names
+        tolerance = float(options.get("curve_tolerance", 0.05))
+        if not math.isfinite(tolerance) or tolerance <= 0:
+            raise ValueError("地形曲线离散误差必须有限且大于零")
+        if corridor is not None:
+            return self._stream_terrain_sources(
+                point_layers, contour_layers, options, tolerance, corridor, cancelled, on_scanned)
+        from .terrain_preprocessor import _gcd_circle_markers
+
+        self._ensure_loaded()
+        model = self._doc.modelspace()
+        circles = _gcd_circle_markers(model, point_layers=point_layers)
+        return self._collect_terrain_sources(
+            model, self._doc.units, {layer.dxf.name.upper() for layer in self._doc.layers},
+            point_layers, contour_layers, options, tolerance, circles, None, cancelled)
+
+    def _stream_terrain_sources(self, point_layers, contour_layers, options, tolerance, corridor, cancelled, on_scanned):
+        from ezdxf.addons.iterdxf import modelspace
+        from ezdxf.filemanagement import dxf_file_info
+        from .terrain_preprocessor import _gcd_circle_markers
+
+        units = dxf_file_info(self._path).insert_units
+        data = self._collect_terrain_sources(modelspace(self._path), units, set(), point_layers,
+            contour_layers, options, tolerance, {}, corridor, cancelled, on_scanned)
+        if data["report"]["possible_point_circles"]:
+            # Check the less common marker/label schema only when the first
+            # scan actually encountered candidate marker circles.
+            circles = _gcd_circle_markers(modelspace(self._path, types=("CIRCLE", "TEXT")),
+                                           point_layers=point_layers)
+            if circles:
+                del data
+                corridor.counts.clear()
+                data = self._collect_terrain_sources(modelspace(self._path), units, set(), point_layers,
+                    contour_layers, options, tolerance, circles, corridor, cancelled, on_scanned)
+        return data
+
+    @staticmethod
+    def _collect_terrain_sources(model, units, layers, point_layers, contour_layers, options,
+                                 tolerance, circles, corridor, cancelled, on_scanned=None):
+        from collections import Counter
+        from ezdxf.path import make_path
+        from .terrain_preprocessor import _original_handle
+
+        def add(entity, kind, source_kind, positions):
+            source = {"kind": kind, "layer": entity.dxf.layer, "source_handle": _original_handle(entity),
+                      "source_kind": source_kind, "points": positions}
+            if kind == "polyline":
+                source["cad_source"] = {
+                    "color": entity.dxf.get("color", 256),
+                    "true_color": entity.dxf.get("true_color"),
+                    "xdata_apps": sorted(entity.xdata.data) if entity.xdata else [],
+                }
+            sources.extend(corridor.select(source) if corridor is not None else [source])
+
+        # The second source drawing uses GCD circles and GCD contours. Enable
+        # that schema only after the original circle/label correspondence is proven.
+        explicit_points = options.get("point_layers")
+        explicit_contours = options.get("contour_layers")
+        standard_contour_layers = {"SQX", "JQX", "等高线", "计曲线", "首曲线", "CONTOUR", "CONTOURS"}
+        if circles and explicit_contours is None:
+            contour_layers = contour_layers | point_layers
+        sources, counts, candidates, ignored_labels, invalid = [], Counter(), Counter(), 0, []
+        possible_circles = 0
+        curve_kinds = {"LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "ELLIPSE", "SPLINE"}
+        for index, entity in enumerate(model):
+            if cancelled and index % 256 == 0 and cancelled():
+                raise InterruptedError("已取消地形读取")
+            if on_scanned and index and index % 20000 == 0:
+                on_scanned(index, len(sources))
+            kind, layer = entity.dxftype(), entity.dxf.layer
+            upper = layer.upper()
+            counts[f"{layer}/{kind}"] += 1
+            xyz = None
+            source_kind = kind
+            if upper in point_layers:
+                if kind == "CIRCLE" and 0 < entity.dxf.radius <= 0.5:
+                    possible_circles += 1
+                if kind == "POINT":
+                    xyz = list(entity.dxf.location)
+                elif kind == "INSERT":
+                    xyz = list(entity.ocs().to_wcs(entity.dxf.insert))
+                elif kind == "CIRCLE" and entity.dxf.handle in circles:
+                    xyz = list(entity.ocs().to_wcs(entity.dxf.center))
+                    source_kind = "CIRCLE_CENTER_WITH_LABEL"
+            if xyz is not None:
+                if not all(math.isfinite(float(v)) for v in xyz):
+                    invalid.append({"source_handle": _original_handle(entity), "layer": layer,
+                                    "reason": "测点坐标或高程非有限数"})
+                    continue
+                add(entity, "point", source_kind, [list(map(float, xyz))])
+                continue
+            if (upper in contour_layers and kind in curve_kinds
+                    and not (upper in point_layers and upper not in standard_contour_layers
+                             and explicit_contours is None and kind not in ("LWPOLYLINE", "POLYLINE"))):
+                if kind == "CIRCLE" and entity.dxf.handle in circles:
+                    continue
+                if kind == "POLYLINE" and not (entity.is_2d_polyline or entity.is_3d_polyline):
+                    continue
+                try:
+                    if kind == "POLYLINE" and entity.is_3d_polyline:
+                        positions = list(entity.points_in_wcs())
+                        if entity.is_closed and positions:
+                            positions.append(positions[0])
+                    elif kind == "LWPOLYLINE" and not entity.has_arc:
+                        positions = list(entity.vertices_in_wcs())
+                        if entity.closed and positions:
+                            positions.append(positions[0])
+                    else:
+                        positions = list(make_path(entity).flattening(tolerance))
+                    values = [list(map(float, p)) for p in positions]
+                    if len(values) < 2 or not np.isfinite(values).all():
+                        raise ValueError("等高线没有有效三维线形")
+                    add(entity, "polyline", kind, values)
+                except (ValueError, TypeError, AttributeError) as exc:
+                    invalid.append({"source_handle": _original_handle(entity), "layer": layer,
+                                    "reason": str(exc)})
+            elif kind in ("TEXT", "MTEXT"):
+                ignored_labels += 1
+            elif kind in ("POINT", "INSERT") or kind in curve_kinds:
+                candidates[f"{layer}/{kind}"] += 1
+        selected = {str(v).upper() for v in list(explicit_points or []) + list(explicit_contours or [])}
+        existing = layers | {v.rsplit("/", 1)[0].upper() for v in counts}
+        report = {"reader": "ezdxf_streaming_wcs_sources" if corridor is not None else "ezdxf_wcs_sources",
+                  "source_insunits": units,
+                  "source_layer_types": dict(counts), "point_layers": sorted(point_layers & existing),
+                  "contour_layers": sorted(contour_layers & existing),
+                  "point_entity_count": sum(v["kind"] == "point" for v in sources),
+                  "contour_entity_count": sum(v["kind"] == "polyline" for v in sources),
+                  "ignored_label_count": ignored_labels, "numeric_text_policy": "labels_only_never_independent_points",
+                  "candidate_layer_types": dict(candidates), "invalid_entities": invalid,
+                  "missing_selected_layers": sorted(selected - existing), "curve_tolerance_m": tolerance,
+                  "ambiguous_layers": [], "automatic_noise_filter": True,
+                  "recognized_entity_count": len(sources),
+                  "ignored_entity_count": sum(counts.values()) - len(sources),
+                  "source_layout": "gcd_circle_markers_with_gcd_contours" if circles else "survey_points_and_contours"}
+        if corridor is not None:
+            report.update(corridor_preparation=corridor.report(), possible_point_circles=possible_circles,
+                          source_has_3dface=any(key.endswith("/3DFACE") for key in counts),
+                          stream_reader="ezdxf.addons.iterdxf.modelspace")
+        # A valid standard survey schema need not ask about unrelated map layers.
+        # Unknown layers are shown when no supported measurement source exists.
+        if not sources and candidates:
+            report["ambiguous_layers"] = sorted({v.rsplit("/", 1)[0] for v in candidates})
+        return {"sources": sources, "report": report}
 
     @staticmethod
     def _extract_polyline_xy(entity) -> list[tuple[float, float]]:
@@ -312,24 +477,21 @@ class DXFTerrainReader:
                 result.append(TerrainPoint(x=x, y=y, z=z, source="contour"))
             return result
 
-        accumulated = 0.0
         for i in range(len(pts_3d) - 1):
             x0, y0, z0 = pts_3d[i]
             x1, y1, z1 = pts_3d[i + 1]
             seg_len = math.hypot(x1 - x0, y1 - y0)
             if seg_len < 1e-10:
                 continue
-            # 在此段上按 interval 插入点
-            t = (interval - accumulated) / seg_len
-            while t <= 1.0 + 1e-9:
-                t_clamped = min(t, 1.0)
-                px = x0 + t_clamped * (x1 - x0)
-                py = y0 + t_clamped * (y1 - y0)
-                pz = z0 + t_clamped * (z1 - z0)
+            # Retain every surveyed corner; optional refinement only inserts
+            # points on its original segments rather than cutting corners.
+            count = max(1, int(math.ceil(seg_len / interval)))
+            for at in range(1, count+1):
+                t = at / count
+                px = x0 + t * (x1 - x0)
+                py = y0 + t * (y1 - y0)
+                pz = z0 + t * (z1 - z0)
                 result.append(TerrainPoint(x=px, y=py, z=pz, source="contour"))
-                t += interval / seg_len
-            # 本段走完后剩余的累积距离（供下一段续接）
-            accumulated = seg_len - (t - interval / seg_len) * seg_len
 
         # 始终保留最后一个折点
         last = pts_3d[-1]

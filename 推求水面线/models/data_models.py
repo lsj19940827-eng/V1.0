@@ -29,6 +29,13 @@ class ChannelNode:
     x: float = 0.0                              # 坐标X
     y: float = 0.0                              # 坐标Y
     turn_radius: float = 0.0                    # 转弯半径（m），每行可不同
+    turn_radius_is_explicit: bool = False
+    turn_radius_text: str = ""
+    turn_radius_source: str = ""
+    turn_radius_default_value: float = 0.0
+    turn_radius_default_diameter: float = 0.0
+    turn_radius_default_diameter_source: str = ""
+    turn_radius_default_multiplier: float = 3.0
     
     # ========== 自动计算字段 ==========
     in_out: InOutType = InOutType.NORMAL        # 进出口标识（自动判断）
@@ -123,6 +130,7 @@ class ChannelNode:
     transition_length_calc_details: Dict[str, Any] = field(default_factory=dict)  # 渐变段长度计算详情（用于双击展示）
     
     profile_row_id: str = ""                    # 表3稳定行标识，旧工程由适配器生成
+    custom_gate_type: str = ""
 
     def __post_init__(self):
         """构造时迁移旧专项结果，断面参数不再维护结果镜像。"""
@@ -130,6 +138,8 @@ class ChannelNode:
 
     def get_structure_type_str(self) -> str:
         """获取结构形式的字符串表示"""
+        if self.structure_type == StructureType.GATE and self.custom_gate_type:
+            return self.custom_gate_type
         return self.structure_type.value if self.structure_type else ""
     
     def get_in_out_str(self) -> str:
@@ -245,10 +255,17 @@ class ChannelNode:
             # ========== 基础输入字段 ==========
             "flow_section": self.flow_section,
             "name": self.name,
-            "structure_type": self.structure_type.value if self.structure_type else None,
+            "structure_type": self.get_structure_type_str() or None,
             "x": self.x,
             "y": self.y,
             "turn_radius": self.turn_radius,
+            "turn_radius_is_explicit": self.turn_radius_is_explicit,
+            "turn_radius_text": self.turn_radius_text,
+            "turn_radius_source": self.turn_radius_source,
+            "turn_radius_default_value": self.turn_radius_default_value,
+            "turn_radius_default_diameter": self.turn_radius_default_diameter,
+            "turn_radius_default_diameter_source": self.turn_radius_default_diameter_source,
+            "turn_radius_default_multiplier": self.turn_radius_default_multiplier,
             
             # ========== 自动计算字段 ==========
             "in_out": self.in_out.value if self.in_out else "",
@@ -365,12 +382,23 @@ class ChannelNode:
         if struct_str:
             try:
                 node.structure_type = StructureType.from_string(struct_str)
+                if node.structure_type == StructureType.GATE:
+                    node.custom_gate_type = str(struct_str).strip()
             except ValueError:
                 node.structure_type = None
         
         node.x = d.get("x", 0.0)
         node.y = d.get("y", 0.0)
         node.turn_radius = d.get("turn_radius", 0.0)
+        # An old saved calculation keeps its adopted geometry until recalculated.
+        legacy_radius = "turn_radius" in d and "turn_radius_source" not in d
+        node.turn_radius_is_explicit = bool(d.get("turn_radius_is_explicit", legacy_radius))
+        node.turn_radius_text = str(d.get("turn_radius_text", "") or "")
+        node.turn_radius_source = str(d.get("turn_radius_source", "legacy_saved" if legacy_radius else "") or "")
+        node.turn_radius_default_value = float(d.get("turn_radius_default_value", 0.) or 0.)
+        node.turn_radius_default_diameter = float(d.get("turn_radius_default_diameter", 0.) or 0.)
+        node.turn_radius_default_diameter_source = str(d.get("turn_radius_default_diameter_source", "") or "")
+        node.turn_radius_default_multiplier = float(d.get("turn_radius_default_multiplier", 3.) or 3.)
         
         # ========== 自动计算字段 ==========
         in_out_str = d.get("in_out", "")
@@ -617,6 +645,7 @@ class ProjectSettings:
     
     # ========== 倒虹吸平面转弯半径设置 ==========
     siphon_turn_radius_n: float = 3.0                  # 倒虹吸转弯半径倍数n（R = n × D，D为管径）
+    pipe_turn_radius_n: float = 3.0                    # 管道未填半径时R=nD，显式0及手填值保留
     transition_length_rules: List[TransitionLengthRule] = field(default_factory=list)  # 渐变段长度组合规则
     connection_channel_templates: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 用户指定的分流量段明渠模板
     connection_channel_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 用户修改的单处连接断面
@@ -695,6 +724,8 @@ class ProjectSettings:
         
         if self.turn_radius < 0:
             errors.append("转弯半径不能为负数")
+        if not math.isfinite(float(self.pipe_turn_radius_n)) or self.pipe_turn_radius_n <= 0:
+            errors.append("管道默认转弯半径倍数须大于0")
         if self.roughness <= 0:
             errors.append("糙率必须大于0")
         
@@ -757,6 +788,7 @@ class ProjectSettings:
             "倒虹吸进口渐变段局部损失系数": self.siphon_transition_inlet_zeta,
             "倒虹吸出口渐变段局部损失系数": self.siphon_transition_outlet_zeta,
             "倒虹吸转弯半径倍数n": self.siphon_turn_radius_n,
+            "管道默认转弯半径倍数n": self.pipe_turn_radius_n,
             "渐变段长度规则": [rule.to_dict() for rule in self.transition_length_rules],
             "连接明渠模板": self.connection_channel_templates,
             "连接段参数覆盖": self.connection_channel_overrides,
@@ -791,6 +823,7 @@ class ProjectSettings:
         
         # 渠道参数
         settings.turn_radius = d.get("转弯半径", d.get("turn_radius", 0.0))
+        settings.pipe_turn_radius_n = d.get("管道默认转弯半径倍数n", d.get("pipe_turn_radius_n", 3.0))
         settings.roughness = d.get("糙率", d.get("roughness", 0.014))
         settings.siphon_roughness = d.get("倒虹吸糙率", d.get("siphon_roughness", 0.014))
         

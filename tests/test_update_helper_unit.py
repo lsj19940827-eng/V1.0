@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import sys
+import threading
+import time
 from types import SimpleNamespace
 
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 
@@ -23,6 +27,69 @@ def _get_qapp():
     return QApplication.instance() or QApplication([])
 
 
+def test_slow_fallback_progress_and_completion_only_touch_gui_thread(monkeypatch):
+    _get_qapp()
+    gui_thread = threading.get_ident()
+    ui_threads = []
+    worker_threads = []
+    heartbeat = []
+    fake_session = SimpleNamespace(current_version="1.4.5", target_version="1.4.6")
+    monkeypatch.setattr(update_helper.updater.UpdateSession, "from_file", lambda _: fake_session)
+    original_append = update_helper.UpdateHelperWindow._append_detail
+
+    def record_append(self, text):
+        ui_threads.append(threading.get_ident())
+        original_append(self, text)
+
+    def slow_fallback(_path, *, stage_callback):
+        worker_threads.append(threading.get_ident())
+        stage_callback("validate", "正在校验补丁适用性")
+        stage_callback("fallback", "补丁不适用，正在改用完整安装包")
+
+        def report_download():
+            for percent in range(20):
+                stage_callback("download", f"正在下载完整安装包（{percent}%）")
+                time.sleep(0.01)
+
+        monitor = threading.Thread(target=report_download)
+        monitor.start()
+        monitor.join()
+        return {"success": True, "log_path": "test.log"}
+
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_append_detail", record_append)
+    monkeypatch.setattr(update_helper.updater, "run_update_session", slow_fallback)
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.timeout.connect(lambda: heartbeat.append(time.monotonic()))
+    timer.start(10)
+    window = update_helper.UpdateHelperWindow("test-session.json")
+    watcher = QTimer()
+
+    def check_finished():
+        if window.result is not None and not window._worker_thread.isRunning():
+            loop.quit()
+
+    watcher.timeout.connect(check_finished)
+    watcher.start(10)
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(loop.quit)
+    timeout.start(3000)
+    try:
+        loop.exec()
+        assert window.result and window.result["success"]
+        assert worker_threads and worker_threads[0] != gui_thread
+        assert ui_threads and set(ui_threads) == {gui_thread}
+        assert len(heartbeat) >= 5
+    finally:
+        timer.stop()
+        watcher.stop()
+        timeout.stop()
+        window._worker_thread.quit()
+        window._worker_thread.wait(2000)
+        window.close()
+
+
 def test_main_shows_hint_when_started_without_session(monkeypatch):
     calls: list[str] = []
 
@@ -36,6 +103,39 @@ def test_main_shows_hint_when_started_without_session(monkeypatch):
 
     assert result == 0
     assert calls == ["shown"]
+
+
+def test_acceptance_report_serializes_real_session_result_and_measures_gui_thread(tmp_path, monkeypatch):
+    _get_qapp()
+    session = update_helper.updater.UpdateSession(session_id="qa", app_dir=str(tmp_path),
+        main_exe_path=str(tmp_path / "CanalHydraulicCalc.exe"), download_zip_path=str(tmp_path / "full.zip"),
+        is_patch=False, target_version="1.4.7", current_version="1.4.6", log_dir=str(tmp_path),
+        cleanup_targets=[], preserve_patterns=list(update_helper.updater.DEFAULT_PRESERVE_PATTERNS))
+    path = session.write(str(tmp_path / "session.json"))
+    def installed(_path, *, stage_callback):
+        stage_callback("validate", "真实数据类结果的验收输出测试")
+        return {"success": True, "session": session, "rollback_status": "not_needed"}
+    monkeypatch.setattr(update_helper.updater, "run_update_session", installed)
+    report = tmp_path / "native.json"
+    window = update_helper.UpdateHelperWindow(path, acceptance_report=str(report))
+    loop, watcher, timeout = QEventLoop(), QTimer(), QTimer()
+    watcher.timeout.connect(lambda: loop.quit() if report.exists() else None)
+    watcher.start(20)
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(loop.quit)
+    timeout.start(4000)
+    try:
+        loop.exec()
+        data = json.loads(report.read_text(encoding="utf-8"))
+        assert data["result"]["success"] is True and "session" not in data["result"]
+        assert data["all_ui_callbacks_on_gui_thread"] and data["worker_on_background_thread"]
+        assert len(data["helper_sha256"]) == 64 and data["heartbeat_count"] >= 2
+    finally:
+        timeout.stop()
+        watcher.stop()
+        window._worker_thread.quit()
+        window._worker_thread.wait(2000)
+        window.close()
 
 
 def test_resolve_window_icon_path_prefers_shared_shield_icon(monkeypatch):

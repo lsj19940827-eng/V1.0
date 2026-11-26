@@ -28,9 +28,9 @@ class ProjectSession:
     def changed(self) -> None:
         self.revision += 1
 
-    def commit(self, data: Dict[str, Any], path: str = "") -> None:
-        """仅在完整恢复成功后切换会话。"""
-        self._data = deepcopy(data)
+    def commit(self, data: Dict[str, Any], path: str = "", *, take_ownership: bool = False) -> None:
+        """完整恢复后切换会话，后台解码方可移交未共享的快照。"""
+        self._data = data if take_ownership else deepcopy(data)
         self.path = path
         self.generation += 1
         self.revision = 0
@@ -53,3 +53,7 @@ class ProjectSession:
     @property
     def data(self) -> Dict[str, Any]:
         return deepcopy(self._data)
+
+    def copy_extra_fields(self, known_fields) -> Dict[str, Any]:
+        """Copy saved extension fields without cloning panels about to be recaptured."""
+        return deepcopy({key: value for key, value in self._data.items() if key not in known_fields})

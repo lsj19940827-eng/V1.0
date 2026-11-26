@@ -59,6 +59,7 @@ from 有压管道设计 import (
 )
 from 推求水面线.utils.pressure_pipe_common import normalize_pressure_pipe_material_key as _normalize_shared_pressure_pipe_material_key
 from 推求水面线.utils.numeric_precision import format_display_number
+from 推求水面线.shared.section_lining import SECTION_SUMMARY_LINING_DEFAULTS
 
 try:
     from 推求水面线.core.pressure_pipe_calc import calc_total_head_loss as _calc_pressure_pipe_total_head_loss
@@ -982,14 +983,14 @@ def _default_segments_rect_channel():
     Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
     slopes = [3000, 3000, 3000, 3000, 5555, 6666, 7777]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": slopes[i], "n": 0.014,
-             "wall_t": 0.3, "tie_rod": "0.2×0.2"} for i in range(7)]
+             **SECTION_SUMMARY_LINING_DEFAULTS["rect_channel"], "tie_rod": "0.2×0.2"} for i in range(7)]
 
 def _default_segments_trap_channel():
     """梯形明渠默认参数"""
     Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
     slopes = [3000, 3000, 3000, 3000, 5555, 6666, 7777]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": slopes[i], "n": 0.014,
-             "m": 1.0, "wall_t": 0.3, "tie_rod": "0.2×0.2"} for i in range(7)]
+             "m": 1.0, **SECTION_SUMMARY_LINING_DEFAULTS["trap_channel"], "tie_rod": "0.2×0.2"} for i in range(7)]
 
 
 def _default_segments_u_channel():
@@ -1059,14 +1060,14 @@ def _default_segments_rect_culvert():
     """矩形暗涵默认参数"""
     Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": 2500, "n": 0.014,
-             "t0": 0.4, "t1": 0.4, "t2": 0.4} for i in range(7)]
+             **SECTION_SUMMARY_LINING_DEFAULTS["rect_culvert"]} for i in range(7)]
 
 
 def _default_segments_rect_culvert_arch():
     """圆拱直墙型暗涵默认参数"""
     Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": 2500, "n": 0.014,
-             "theta_deg": 150.0, "t0": 0.4, "t": 0.4} for i in range(7)]
+             "theta_deg": 150.0, **SECTION_SUMMARY_LINING_DEFAULTS["rect_culvert_arch"]} for i in range(7)]
 
 def _default_segments_circular_pipe():
     """圆管涵默认参数"""
@@ -1095,7 +1096,7 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
         Q = seg["Q"]
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
-        wall_t = seg.get("wall_t", 0.3)
+        wall_t = seg.get("wall_t", SECTION_SUMMARY_LINING_DEFAULTS["rect_channel"]["wall_t"])
         tie_rod = seg.get("tie_rod", "0.2×0.2")
         use_increase = _normalize_use_increase(seg.get("use_increase"), True)
         manual_b = _first_positive(seg, "B")
@@ -1153,7 +1154,7 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
         m = seg.get("m", 1.0)
-        wall_t = seg.get("wall_t", 0.3)
+        wall_t = seg.get("wall_t", SECTION_SUMMARY_LINING_DEFAULTS["trap_channel"]["wall_t"])
         tie_rod = seg.get("tie_rod", "0.2×0.2")
         use_increase = _normalize_use_increase(seg.get("use_increase"), True)
         manual_b = _first_positive(seg, "B")
@@ -2011,9 +2012,8 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
         Q = seg["Q"]
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
-        t0 = seg.get("t0", 0.4)
-        t1 = seg.get("t1", 0.4)
-        t2 = seg.get("t2", 0.4)
+        lining = {**SECTION_SUMMARY_LINING_DEFAULTS["rect_culvert"], **seg}
+        t0, t1, t2 = (lining[key] for key in ("t0", "t1", "t2"))
         use_increase = _normalize_use_increase(seg.get("use_increase"), True)
 
         res = _calc_rect_culvert(
@@ -2110,8 +2110,9 @@ def compute_rect_culvert_arch(segments: List[Dict]) -> List[Dict]:
         Q = seg["Q"]
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
-        t0 = seg.get("t0", 0.4)
-        t = seg.get("t", seg.get("t1", 0.4))
+        lining = SECTION_SUMMARY_LINING_DEFAULTS["rect_culvert_arch"]
+        t0 = seg.get("t0", lining["t0"])
+        t = seg.get("t", seg.get("t1", lining["t"]))
         use_increase = _normalize_use_increase(seg.get("use_increase"), True)
         geom = _resolve_geometry(seg)
         if geom is None:

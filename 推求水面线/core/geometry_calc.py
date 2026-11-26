@@ -18,10 +18,12 @@ if __package__ and __package__.startswith("推求水面线."):
     from ..models.data_models import ChannelNode, ProjectSettings
     from ..models.enums import InOutType, StructureType
     from ..config.constants import ZERO_TOLERANCE, ANGLE_PRECISION, LENGTH_PRECISION
+    from ..shared.turn_radius import resolve_turn_radius, apply_default_turn_radii, validate_default_turn_radius_fit
 else:
     from models.data_models import ChannelNode, ProjectSettings
     from models.enums import InOutType, StructureType
     from config.constants import ZERO_TOLERANCE, ANGLE_PRECISION, LENGTH_PRECISION
+    from shared.turn_radius import resolve_turn_radius, apply_default_turn_radii, validate_default_turn_radius_fit
 
 
 class GeometryCalculator:
@@ -48,13 +50,7 @@ class GeometryCalculator:
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
-        # 新规则：表格留空也按 0 处理，不再退回默认半径。
-        if bool(getattr(node, "turn_radius_is_explicit", False)):
-            return float(getattr(node, "turn_radius", 0.0) or 0.0)
-        turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
-        if turn_radius > 0:
-            return turn_radius
-        return 0.0
+        return resolve_turn_radius(node, multiplier=getattr(self.settings, "pipe_turn_radius_n", 3.0))
     
     def calculate_azimuth(self, x1: float, y1: float, x2: float, y2: float) -> float:
         """
@@ -264,6 +260,7 @@ class GeometryCalculator:
         Args:
             nodes: 节点列表（原地修改）
         """
+        apply_default_turn_radii(nodes, multiplier=getattr(self.settings, "pipe_turn_radius_n", 3.0))
         if len(nodes) < 2:
             return
         
@@ -365,6 +362,7 @@ class GeometryCalculator:
             # 计算弧长: L = π × R × α / 180
             arc = self.calculate_arc_length(turn_angle, turn_radius)
             node.arc_length = arc
+        validate_default_turn_radius_fit(nodes)
     
     def calculate_stations(self, nodes: List[ChannelNode], start_station: float = 0.0) -> None:
         """

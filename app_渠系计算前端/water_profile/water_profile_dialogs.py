@@ -2022,6 +2022,8 @@ class PressurePipeConfigDialog(QDialog):
         group_key = self._group_storage_key(group)
         cfg = dict(self._radius_configs.get(group_key, {}) or {})
         radius_values = self._group_radius_values(group)
+        radius_nodes=list(self._group_edit_rows(group))
+        default_radius=bool(radius_nodes) and all(getattr(node,"turn_radius_source","")=="default_3d" for node in radius_nodes)
         mixed_radius = len(radius_values) > 1
         row_r = radius_values[0] if len(radius_values) == 1 else 0.0
         suggest_d = self._suggest_group_d(group)
@@ -2029,7 +2031,7 @@ class PressurePipeConfigDialog(QDialog):
         has_cfg_turn_n = "turn_n" in cfg
 
         turn_r = self._safe_float(cfg.get("turn_R", 0.0), 0.0)
-        if (not has_cfg_turn_r) and turn_r <= 0 and row_r > 0:
+        if (not has_cfg_turn_r or default_radius and not cfg.get("applied") and not cfg.get("dirty")) and turn_r <= 0 and row_r > 0:
             turn_r = row_r
         turn_n = self._safe_float(cfg.get("turn_n", 0.0), 0.0)
         if turn_n <= 0 and turn_r > 0 and suggest_d > 0:
@@ -2074,6 +2076,8 @@ class PressurePipeConfigDialog(QDialog):
             "radius_values": radius_values,
             "d_consistent": self._is_group_d_consistent(group),
             "suggest_d": suggest_d,
+            "default_radius": default_radius,
+            "reset_default": bool(cfg.get("reset_default",False)),
         }
         self._radius_configs[group_key] = dict(normalized)
         return normalized
@@ -4347,6 +4351,9 @@ class PressurePipeConfigDialog(QDialog):
                     f"已应用：R={state['applied_turn_R']:.2f} m, n={state['applied_turn_n']:.3f}{suffix}"
                 )
                 radius_status.setStyleSheet("font-size: 12px; color: #2E7D32;")
+            elif state.get("default_radius") and state["turn_R"]>0:
+                radius_status.setText(f"默认采用 R=3D={state['turn_R']:.3f} m；可修改 R 或 n 后应用")
+                radius_status.setStyleSheet("font-size: 12px; color: #2E7D32;")
             else:
                 radius_status.setText("未应用平面R参数")
                 radius_status.setStyleSheet("font-size: 12px; color: #546E7A;")
@@ -4483,7 +4490,11 @@ class PressurePipeConfigDialog(QDialog):
         turn_n_in = self._safe_float(turn_n_edit.text(), 0.0)
         turn_r_in = self._safe_float(turn_r_edit.text(), 0.0)
 
-        if turn_r_in > 0:
+        reset_default=bool(turn_r_edit.text().strip() and turn_r_in==0.)
+        if reset_default:
+            turn_n=3.0
+            turn_r=round(3.0*suggest_d,2)
+        elif turn_r_in > 0:
             turn_r = round(turn_r_in, 2)
             turn_n = round((turn_r / suggest_d), 3) if suggest_d > 0 else round(turn_n_in, 3)
         elif turn_n_in > 0:
@@ -4508,6 +4519,7 @@ class PressurePipeConfigDialog(QDialog):
             "dirty": False,
             "applied_turn_n": turn_n,
             "applied_turn_R": turn_r,
+            "reset_default": reset_default,
         }
         self._last_turn_n = turn_n
 
@@ -4587,6 +4599,7 @@ class PressurePipeConfigDialog(QDialog):
                 "turn_n": round(float(applied_turn_n), 3) if applied_turn_n > 0 else 0.0,
                 "turn_R": round(float(applied_turn_r), 2) if applied_turn_r > 0 else 0.0,
                 "force_override": bool(state["force_override"]),
+                "reset_default": bool(state.get("reset_default",False)),
                 "applied": bool(state["applied"] and applied_turn_r > 0),
                 "radius_applied_at": str(state["radius_applied_at"] or ""),
                 "row_indices": list(getattr(group, "row_indices", []) or []),
@@ -5269,6 +5282,7 @@ class PressurePipeConfigDialog(QDialog):
         lbl_r_title.setStyleSheet("font-size: 12px; color: #37474F;")
         row_r.addWidget(lbl_r_title)
         turn_r_edit = LineEdit()
+        turn_r_edit.setToolTip("空白或0按R=3D；输入正值可指定转弯半径。")
         turn_r_edit.setPlaceholderText("输入 R (m)")
         turn_r_edit.setFixedWidth(110)
         row_r.addWidget(turn_r_edit)
@@ -6569,25 +6583,28 @@ class BuildingLengthDialog(QDialog):
         # 取两个表格宽度的最大值作为窗口宽度
         content_w = max(detail_w, summary_w)
 
-        # 计算明细表所需高度
-        detail_rows = self.detail_table.rowCount()
-        summary_rows = self.summary_table.rowCount()
-        max_rows = max(detail_rows, summary_rows)
-        table_h = 36 + max_rows * self._ROW_HEIGHT + 4  # 表头 + 数据行
-        fixed_h = 220  # 页签、排版说明、合计、统计口径、按钮及边距
-        content_h = table_h + fixed_h
-
-        # 限制最大尺寸为屏幕的 85%/70%
+        # 长表可占用更多屏幕高度，仍留出窗口标题栏和上下空隙。
         screen = self.screen()
         if screen:
             sg = screen.availableGeometry()
             max_w = int(sg.width() * 0.85)
-            max_h = int(sg.height() * 0.70)
+            max_h = int(sg.height() * 0.90)
         else:
             max_w, max_h = 1400, 750
 
-        win_w = min(max(content_w, 500), max_w)
-        win_h = min(max(content_h, 350), max_h)
+        win_w = min(max(content_w, self.minimumWidth()), max_w)
+        # 从 Qt 的布局建议高度出发，用实际表头和行高替换表格的建议高度。
+        table_height_adjustment = []
+        for table in (self.detail_table, self.summary_table):
+            header = table.horizontalHeader()
+            table_height = max(header.minimumHeight(), header.sizeHint().height())
+            table_height += table.verticalHeader().length() + 2 * table.frameWidth()
+            if win_w < content_w:
+                table_height += table.horizontalScrollBar().sizeHint().height()
+            table_height_adjustment.append(table_height - table.sizeHint().height())
+
+        content_h = self.sizeHint().height() + max(table_height_adjustment)
+        win_h = min(max(content_h, self.minimumHeight()), max_h)
         self.resize(win_w, win_h)
 
         # 窗口大小确定后，启用最后一列拉伸填充多余空间

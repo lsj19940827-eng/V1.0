@@ -347,8 +347,9 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._btn_tin.setEnabled(False); self._btn_tin.clicked.connect(self._on_build_tin)
         self._tin_info = QLabel(""); self._tin_info.setWordWrap(True)
         self._tin_info.setStyleSheet(f"font-size:12px;color:{T1};line-height:1.6;")
-        self._tin_filter_chk = QCheckBox("构建前过滤异常高程点（IQR法）")
-        self._tin_filter_chk.setToolTip("适用于地形数据中存在Z=0或极端异常高程的情况")
+        self._tin_filter_chk = QCheckBox("自动剔除明显异常高程点与等高线")
+        self._tin_filter_chk.setChecked(True)
+        self._tin_filter_chk.setToolTip("参考附近测量资料筛查；正常零高程、负高程和山坡仍保留。三角网自动按局部点距裁剪测量范围。")
         vl.addWidget(QLabel("状态:")); vl.addWidget(self._tin_stat)
         vl.addWidget(self._tin_filter_chk)
         vl.addWidget(self._btn_tin); vl.addWidget(self._tin_prog)
@@ -417,8 +418,8 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._vol_table = QTableWidget(0, 7)
         self._vol_table.setHorizontalHeaderLabels([
             "起始桩号","终止桩号","段长(m)",
-            "平均断面法挖(m³)","棱台法挖(m³)",
-            "平均断面法填(m³)","棱台法填(m³)"])
+            "平均断面法挖(m³)","端面积估算挖(m³)",
+            "平均断面法填(m³)","端面积估算填(m³)"])
         self._vol_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._vol_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._vol_table.verticalHeader().setVisible(False)
@@ -447,8 +448,8 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._dxf_spp  = QSpinBox(); self._dxf_spp.setRange(1, 12); self._dxf_spp.setValue(4)
         self._dxf_pw   = QDoubleSpinBox(); self._dxf_pw.setRange(200, 2000); self._dxf_pw.setValue(594.0); self._dxf_pw.setSuffix(" mm")
         self._dxf_ph   = QDoubleSpinBox(); self._dxf_ph.setRange(200, 2000); self._dxf_ph.setValue(420.0); self._dxf_ph.setSuffix(" mm")
-        self._dxf_sh   = QDoubleSpinBox(); self._dxf_sh.setRange(50, 5000); self._dxf_sh.setValue(200.0); self._dxf_sh.setPrefix("1:"); self._dxf_sh.setSuffix(" 水平")
-        self._dxf_sv   = QDoubleSpinBox(); self._dxf_sv.setRange(50, 5000); self._dxf_sv.setValue(200.0); self._dxf_sv.setPrefix("1:"); self._dxf_sv.setSuffix(" 竖向")
+        self._dxf_sh   = QDoubleSpinBox(); self._dxf_sh.setRange(50, 5000); self._dxf_sh.setValue(1000.0); self._dxf_sh.setPrefix("1:"); self._dxf_sh.setSuffix(" 水平")
+        self._dxf_sv   = QDoubleSpinBox(); self._dxf_sv.setRange(50, 5000); self._dxf_sv.setValue(1000.0); self._dxf_sv.setPrefix("1:"); self._dxf_sv.setSuffix(" 竖向")
         f_dxf.addRow("每页断面数:", self._dxf_spp)
         f_dxf.addRow("图幅宽×高:", self._make_hw_row(self._dxf_pw, self._dxf_ph))
         f_dxf.addRow("水平/竖向比例尺:", self._make_hw_row(self._dxf_sh, self._dxf_sv))
@@ -457,8 +458,8 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         # 纵断面DXF配置
         g_ldxf = QGroupBox("纵断面 DXF 排版配置")
         f_ldxf = QFormLayout(g_ldxf); f_ldxf.setSpacing(8)
-        self._ldxf_sh = QDoubleSpinBox(); self._ldxf_sh.setRange(100, 50000); self._ldxf_sh.setValue(2000.0); self._ldxf_sh.setPrefix("1:")
-        self._ldxf_sv = QDoubleSpinBox(); self._ldxf_sv.setRange(20, 1000);  self._ldxf_sv.setValue(200.0);  self._ldxf_sv.setPrefix("1:")
+        self._ldxf_sh = QDoubleSpinBox(); self._ldxf_sh.setRange(100, 50000); self._ldxf_sh.setValue(1000.0); self._ldxf_sh.setPrefix("1:")
+        self._ldxf_sv = QDoubleSpinBox(); self._ldxf_sv.setRange(20, 1000);  self._ldxf_sv.setValue(1000.0);  self._ldxf_sv.setPrefix("1:")
         f_ldxf.addRow("水平比例尺:", self._ldxf_sh)
         f_ldxf.addRow("竖向比例尺:", self._ldxf_sv)
         lay.addWidget(g_ldxf)
@@ -645,7 +646,7 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
                 self._al_x1.setValue(al.get("manual_x1", 0.0))
                 self._al_y1.setValue(al.get("manual_y1", 0.0))
             # TIN 设置
-            self._tin_filter_chk.setChecked(data.get("tin_filter", False))
+            self._tin_filter_chk.setChecked(data.get("tin_filter", True))
             # 地质分层
             geo_rows = data.get("geology_rows", [])
             if geo_rows:
@@ -659,10 +660,10 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
                 self._dxf_spp.setValue(dl.get("spp", 4))
                 self._dxf_pw.setValue(dl.get("pw", 594.0))
                 self._dxf_ph.setValue(dl.get("ph", 420.0))
-                self._dxf_sh.setValue(dl.get("sh", 200.0))
-                self._dxf_sv.setValue(dl.get("sv", 200.0))
-                self._ldxf_sh.setValue(dl.get("ldxf_sh", 2000.0))
-                self._ldxf_sv.setValue(dl.get("ldxf_sv", 200.0))
+                self._dxf_sh.setValue(dl.get("sh", 1000.0))
+                self._dxf_sv.setValue(dl.get("sv", 1000.0))
+                self._ldxf_sh.setValue(dl.get("ldxf_sh", 1000.0))
+                self._ldxf_sv.setValue(dl.get("ldxf_sv", 1000.0))
         except Exception as e:
             print(f"[EarthworkPanel] from_project_dict 恢复数据失败: {e}")
 

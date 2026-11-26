@@ -2119,6 +2119,7 @@ def calc_total_head_loss(
         # turn_angle >= 180 表示直线通过（无弯折），不计弯头损失
         if 0 < turn_angle < 180 and turn_radius > 0:
             xi, hj, details = calc_bend_local_loss(D, turn_radius, turn_angle, V_pipe)
+            details["point_index"] = i
             bend_losses.append(hj)
             bend_details.append(details)
             total_bend_loss += hj

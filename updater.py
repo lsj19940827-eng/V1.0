@@ -41,6 +41,7 @@ from dataclasses import dataclass, asdict, replace, field
 from pathlib import Path
 from typing import Optional, Callable
 
+from filesystem_paths import filesystem_path
 from version import APP_VERSION, APP_NAME_EN
 from repo_config import (
     GITHUB_VERSION_URL as _GITHUB_VERSION_URL,
@@ -247,7 +248,7 @@ def check_for_update(allow_downgrade: bool = False) -> Optional[UpdateInfo]:
 # ============================================================
 def _pick_fastest_url(url: str) -> str:
     """
-    并发探测各代理前缀，返回第一个响应成功的完整 URL。
+    并发探测各代理前缀，返回第一个有效文件响应的完整 URL。
     探测失败或超时则跳过，全部失败时返回原始直连 URL。
     """
     import threading
@@ -269,7 +270,12 @@ def _pick_fastest_url(url: str) -> str:
                 headers={"User-Agent": f"{APP_NAME_EN}/{APP_VERSION}"},
             )
             with urllib.request.urlopen(req, timeout=_PROXY_PROBE_TIMEOUT) as resp:
-                if resp.status < 400 and not found_event.is_set():
+                content_type = resp.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                # 某些代理只返回状态为 200 的网页，不能把这类响应当成更新包。
+                is_web_page = content_type.startswith("text/") or content_type in {
+                    "application/xhtml+xml", "application/json",
+                }
+                if resp.status < 400 and not is_web_page and not found_event.is_set():
                     result_holder[0] = candidate_url
                     found_event.set()
         except Exception:
@@ -369,7 +375,6 @@ def _download_from_url(
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import threading
 
-    url = _pick_fastest_url(url)  # 自动选择最快代理
     filename = url.rsplit("/", 1)[-1] or f"{APP_NAME_EN}-update.zip"
     dest_path = os.path.join(dest_dir, filename)
 
@@ -602,14 +607,16 @@ def _download_update_one_url(
 ) -> str:
     """下载单个候选地址，并在成功后校验 checksum。"""
     download_path = ""
+    # 在本层选源并保留实际地址，失败后才有条件识别代理并直连续传。
+    selected_url = _pick_fastest_url(url)
     try:
-        download_path = _download_from_url(url, dest_dir, progress_callback, cancel_event)
+        download_path = _download_from_url(selected_url, dest_dir, progress_callback, cancel_event)
     except InterruptedError:
         raise  # 取消不走代理回退逻辑
     except PartialDownloadError as e:
         # 代理中途断流：已下载分段保留，仅直连补全失败分段
-        direct_url = _strip_proxy_prefix(url)
-        if direct_url != url:
+        direct_url = _strip_proxy_prefix(selected_url)
+        if direct_url != selected_url:
             already = sum(
                 e.segments[i][1] - e.segments[i][0] + 1
                 for i in range(len(e.segments))
@@ -643,8 +650,8 @@ def _download_update_one_url(
                 pass
             raise
     except Exception:
-        direct_url = _strip_proxy_prefix(url)
-        if direct_url != url:
+        direct_url = _strip_proxy_prefix(selected_url)
+        if direct_url != selected_url:
             print(f"[updater] 代理连接失败，回退直连: {direct_url}")
             download_path = _download_from_url(direct_url, dest_dir, progress_callback, cancel_event)
         else:
@@ -863,7 +870,7 @@ def _dir_size(
     total = 0
     scanned_files = 0
     progress_emitter = _ThrottledProgressEmitter()
-    for root, dirs, files in os.walk(path):
+    for root, dirs, files in os.walk(filesystem_path(path, extended=True)):
         dirs[:] = [d for d in dirs if d not in ignored_names]
         for filename in files:
             if filename in ignored_names:
@@ -1078,7 +1085,7 @@ def _prefer_windowed_python() -> str:
     return sys.executable
 
 
-def launch_updater_and_exit(session_path: str):
+def launch_updater_and_exit(session_path: str, *, exit_application=None):
     helper_entry = _get_update_helper_entry()
     if not os.path.exists(helper_entry):
         raise UpdatePreparationError(f"未找到更新助手：{helper_entry}")
@@ -1105,7 +1112,7 @@ def launch_updater_and_exit(session_path: str):
         creationflags=creationflags,
         close_fds=False,
     )
-    sys.exit(0)
+    (exit_application or sys.exit)(0)
 
 
 class _UpdateSessionLogger:
@@ -1222,6 +1229,7 @@ def _ensure_installation_files_unlocked(session: UpdateSession, logger: "_Update
 
 
 def _clean_dir(path: str):
+    path = filesystem_path(path, extended=True)
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
 
@@ -1231,6 +1239,8 @@ def _ensure_parent(path: str):
 
 
 def _copy_tree_contents(src_dir: str, dst_dir: str):
+    src_dir = filesystem_path(src_dir, extended=True)
+    dst_dir = filesystem_path(dst_dir, extended=True)
     for root, _dirs, files in os.walk(src_dir):
         rel_root = os.path.relpath(root, src_dir)
         target_root = dst_dir if rel_root == "." else os.path.join(dst_dir, rel_root)
@@ -1278,6 +1288,8 @@ def _extract_zip(
     extract_dir: str,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> str:
+    # Archive members can exceed the Windows path limit even when the root fits.
+    extract_dir = str(filesystem_path(extract_dir, extended=True))
     _clean_dir(extract_dir)
     os.makedirs(extract_dir, exist_ok=True)
     try:
@@ -1312,9 +1324,11 @@ def _extract_zip(
 
 def _collect_preserved_files(session: UpdateSession, preserve_dir: str) -> list[str]:
     preserved = []
+    app_dir = filesystem_path(session.app_dir, extended=True)
+    preserve_dir = filesystem_path(preserve_dir, extended=True)
     _clean_dir(preserve_dir)
-    for root, dirs, files in os.walk(session.app_dir):
-        rel_root = os.path.relpath(root, session.app_dir)
+    for root, dirs, files in os.walk(app_dir):
+        rel_root = os.path.relpath(root, app_dir)
         if rel_root == ".":
             dirs[:] = [d for d in dirs if d != INTERNAL_WORK_DIR]
         else:
@@ -1323,7 +1337,7 @@ def _collect_preserved_files(session: UpdateSession, preserve_dir: str) -> list[
             rel_path = filename if rel_root == "." else os.path.join(rel_root, filename)
             if not _should_preserve(rel_path, session.preserve_patterns):
                 continue
-            src = os.path.join(session.app_dir, rel_path)
+            src = os.path.join(app_dir, rel_path)
             dst = os.path.join(preserve_dir, rel_path)
             _ensure_parent(dst)
             shutil.copy2(src, dst)
@@ -1332,7 +1346,7 @@ def _collect_preserved_files(session: UpdateSession, preserve_dir: str) -> list[
 
 
 def _restore_preserved_files(preserve_dir: str, app_dir: str):
-    if not os.path.isdir(preserve_dir):
+    if not filesystem_path(preserve_dir).is_dir():
         return
     _copy_tree_contents(preserve_dir, app_dir)
 
@@ -1368,7 +1382,7 @@ def _remove_current_installation(session: UpdateSession):
             continue
         target = os.path.join(session.app_dir, name)
         if os.path.isdir(target):
-            shutil.rmtree(target, ignore_errors=True)
+            _clean_dir(target)
         else:
             try:
                 os.remove(target)
@@ -1411,7 +1425,7 @@ def _get_current_file_state_hash(
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> str:
     """读取安装目录中单个文件的当前状态哈希。"""
-    target = os.path.join(app_dir, rel_path.replace("/", os.sep))
+    target = str(filesystem_path(os.path.join(app_dir, rel_path.replace("/", os.sep))))
     if os.path.isdir(target):
         return PATCH_DIRECTORY_SENTINEL
     if not os.path.isfile(target):
@@ -1481,6 +1495,8 @@ def _validate_patch_prerequisites(
 
 
 def _prepare_patch_backup(session: UpdateSession, backup_dir: str, patch_manifest: dict) -> dict:
+    app_dir = filesystem_path(session.app_dir, extended=True)
+    backup_dir = filesystem_path(backup_dir, extended=True)
     _clean_dir(backup_dir)
     existing_backups: list[str] = []
     created_files: list[str] = []
@@ -1493,7 +1509,7 @@ def _prepare_patch_backup(session: UpdateSession, backup_dir: str, patch_manifes
         normalized = _normalize_relpath(rel_path)
         if _should_preserve(normalized, session.preserve_patterns):
             continue
-        target = os.path.join(session.app_dir, normalized.replace("/", os.sep))
+        target = os.path.join(app_dir, normalized.replace("/", os.sep))
         if os.path.exists(target):
             backup_target = os.path.join(backup_dir, normalized.replace("/", os.sep))
             _ensure_parent(backup_target)
@@ -1506,7 +1522,7 @@ def _prepare_patch_backup(session: UpdateSession, backup_dir: str, patch_manifes
         normalized = _normalize_relpath(rel_path)
         if _should_preserve(normalized, session.preserve_patterns):
             continue
-        target = os.path.join(session.app_dir, normalized.replace("/", os.sep))
+        target = os.path.join(app_dir, normalized.replace("/", os.sep))
         if os.path.exists(target) and normalized not in existing_backups:
             backup_target = os.path.join(backup_dir, normalized.replace("/", os.sep))
             _ensure_parent(backup_target)
@@ -1520,6 +1536,7 @@ def _prepare_patch_backup(session: UpdateSession, backup_dir: str, patch_manifes
 
 
 def _apply_patch_update(session: UpdateSession, extract_root: str, patch_manifest: dict):
+    app_dir = filesystem_path(session.app_dir, extended=True)
     changed_files = patch_manifest.get("included_files") or (
         patch_manifest.get("added", []) + patch_manifest.get("modified", [])
     )
@@ -1535,7 +1552,7 @@ def _apply_patch_update(session: UpdateSession, extract_root: str, patch_manifes
                 user_message="补丁包内容不完整，请重新下载完整安装包后再试。",
                 retry_mode=RETRY_MODE_FULL_PACKAGE,
             )
-        dst = os.path.join(session.app_dir, normalized.replace("/", os.sep))
+        dst = os.path.join(app_dir, normalized.replace("/", os.sep))
         _ensure_parent(dst)
         shutil.copy2(src, dst)
 
@@ -1543,7 +1560,7 @@ def _apply_patch_update(session: UpdateSession, extract_root: str, patch_manifes
         normalized = _normalize_relpath(rel_path)
         if _should_preserve(normalized, session.preserve_patterns):
             continue
-        target = os.path.join(session.app_dir, normalized.replace("/", os.sep))
+        target = os.path.join(app_dir, normalized.replace("/", os.sep))
         if os.path.isdir(target):
             shutil.rmtree(target, ignore_errors=True)
         elif os.path.exists(target):
@@ -1607,8 +1624,10 @@ def _validate_patch_target_files(
 
 
 def _rollback_patch(session: UpdateSession, backup_dir: str, patch_backup: dict):
+    app_dir = filesystem_path(session.app_dir, extended=True)
+    backup_dir = filesystem_path(backup_dir, extended=True)
     for rel_path in patch_backup.get("created_files", []):
-        target = os.path.join(session.app_dir, rel_path.replace("/", os.sep))
+        target = os.path.join(app_dir, rel_path.replace("/", os.sep))
         if os.path.isdir(target):
             shutil.rmtree(target, ignore_errors=True)
         elif os.path.exists(target):
@@ -1619,7 +1638,7 @@ def _rollback_patch(session: UpdateSession, backup_dir: str, patch_backup: dict)
 
     for rel_path in patch_backup.get("backed_up_files", []):
         src = os.path.join(backup_dir, rel_path.replace("/", os.sep))
-        dst = os.path.join(session.app_dir, rel_path.replace("/", os.sep))
+        dst = os.path.join(app_dir, rel_path.replace("/", os.sep))
         if os.path.exists(src):
             _ensure_parent(dst)
             shutil.copy2(src, dst)
@@ -1849,13 +1868,20 @@ def _download_full_package_for_fallback(
     """下载补丁失败后的完整安装包兜底包。"""
     download_dir = os.path.join(work_dir, "download")
     os.makedirs(download_dir, exist_ok=True)
+    start_time = time.monotonic()
 
     def on_progress(downloaded: int, total: int):
+        downloaded_mb = downloaded / (1024 * 1024)
+        speed_mb = downloaded_mb / max(time.monotonic() - start_time, 0.001)
         if total > 0:
             percent = max(0, min(100, int(downloaded * 100 / total)))
-            push("download", f"正在下载完整安装包（{percent}%）")
+            total_mb = total / (1024 * 1024)
+            push(
+                "download",
+                f"正在下载完整安装包（{downloaded_mb:.1f}/{total_mb:.1f} MB，{percent}%，{speed_mb:.2f} MB/s）",
+            )
         else:
-            push("download", "正在下载完整安装包")
+            push("download", f"正在下载完整安装包（已下载 {downloaded_mb:.1f} MB，{speed_mb:.2f} MB/s）")
 
     full_url_candidates = session.full_download_urls or _coerce_url_list(session.full_download_url)
     download_target = full_url_candidates if len(full_url_candidates) != 1 else full_url_candidates[0]

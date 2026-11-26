@@ -1,0 +1,816 @@
+{
+  "schema": "engineering_drawing_templates_1.0",
+  "revision": "2026-10-16.2",
+  "units": "m; degrees; SI quantities unless explicitly named",
+  "templates": [
+    {
+      "template_id": "mp_u_lining",
+      "version": "2026-10-16.2",
+      "title": "U形渠道参考构造U形参数化衬砌构造",
+      "drawing_id": "mp",
+      "project_key": "mapeng",
+      "project_names": [
+        "U形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "u_channel"
+      ],
+      "source_sha256": "446ea2833b75d66c8f67548bca868e0803f160862c05709d93bcae88dadca5c1",
+      "fields": {
+        "section.base_thickness": 0.08,
+        "section.wall_thickness_left": 0.08,
+        "section.wall_thickness_right": 0.08,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        }
+      },
+      "source_handles": [
+        "970E",
+        "97A8",
+        "9617",
+        "9719",
+        "974A",
+        "9779",
+        "81A6",
+        "81A8",
+        "858B",
+        "858D"
+      ],
+      "missing_items": [
+        "接缝、止水、钢筋、排水沟和边坡支护尚未接入计量"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "膜、砂浆及填筑分区另按对应工况绑定；全填方膜适用性原图存在说明与图示差异。"
+      ],
+      "scope_label": "同工程U形明渠参数化构造",
+      "reference_dimensions": {
+        "required_dimensions": {
+          "section.inner_radius": 0.5
+        },
+        "shape_supplements": {
+          "section.u_arc_angle_degrees": 152.0,
+          "section.u_side_angle_degrees": 14.0
+        },
+        "hydraulic_height_max_m": 1.4,
+        "example_structural_inner_height": 1.4
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "mp_u_half_fill",
+      "version": "2026-10-16.2",
+      "title": "U形渠道参考构造半挖半填：衬砌、防渗膜、M10砂浆",
+      "drawing_id": "mp",
+      "project_key": "mapeng",
+      "project_names": [
+        "U形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "u_channel"
+      ],
+      "source_sha256": "446ea2833b75d66c8f67548bca868e0803f160862c05709d93bcae88dadca5c1",
+      "fields": {
+        "section.base_thickness": 0.08,
+        "section.wall_thickness_left": 0.08,
+        "section.wall_thickness_right": 0.08,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        },
+        "section.component_specs": [
+          {
+            "component_id": "mp_m10_leveling",
+            "name": "M10砂浆找平层",
+            "material": "mortar",
+            "grade": "M10",
+            "unit": "m3",
+            "geometry_kind": "outer_offset_layer",
+            "thickness_m": 0.02,
+            "offset_m": 0.0,
+            "source_ids": [
+              "MP_MEMBRANE"
+            ],
+            "source_handles": [
+              "9118",
+              "877E",
+              "8780",
+              "8781",
+              "A30C",
+              "A314"
+            ]
+          },
+          {
+            "component_id": "mp_composite_membrane",
+            "name": "0.5mm 600g/㎡复合土工膜",
+            "material": "geomembrane",
+            "grade": "两布一膜 0.5mm 600g/㎡",
+            "unit": "m2",
+            "geometry_kind": "outer_surface",
+            "thickness_m": 0.0005,
+            "offset_m": 0.0,
+            "mass_g_m2": 600,
+            "source_ids": [
+              "MP_MEMBRANE"
+            ],
+            "source_handles": [
+              "9118",
+              "877E",
+              "8780",
+              "8781",
+              "A30C",
+              "A314"
+            ]
+          }
+        ],
+        "construction.bank_slope_left": 1.75,
+        "construction.bank_slope_right": 1.75
+      },
+      "source_handles": [
+        "8512",
+        "6E49",
+        "9118",
+        "877E",
+        "8780",
+        "8781",
+        "A30C",
+        "A314"
+      ],
+      "missing_items": [
+        "膜搭接损耗、接缝与支护尚未另计"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "须先核对原图K桩号与实际路线对应；左右平台管理侧方向未确定，不自动分配2.5m/1.0m。"
+      ],
+      "requires_station_mapping": true,
+      "station_ranges": [],
+      "reference_dimensions": {
+        "required_dimensions": {
+          "section.inner_radius": 0.5
+        },
+        "shape_supplements": {
+          "section.u_arc_angle_degrees": 152.0,
+          "section.u_side_angle_degrees": 14.0
+        },
+        "hydraulic_height_max_m": 1.4,
+        "example_structural_inner_height": 1.4
+      },
+      "applicability_mode": "parameterized_construction",
+      "scope_label": "同工程U形明渠参数化构造",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "mp_u_fill",
+      "version": "2026-10-16.2",
+      "title": "U形渠道参考构造全填：衬砌及填筑边坡",
+      "drawing_id": "mp",
+      "project_key": "mapeng",
+      "project_names": [
+        "U形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "u_channel"
+      ],
+      "source_sha256": "446ea2833b75d66c8f67548bca868e0803f160862c05709d93bcae88dadca5c1",
+      "fields": {
+        "section.base_thickness": 0.08,
+        "section.wall_thickness_left": 0.08,
+        "section.wall_thickness_right": 0.08,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        },
+        "construction.bank_slope_left": 1.75,
+        "construction.bank_slope_right": 1.75
+      },
+      "source_handles": [
+        "8512",
+        "8F3F",
+        "9899"
+      ],
+      "missing_items": [
+        "全填方膜适用性待核对",
+        "管理侧方向未明确",
+        "接缝与支护尚未另计"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "全填方膜说明与图示适用性不一致，本模板不启用膜/砂浆。"
+      ],
+      "requires_station_mapping": true,
+      "station_ranges": [],
+      "reference_dimensions": {
+        "required_dimensions": {
+          "section.inner_radius": 0.5
+        },
+        "shape_supplements": {
+          "section.u_arc_angle_degrees": 152.0,
+          "section.u_side_angle_degrees": 14.0
+        },
+        "hydraulic_height_max_m": 1.4,
+        "example_structural_inner_height": 1.4
+      },
+      "applicability_mode": "parameterized_construction",
+      "scope_label": "同工程U形明渠参数化构造",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "mp_u_cut",
+      "version": "2026-10-16.2",
+      "title": "U形渠道参考构造全挖：衬砌、防渗膜、M10砂浆",
+      "drawing_id": "mp",
+      "project_key": "mapeng",
+      "project_names": [
+        "U形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "u_channel"
+      ],
+      "source_sha256": "446ea2833b75d66c8f67548bca868e0803f160862c05709d93bcae88dadca5c1",
+      "fields": {
+        "section.base_thickness": 0.08,
+        "section.wall_thickness_left": 0.08,
+        "section.wall_thickness_right": 0.08,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        },
+        "section.component_specs": [
+          {
+            "component_id": "mp_m10_leveling",
+            "name": "M10砂浆找平层",
+            "material": "mortar",
+            "grade": "M10",
+            "unit": "m3",
+            "geometry_kind": "outer_offset_layer",
+            "thickness_m": 0.02,
+            "offset_m": 0.0,
+            "source_ids": [
+              "MP_MEMBRANE"
+            ],
+            "source_handles": [
+              "9118",
+              "877E",
+              "8780",
+              "8781",
+              "A30C",
+              "A314"
+            ]
+          },
+          {
+            "component_id": "mp_composite_membrane",
+            "name": "0.5mm 600g/㎡复合土工膜",
+            "material": "geomembrane",
+            "grade": "两布一膜 0.5mm 600g/㎡",
+            "unit": "m2",
+            "geometry_kind": "outer_surface",
+            "thickness_m": 0.0005,
+            "offset_m": 0.0,
+            "mass_g_m2": 600,
+            "source_ids": [
+              "MP_MEMBRANE"
+            ],
+            "source_handles": [
+              "9118",
+              "877E",
+              "8780",
+              "8781",
+              "A30C",
+              "A314"
+            ]
+          }
+        ]
+      },
+      "source_handles": [
+        "67CF",
+        "9118",
+        "877E",
+        "8780",
+        "8781",
+        "A30C",
+        "A314"
+      ],
+      "missing_items": [
+        "接缝、排水沟和边坡支护尚未接入计量"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "仅在当前对象明确为全挖方工况时采用；不由缺省地形或文件名判定。"
+      ],
+      "required_variant": "cut",
+      "scope_label": "已明确全挖方工况的U形对象",
+      "reference_dimensions": {
+        "required_dimensions": {
+          "section.inner_radius": 0.5
+        },
+        "shape_supplements": {
+          "section.u_arc_angle_degrees": 152.0,
+          "section.u_side_angle_degrees": 14.0
+        },
+        "hydraulic_height_max_m": 1.4,
+        "example_structural_inner_height": 1.4
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "left_cut",
+      "version": "2026-10-16.2",
+      "title": "左干全挖黏土岩：10cm衬砌及膜",
+      "drawing_id": "left",
+      "project_key": "left",
+      "project_names": [
+        "梯形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "trapezoidal_channel"
+      ],
+      "source_sha256": "7b314e637173b720f7aa80e56f7821711227f9d226e211edf135d42e2f12b91f",
+      "fields": {
+        "section.base_thickness": 0.1,
+        "section.wall_thickness_left": 0.1,
+        "section.wall_thickness_right": 0.1,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        },
+        "section.component_specs": [
+          {
+            "component_id": "left_composite_membrane",
+            "name": "0.5mm复合土工膜",
+            "material": "geomembrane",
+            "grade": "两布一膜 0.5mm",
+            "unit": "m2",
+            "geometry_kind": "outer_surface",
+            "thickness_m": 0.0005,
+            "offset_m": 0.0,
+            "source_ids": [
+              "LEFT_MEMBRANE"
+            ],
+            "source_handles": [
+              "489D",
+              "18A5",
+              "1244"
+            ]
+          }
+        ],
+        "construction.excavation_slope_left": 1.0,
+        "construction.excavation_slope_right": 1.0
+      },
+      "source_handles": [
+        "7E9",
+        "802",
+        "7EE",
+        "803",
+        "489D"
+      ],
+      "missing_items": [
+        "压顶、排水、支护及接缝尚未另计"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "管理道路侧尚未明确，不自动分配平台宽度。"
+      ],
+      "requires_station_mapping": true,
+      "station_ranges": [],
+      "reference_dimensions": {
+        "dimension_variants": [
+          {
+            "section.inner_width": 3.5,
+            "section.inner_height": 3.3,
+            "section.inner_side_slope": 0.5
+          },
+          {
+            "section.inner_width": 2.3,
+            "section.inner_height": 3.2,
+            "section.inner_side_slope": 1.2
+          },
+          {
+            "section.inner_width": 1.6,
+            "section.inner_height": 2.7,
+            "section.inner_side_slope": 1.2
+          },
+          {
+            "section.inner_width": 1.19,
+            "section.inner_height": 2.7,
+            "section.inner_side_slope": 1.5
+          },
+          {
+            "section.inner_width": 1.6,
+            "section.inner_height": 2.6,
+            "section.inner_side_slope": 1.2
+          }
+        ]
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "left_half_fill",
+      "version": "2026-10-16.2",
+      "title": "左干半挖半填黏土岩：衬砌、膜、砂浆",
+      "drawing_id": "left",
+      "project_key": "left",
+      "project_names": [
+        "梯形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "trapezoidal_channel"
+      ],
+      "source_sha256": "7b314e637173b720f7aa80e56f7821711227f9d226e211edf135d42e2f12b91f",
+      "fields": {
+        "section.base_thickness": 0.1,
+        "section.wall_thickness_left": 0.1,
+        "section.wall_thickness_right": 0.1,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        },
+        "section.component_specs": [
+          {
+            "component_id": "left_m10_leveling",
+            "name": "M10砂浆找平层",
+            "material": "mortar",
+            "grade": "M10",
+            "unit": "m3",
+            "geometry_kind": "outer_offset_layer",
+            "thickness_m": 0.02,
+            "offset_m": 0.0,
+            "source_ids": [
+              "LEFT_MEMBRANE"
+            ],
+            "source_handles": [
+              "489D",
+              "18A5",
+              "1244"
+            ]
+          },
+          {
+            "component_id": "left_composite_membrane",
+            "name": "0.5mm复合土工膜",
+            "material": "geomembrane",
+            "grade": "两布一膜 0.5mm",
+            "unit": "m2",
+            "geometry_kind": "outer_surface",
+            "thickness_m": 0.0005,
+            "offset_m": 0.0,
+            "source_ids": [
+              "LEFT_MEMBRANE"
+            ],
+            "source_handles": [
+              "489D",
+              "18A5",
+              "1244"
+            ]
+          }
+        ]
+      },
+      "source_handles": [
+        "7E9",
+        "802",
+        "7EE",
+        "803",
+        "489D"
+      ],
+      "missing_items": [
+        "压顶、排水、支护及接缝尚未另计"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "管理道路侧尚未明确，不自动分配平台宽度。"
+      ],
+      "requires_station_mapping": true,
+      "station_ranges": [],
+      "reference_dimensions": {
+        "dimension_variants": [
+          {
+            "section.inner_width": 3.5,
+            "section.inner_height": 3.3,
+            "section.inner_side_slope": 0.5
+          },
+          {
+            "section.inner_width": 2.3,
+            "section.inner_height": 3.2,
+            "section.inner_side_slope": 1.2
+          },
+          {
+            "section.inner_width": 1.6,
+            "section.inner_height": 2.7,
+            "section.inner_side_slope": 1.2
+          },
+          {
+            "section.inner_width": 1.19,
+            "section.inner_height": 2.7,
+            "section.inner_side_slope": 1.5
+          },
+          {
+            "section.inner_width": 1.6,
+            "section.inner_height": 2.6,
+            "section.inner_side_slope": 1.2
+          }
+        ]
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "left_fill",
+      "version": "2026-10-16.2",
+      "title": "左干全填：衬砌、膜、砂浆",
+      "drawing_id": "left",
+      "project_key": "left",
+      "project_names": [
+        "梯形渠道参考组"
+      ],
+      "asset_kinds": [
+        "open_channel"
+      ],
+      "section_types": [
+        "trapezoidal_channel"
+      ],
+      "source_sha256": "7b314e637173b720f7aa80e56f7821711227f9d226e211edf135d42e2f12b91f",
+      "fields": {
+        "section.base_thickness": 0.1,
+        "section.wall_thickness_left": 0.1,
+        "section.wall_thickness_right": 0.1,
+        "section.material": "concrete",
+        "section.material_grade": "C25W6F100",
+        "section.material_specs.concrete": {
+          "name": "渠身衬砌混凝土",
+          "material": "concrete",
+          "grade": "C25W6F100"
+        },
+        "section.component_specs": [
+          {
+            "component_id": "left_m10_leveling",
+            "name": "M10砂浆找平层",
+            "material": "mortar",
+            "grade": "M10",
+            "unit": "m3",
+            "geometry_kind": "outer_offset_layer",
+            "thickness_m": 0.02,
+            "offset_m": 0.0,
+            "source_ids": [
+              "LEFT_MEMBRANE"
+            ],
+            "source_handles": [
+              "489D",
+              "18A5",
+              "1244"
+            ]
+          },
+          {
+            "component_id": "left_composite_membrane",
+            "name": "0.5mm复合土工膜",
+            "material": "geomembrane",
+            "grade": "两布一膜 0.5mm",
+            "unit": "m2",
+            "geometry_kind": "outer_surface",
+            "thickness_m": 0.0005,
+            "offset_m": 0.0,
+            "source_ids": [
+              "LEFT_MEMBRANE"
+            ],
+            "source_handles": [
+              "489D",
+              "18A5",
+              "1244"
+            ]
+          }
+        ]
+      },
+      "source_handles": [
+        "7E9",
+        "802",
+        "7EE",
+        "803",
+        "489D"
+      ],
+      "missing_items": [
+        "压顶、排水、支护及接缝尚未另计"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "管理道路侧尚未明确，不自动分配平台宽度。"
+      ],
+      "requires_station_mapping": true,
+      "station_ranges": [],
+      "reference_dimensions": {
+        "dimension_variants": [
+          {
+            "section.inner_width": 3.5,
+            "section.inner_height": 3.3,
+            "section.inner_side_slope": 0.5
+          },
+          {
+            "section.inner_width": 2.3,
+            "section.inner_height": 3.2,
+            "section.inner_side_slope": 1.2
+          },
+          {
+            "section.inner_width": 1.6,
+            "section.inner_height": 2.7,
+            "section.inner_side_slope": 1.2
+          },
+          {
+            "section.inner_width": 1.19,
+            "section.inner_height": 2.7,
+            "section.inner_side_slope": 1.5
+          },
+          {
+            "section.inner_width": 1.6,
+            "section.inner_height": 2.6,
+            "section.inner_side_slope": 1.2
+          }
+        ]
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "shihe_box",
+      "version": "2026-10-16.2",
+      "title": "箱涵参考构造箱涵参数化倒角及C15找平构造",
+      "drawing_id": "culvert",
+      "project_key": "shihe",
+      "project_names": [
+        "箱涵参考组"
+      ],
+      "asset_kinds": [
+        "culvert"
+      ],
+      "section_types": [
+        "rectangular_culvert"
+      ],
+      "source_sha256": "068cb450190e5d7978499c8ea474212f9dacd37c71431df441857e32be35d024",
+      "fields": {
+        "section.base_thickness": 0.3,
+        "section.wall_thickness_left": 0.3,
+        "section.wall_thickness_right": 0.3,
+        "section.roof_thickness": 0.3,
+        "section.inner_chamfers": 0.3,
+        "section.material": "concrete",
+        "section.material_grade": "C25F100W4",
+        "section.material_specs.concrete": {
+          "name": "箱涵结构混凝土",
+          "material": "concrete",
+          "grade": "C25F100W4"
+        },
+        "section.material_specs.bedding": {
+          "name": "C15找平层",
+          "material": "concrete",
+          "grade": "C15"
+        },
+        "construction.bedding_thickness": 0.1,
+        "construction.bedding_extension": 0.3
+      },
+      "source_handles": [
+        "8CD71",
+        "8C047",
+        "8BECE",
+        "8BED1",
+        "8BED4",
+        "8BED7",
+        "8BEE3",
+        "8BEA0",
+        "8BEE0",
+        "8BEE9",
+        "8BE9E",
+        "8CD72"
+      ],
+      "missing_items": [
+        "钢筋、止水、填缝及模板尚未接入计量"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "橡胶止水带型号说明B-P-300×8与剖面GB651未自动合并。",
+        "原图10m标准段量表作核对，不能直接乘当前长度作为结果。"
+      ],
+      "cover_depth_max_m": 5.0,
+      "requires_station_mapping": true,
+      "station_ranges": [],
+      "reference_dimensions": {
+        "required_dimensions": {
+          "section.inner_width": 2.2,
+          "section.inner_height": 2.0
+        }
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    },
+    {
+      "template_id": "tangniwan_general",
+      "version": "2026-10-16.2",
+      "title": "历史埋管一般埋管：参数化砂砾石垫层构造",
+      "drawing_id": "pipe",
+      "project_key": "tangniwan",
+      "project_names": [
+        "历史埋管参考组"
+      ],
+      "asset_kinds": [
+        "pipe",
+        "siphon",
+        "pressure_pipe"
+      ],
+      "section_types": [
+        "circular_siphon",
+        "circular_culvert"
+      ],
+      "source_sha256": "d1a69035bf37d014ad51de2a63f2d1d539f1aa022b5d80a00480a84be1605fc0",
+      "fields": {
+        "section.material_specs.bedding": {
+          "name": "砂砾石垫层",
+          "material": "sand_gravel",
+          "grade": "最大粒径2cm"
+        },
+        "construction.bedding_thickness": 0.15,
+        "construction.working_space_left": 0.75,
+        "construction.working_space_right": 0.75
+      },
+      "source_handles": [
+        "2BA9F",
+        "343D8",
+        "343D9",
+        "34401",
+        "34403",
+        "343D5",
+        "343D4",
+        "34400",
+        "343DC",
+        "343DD",
+        "343DE",
+        "343DF"
+      ],
+      "missing_items": [
+        "管节接头、弯管、镇墩、管床和防腐尚未接入计量",
+        "砂砾石垫层实际横向铺设宽度待专项确认"
+      ],
+      "warnings": [
+        "水面线实际净尺寸、结构高度和角度参与建模；原图例示尺寸仅作参考，不锁定当前断面。厚度、倒角、找平和材料层是可编辑构造初值。",
+        "砂砾石垫层横向铺设边界尚未独立核实，外伸值保留明确原设计或施工假定。",
+        "管径、管壁、管材和施工外径沿用当前明确输入；例图DN1400/PCCP/12.5cm不能推广到当前管道。"
+      ],
+      "required_variant": "pccp_buried_general",
+      "cover_depth_min_m": 1.0,
+      "cover_depth_max_m": 6.0,
+      "scope_label": "专项确认的一般埋管工况，覆土1～6m",
+      "reference_dimensions": {
+        "required_dimensions": {
+          "section.inner_diameter": 1.4
+        },
+        "example_pipe_material_and_wall": {
+          "section.wall_thickness": 0.125,
+          "section.material": "concrete",
+          "section.material_grade": "PCCPDE埋置式双胶圈",
+          "section.material_specs.concrete": {
+            "name": "PCCPDE管壁",
+            "material": "concrete",
+            "grade": "PCCPDE埋置式双胶圈"
+          }
+        }
+      },
+      "applicability_mode": "parameterized_construction",
+      "source_reference_notice": "原数量表和配筋表只对应原图实例，不能推广为当前参数化对象的数量。"
+    }
+  ],
+  "inactive_source_conflicts": []
+}

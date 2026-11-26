@@ -14,6 +14,7 @@
 """
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
@@ -30,12 +31,11 @@ from contextlib import contextmanager
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 构建依赖也可能触发 Windows WMI 查询，采用主程序已有的启动保护。
 import tools.pyinstaller_runtime_wmi_guard  # noqa: E402,F401
-from update_artifact_rules import is_runtime_artifact
 from tools import patch_policy
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
-UNIVERSAL_PATCH_MIN_VERSION = "1.3.0"
+UNIVERSAL_PATCH_MIN_VERSION = patch_policy.DEFAULT_MIN_VERSION
 MAX_PATCH_DELETED_COUNT = patch_policy.MAX_PATCH_DELETED_COUNT
 MAX_PATCH_TOTAL_COVERAGE = patch_policy.MAX_PATCH_TOTAL_COVERAGE
 
@@ -208,6 +208,8 @@ THIRD_PARTY_HIDDEN_IMPORTS = [
     "shapely.geometry",
     "triangle",
     "startinpy",
+    "rhino3dm",
+    "manifold3d",
     "scipy",
     "scipy.spatial",
     "scipy.optimize",
@@ -324,7 +326,57 @@ FRONTEND_ARCHITECTURE_HIDDEN_IMPORTS = [
     "app_渠系计算前端.batch.engines",
     "app_渠系计算前端.batch.calculation_service",
     "app_渠系计算前端.water_profile.table_state_adapter",
+    "app_渠系计算前端.earthwork.panel",
+    "app_渠系计算前端.earthwork.project_state",
+    "土石方计算.bridge.server",
+    "土石方计算.services.workspace",
+    "土石方计算.services.construction_templates",
+    "土石方计算.adapters.source_adapters",
 ]
+
+INDEPENDENT_EARTHWORK_HIDDEN_IMPORTS = [
+    "app_渠系计算前端.earthwork.workbench_panel",
+    "app_渠系计算前端.earthwork.workbench_parameters",
+    "app_渠系计算前端.earthwork.project_resources",
+    "土石方计算.adapters.workbench_sources",
+    "土石方计算.services.workbench_calculator",
+    "土石方计算.services.section_geometry",
+    "土石方计算.services.finite_pipe_sections",
+    "土石方计算.services.pit_sections",
+    "土石方计算.services.design_profiles",
+    "土石方计算.services.unburied_preview",
+    "土石方计算.services.support_validation",
+    "土石方计算.services.workbench_identity",
+    "土石方计算.services.workbench_diagnostics",
+    "土石方计算.services.pipe_axis_continuity",
+    "土石方计算.services.network_section_calculator",
+    "土石方计算.services.network_section_projection",
+    "土石方计算.io.section_exporter",
+    "土石方计算.io.workbench_drawings",
+    "土石方计算.io.scope_annotations",
+    "土石方计算.io.terrain_preprocessor",
+    "土石方计算.io.terrain_quality",
+    "土石方计算.io.terrain_display",
+    "app_渠系计算前端.earthwork.independent_panel",
+    "土石方计算.io.independent_terrain",
+    "土石方计算.io.independent_exporter",
+    "土石方计算.io.independent_model_exporter",
+    "土石方计算.core.terrain_sections",
+    "土石方计算.core.site_excavation",
+    "土石方计算.services.independent_calculator",
+    "土石方计算.services.network_calculator",
+    "土石方计算.services.network_alignment",
+    "土石方计算.services.network_project",
+    "土石方计算.adapters.test_case_network",
+    "土石方计算.io.network_exporter",
+    "app_渠系计算前端.earthwork.network_panel",
+    "tools.terrain_mesh_reader.reader",
+    "tools.terrain_mesh_reader.writer",
+]
+
+INDEPENDENT_READER_DATA_FILES = (
+    "TerrainMeshReader.exe", "Rhino3dm.dll", "librhino3dm_native.dll", "LICENSE-Rhino3dm.txt",
+)
 
 COLLECT_SUBMODULE_PACKAGES = [
     "app_渠系计算前端",
@@ -345,6 +397,7 @@ def get_hidden_imports() -> list[str]:
         *WATER_PROFILE_CORE_HIDDEN_IMPORTS,
         *WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS,
         *FRONTEND_ARCHITECTURE_HIDDEN_IMPORTS,
+        *INDEPENDENT_EARTHWORK_HIDDEN_IMPORTS,
     ]
 
 
@@ -358,6 +411,7 @@ def get_verify_import_groups() -> dict[str, list[str]]:
         ],
         "倒虹吸水力计算系统": list(SIPHON_CORE_HIDDEN_IMPORTS),
         "界面计算与状态桥接": list(FRONTEND_ARCHITECTURE_HIDDEN_IMPORTS),
+        "独立土石方计算": [*INDEPENDENT_EARTHWORK_HIDDEN_IMPORTS, "rhino3dm"],
         "推求水面线": [
             *WATER_PROFILE_CORE_HIDDEN_IMPORTS,
             *WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS,
@@ -376,7 +430,9 @@ def get_verify_import_groups() -> dict[str, list[str]]:
         "Word导出依赖": list(WORD_EXPORT_HIDDEN_IMPORTS),
         "土石方计算依赖": [
             "shapely",
-            # triangle 缺失时土石方模块会回退到 scipy.Delaunay，这里不阻断打包前校验。
+            "manifold3d",
+            # 断面工作台独立进行二维约束建网。
+            "triangle",
         ],
     }
 
@@ -389,6 +445,11 @@ def get_collect_data_packages() -> list[str]:
         "seaborn",
         "latex2mathml",
     ]
+
+
+def get_collect_all_packages() -> list[str]:
+    """含本机扩展/配套库的包须一并收集，不能只带 Python 包名。"""
+    return ["qfluentwidgets", "rhino3dm"]
 
 
 def _find_missing_imports(import_groups: dict[str, list[str]], importer=None) -> dict[str, list[str]]:
@@ -611,12 +672,12 @@ def _clean_excel_temp_files(directory):
         print(f"  [清理] 已删除 {directory} 中 {removed} 个 Excel 临时文件")
 
 
-def _build_update_helper(app_dist_dir: str):
+def _build_update_helper(app_dist_dir: str, build_dir: str = None):
     """构建独立更新助手，输出到主程序目录。"""
     if not os.path.exists(UPDATE_HELPER_SCRIPT):
         raise FileNotFoundError(f"未找到更新助手入口：{UPDATE_HELPER_SCRIPT}")
 
-    helper_workdir = os.path.join(BUILD_DIR, "update_helper")
+    helper_workdir = os.path.join(build_dir or BUILD_DIR, "update_helper")
     os.makedirs(helper_workdir, exist_ok=True)
     args = [
         _project_python(), os.path.join(PROJECT_ROOT, "tools", "pyinstaller_safe_main.py"),
@@ -652,7 +713,171 @@ def _build_update_helper(app_dist_dir: str):
         raise RuntimeError(f"更新助手构建失败，退出码：{result.returncode}")
 
 
-def build(bump: str = None):
+def get_rhino_plugin_data_entries():
+    """只打包与当前源码一致的插件，避免程序协议已更新而插件仍旧。"""
+    plugin_root = os.path.join(PROJECT_ROOT, "integrations", "rhino8")
+    plugin_build = os.path.join(plugin_root, "build")
+    combined_build = os.path.join(plugin_root, "grasshopper", "build")
+    if os.path.isfile(os.path.join(combined_build, "QxEarthwork.Rhino8.rhp")):
+        # GH 构建同时产生同版工作台和计算器，优先整套交付，不覆盖旧原生验收基线。
+        plugin_build = combined_build
+    manifest_path = os.path.join(plugin_build, "plugin-manifest.json")
+    if not os.path.isfile(manifest_path):
+        raise FileNotFoundError("请先执行 integrations/rhino8/build.ps1 构建 Rhino 8 插件")
+    with open(manifest_path, encoding="utf-8-sig") as stream:
+        manifest = json.load(stream)
+    def digest(path):
+        with open(path, "rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    plugin = os.path.join(plugin_build, "QxEarthwork.Rhino8.rhp")
+    if digest(plugin) != manifest.get("plugin_sha256"):
+        raise ValueError("Rhino 插件文件与构建清单不一致，请重新构建插件")
+    sources = manifest.get("source_files", {})
+    actual_sources = {"src/" + name for name in os.listdir(os.path.join(plugin_root, "src"))
+                      if name.endswith(".cs") and name not in {"NativeProbe.cs", "NativeRunner.cs"}}
+    if set(sources) != actual_sources:
+        raise ValueError("Rhino 插件源码清单已变化，请重新构建插件")
+    for relative, expected in sources.items():
+        if digest(os.path.join(plugin_root, relative)) != expected:
+            raise ValueError("Rhino 插件源码已变化，请重新构建：" + relative)
+    runner = os.path.join(plugin_build, "QxNativeRunner.exe")
+    if (digest(runner) != manifest.get("runner_sha256") or
+            digest(os.path.join(plugin_root, "src", "NativeRunner.cs")) != manifest.get("runner_source_sha256")):
+        raise ValueError("Rhino 原生计算器或源码已变化，请重新构建插件")
+    readme = os.path.join(plugin_root, "README.zh-CN.md")
+    if not os.path.isfile(readme):
+        raise FileNotFoundError("Rhino 插件安装说明缺失")
+    destination = os.path.join("integrations", "rhino8")
+    entries = [(plugin, destination), (runner, destination), (manifest_path, destination), (readme, destination)]
+    grasshopper_root = os.path.join(plugin_root, "grasshopper")
+    if os.path.isdir(grasshopper_root):
+        # 工作台内部使用 GHA，不把开发画布、测试定义或验收程序作为终端用户入口。
+        grasshopper_build = os.path.join(grasshopper_root, "build")
+        grasshopper_manifest_path = os.path.join(grasshopper_build, "grasshopper-manifest.json")
+        gha = os.path.join(grasshopper_build, "QxEarthwork.Grasshopper.gha")
+        if not os.path.isfile(grasshopper_manifest_path) or not os.path.isfile(gha):
+            raise FileNotFoundError("请先执行 integrations/rhino8/grasshopper/build.ps1 构建内部 Grasshopper 工具包")
+        with open(grasshopper_manifest_path, encoding="utf-8-sig") as stream:
+            grasshopper_manifest = json.load(stream)
+        if digest(gha) != grasshopper_manifest.get("gha_sha256"):
+            raise ValueError("Grasshopper 电池文件与构建清单不一致，请重新构建")
+        component_directory = os.path.join(grasshopper_root, "src")
+        if not os.path.isdir(component_directory):
+            raise FileNotFoundError("Grasshopper 电池源码目录缺失，不能校验工具包身份")
+        component_sources = {
+            "integrations/rhino8/grasshopper/src/" + name
+            for name in os.listdir(component_directory)
+            if name.endswith("Components.cs") and os.path.isfile(os.path.join(component_directory, name))
+        }
+        if not component_sources:
+            raise ValueError("Grasshopper 电池源码清单为空，请检查内部工具包")
+        # 与 GH 构建脚本保持相同输入集合；工作台窗口在 RHP 内，NativeRunner 与 Plugin 由其配套产物使用。
+        expected_gh_sources = {
+            "integrations/rhino8/src/" + name
+            for name in os.listdir(os.path.join(plugin_root, "src"))
+            if name.endswith(".cs") and name != "NativeProbe.cs"
+        } | component_sources
+        host_source = os.path.join(grasshopper_root, "tools", "GrasshopperHost.cs")
+        if os.path.isfile(host_source):
+            expected_gh_sources.add("integrations/rhino8/grasshopper/tools/GrasshopperHost.cs")
+        gh_sources = grasshopper_manifest.get("source_files", {})
+        if not isinstance(gh_sources, dict) or set(gh_sources) != expected_gh_sources:
+            raise ValueError("Grasshopper 电池源码清单已变化，请重新构建内部工具包")
+        for relative, expected in gh_sources.items():
+            if digest(os.path.join(PROJECT_ROOT, *relative.split("/"))) != expected:
+                raise ValueError("Grasshopper 电池源码已变化，请重新构建：" + relative)
+        # 运行时由 Rhino 安装提供 RhinoCommon 和 Grasshopper 核心库；本产品仅增加内部 GHA 及其证据清单。
+        entries.extend([(gha, destination), (grasshopper_manifest_path, destination)])
+    return entries
+
+
+def get_independent_reader_data_entries():
+    """校验并固定独立读取器的离线运行资源及版本清单。"""
+    root = os.path.join(PROJECT_ROOT, "tools", "terrain_mesh_reader")
+    manifest_path = os.path.join(root, "build-manifest.json")
+    if not os.path.isfile(manifest_path):
+        raise FileNotFoundError("独立地形读取器清单缺失，请执行 tools/terrain_mesh_reader/build.py")
+    with open(manifest_path, encoding="utf-8-sig") as stream:
+        manifest = json.load(stream)
+    if (manifest.get("package") != "Rhino3dm" or manifest.get("license") != "MIT"
+            or manifest.get("requires_rhino_installation") is not False):
+        raise ValueError("独立地形读取器必须使用已确认的独立 Rhino3dm 库及许可")
+    files = manifest.get("files", {})
+    if not isinstance(files, dict) or set(files) != set(INDEPENDENT_READER_DATA_FILES):
+        raise ValueError("独立地形读取器资源清单不完整，请重新构建读取器")
+    def digest(path):
+        with open(path, "rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    source = os.path.join(root, "Program.cs")
+    if not os.path.isfile(source) or digest(source) != manifest.get("source_sha256"):
+        raise ValueError("独立地形读取器源码已变化，请重新构建读取器")
+    destination = os.path.join("tools", "terrain_mesh_reader")
+    entries = [(manifest_path, destination)]
+    for name in INDEPENDENT_READER_DATA_FILES:
+        path = os.path.join(root, "bin", name)
+        if not os.path.isfile(path):
+            raise FileNotFoundError("独立地形读取器运行资源缺失：" + name)
+        if digest(path) != files[name]:
+            raise ValueError("独立地形读取器资源与版本清单不一致：" + name)
+        entries.append((path, os.path.join(destination, "bin")))
+    return entries
+
+
+def _frozen_module_names(executable):
+    """直接读取已构建 EXE 内的 PYZ 模块目录，不启动用户程序。"""
+    from PyInstaller.archive.readers import CArchiveReader
+    archive = CArchiveReader(executable)
+    names = set()
+    for name in archive.toc:
+        if name.lower().endswith(".pyz"):
+            names.update(archive.open_embedded_archive(name).toc)
+    if not names:
+        raise ValueError("构建后未找到 Python 模块目录，不能核验独立地形功能")
+    return names
+
+
+def verify_independent_reader_distribution(app_dist_dir, *, module_reader=None):
+    """正式产物与验收产物均在生成清单/快照前核对读取器字节及模块。"""
+    entries = get_independent_reader_data_entries()
+    internal = os.path.join(app_dist_dir, "_internal")
+    resources = internal if os.path.isdir(internal) else app_dist_dir
+    for source, destination in entries:
+        actual = os.path.join(resources, destination, os.path.basename(source))
+        if not os.path.isfile(actual):
+            raise FileNotFoundError("构建产物缺少独立地形读取器资源：" + actual)
+        with open(source, "rb") as stream:
+            expected = hashlib.file_digest(stream, "sha256").hexdigest()
+        with open(actual, "rb") as stream:
+            current = hashlib.file_digest(stream, "sha256").hexdigest()
+        if current != expected:
+            raise ValueError("构建产物混入了不同版本的独立地形读取器：" + actual)
+    executable = os.path.join(app_dist_dir, APP_NAME_EN + ".exe")
+    if not os.path.isfile(executable):
+        raise FileNotFoundError("构建后未找到主程序，不能核验独立地形模块")
+    modules = (module_reader or _frozen_module_names)(executable)
+    required = {*INDEPENDENT_EARTHWORK_HIDDEN_IMPORTS, "rhino3dm"}
+    missing = sorted(required - set(modules))
+    if missing:
+        raise ValueError("构建产物缺少独立土石方模块：" + ", ".join(missing))
+    native_folder = os.path.join(resources, "rhino3dm")
+    if not os.path.isdir(native_folder) or not any(
+            name.startswith("_rhino3dm") and name.endswith(".pyd") for name in os.listdir(native_folder)):
+        raise FileNotFoundError("构建产物缺少 rhino3dm Python 本机扩展")
+    return {"reader_files": [os.path.basename(source) for source, _ in entries],
+            "verified_modules": sorted(required)}
+
+
+def build(bump: str = None, validation_dir: str = None):
+    if validation_dir and bump:
+        raise ValueError("验收构建不允许递增正式版本")
+    if validation_dir:
+        # 验收构建始终使用独立空目录，不动正式 dist、补丁基线和版本。
+        validation_dir = os.path.abspath(validation_dir)
+        if os.path.exists(validation_dir) and os.listdir(validation_dir):
+            raise ValueError("验收输出目录必须为空，避免覆盖已有交付")
+        os.makedirs(validation_dir, exist_ok=True)
+    dist_dir = os.path.join(validation_dir, "dist") if validation_dir else DIST_DIR
+    build_dir = os.path.join(validation_dir, "build") if validation_dir else BUILD_DIR
     if bump:
         bump_version(bump)
 
@@ -664,12 +889,18 @@ def build(bump: str = None):
 
     with _temporary_sys_path(_get_build_search_paths()):
         ensure_required_imports_available()
+    # The main earthwork page now uses independent two-dimensional sections.
+    # Standalone legacy Rhino tools retain their own manifest checks, but are
+    # no longer dependencies or bundled plugins of the main application.
+    rhino_entries = []
+    independent_reader_entries = get_independent_reader_data_entries()
 
     # 清理 data 目录中的 Excel 临时锁文件
-    _clean_excel_temp_files(os.path.join(PROJECT_ROOT, "data"))
+    if not validation_dir:
+        _clean_excel_temp_files(os.path.join(PROJECT_ROOT, "data"))
 
     # 清理旧的构建
-    for d in [DIST_DIR, BUILD_DIR]:
+    for d in [dist_dir, build_dir]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
 
@@ -680,9 +911,9 @@ def build(bump: str = None):
         "--clean",                          # 清理临时文件
         "--windowed",                       # 隐藏控制台窗口
         f"--name={APP_NAME_EN}",            # 输出 exe 名称
-        f"--distpath={DIST_DIR}",           # 输出目录
-        f"--workpath={BUILD_DIR}",          # 工作目录
-        f"--specpath={BUILD_DIR}",          # spec 文件目录
+        f"--distpath={dist_dir}",           # 输出目录
+        f"--workpath={build_dir}",          # 工作目录
+        f"--specpath={build_dir}",          # spec 文件目录
         f"--runtime-hook={PYINSTALLER_RUNTIME_WMI_GUARD}",
     ]
 
@@ -692,8 +923,8 @@ def build(bump: str = None):
 
     # ---- 模块搜索路径 ----
     # 项目根目录：让 PyInstaller 发现 app_渠系计算前端、土石方计算 等正式包
-    # 子目录：calc_渠系计算算法内核、倒虹吸水力计算系统、推求水面线 没有 __init__.py，
-    #         代码通过 sys.path.insert() 后以顶层模块名导入（如 from 明渠设计 import ...）
+    # 子目录保留旧顶层模块导入（如 from 明渠设计 import ...）；
+    # 正式倒虹吸包和水面线包同时通过完整命名空间收集，兼容旧工程与历史脚本。
     search_paths = _get_build_search_paths()
     for p in search_paths:
         args.append(f"--paths={p}")
@@ -710,6 +941,7 @@ def build(bump: str = None):
     # ---- 排除被 scipy / 第三方 hook 误带入的可选 ML 依赖 ----
     for mod in OPTIONAL_ML_EXCLUDES:
         args.append(f"--exclude-module={mod}")
+    args.append("--exclude-module=土石方计算.tests")
 
     # ---- 收集正式 Python 包的子模块（有 __init__.py，编译为字节码） ----
     for mod in COLLECT_SUBMODULE_PACKAGES:
@@ -719,29 +951,19 @@ def build(bump: str = None):
     # ezdxf 内置字体和 DXF 模板； qfluentwidgets 内置图标和 QSS 样式表
     for package_name in get_collect_data_packages():
         args.append(f"--collect-data={package_name}")
-    args.append("--collect-all=qfluentwidgets")
+    for package_name in get_collect_all_packages():
+        args.append(f"--collect-all={package_name}")
 
     # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----
     sep = ";"  # Windows 用分号分隔 src;dest
 
-    # 从 data/ 目录逐个添加文件，排除 autosave 子目录和其它运行时产物
-    _data_src = os.path.join(PROJECT_ROOT, "data")
-    _data_exclude_exts = {".qxproj", ".log"}
-    _data_exclude_dirs = {"autosave"}
-    if os.path.isdir(_data_src):
-        for _fname in os.listdir(_data_src):
-            _fpath = os.path.join(_data_src, _fname)
-            if os.path.isdir(_fpath):
-                if _fname not in _data_exclude_dirs:
-                    args.append(f"--add-data={_fpath}{sep}{os.path.join('data', _fname)}")
-                continue
-            if _fname.startswith("~$"):
-                continue
-            if os.path.splitext(_fname)[1] in _data_exclude_exts:
-                continue
-            if is_runtime_artifact(f"data/{_fname}"):
-                continue
-            args.append(f"--add-data={_fpath}{sep}data")
+    # 保留软件菜单使用的模板和内置示例。
+    for filename in (
+        "多流量段批量计算_导入Excel（模板）.xlsx",
+        "龙塘马坝河分干渠10+862.622-test.xlsx",
+        "xxxxx计算稿（计算产品运行卡）.docx",
+    ):
+        args.append(f"--add-data={os.path.join(PROJECT_ROOT, 'data', filename)}{sep}data")
 
     data_entries = [
         # UI 图标、Logo 与本地化网页静态资源（含 Tabulator）
@@ -751,11 +973,17 @@ def build(bump: str = None):
          os.path.join("倒虹吸水力计算系统", "resources")),
         (os.path.join(PROJECT_ROOT, "推求水面线", "resources"),
          os.path.join("推求水面线", "resources")),
+        # 经核对的工程断面资料与原文索引，供算量页查看图纸依据。
+        (os.path.join(PROJECT_ROOT, "土石方计算", "resources", "engineering_drawings"),
+         os.path.join("土石方计算", "resources", "engineering_drawings")),
         # JSON 配置文件
         (os.path.join(PROJECT_ROOT, "app_渠系计算前端", "default_project.siphon.json"),
          "app_渠系计算前端"),
+        # DWG 前处理在本机兼容 AutoCAD SDK 下编译，只读原图并生成地形中心线副本。
+        (os.path.join(PROJECT_ROOT, "土石方计算", "io", "terrain_filter_acad.cs"),
+         os.path.join("土石方计算", "io")),
     ]
-    for src, dest in data_entries:
+    for src, dest in data_entries + rhino_entries + independent_reader_entries:
         if os.path.exists(src):
             args.append(f"--add-data={src}{sep}{dest}")
 
@@ -773,14 +1001,23 @@ def build(bump: str = None):
         print(f"\n[错误] 打包失败（退出码: {result.returncode}）")
         sys.exit(1)
 
-    app_dist_dir = os.path.join(DIST_DIR, APP_NAME_EN)
-    _build_update_helper(app_dist_dir)
+    app_dist_dir = os.path.join(dist_dir, APP_NAME_EN)
+    _build_update_helper(app_dist_dir, build_dir)
 
     # ---- 清理残留的 .py 源码文件（双保险） ----
     _clean_py_sources(app_dist_dir)
 
     # ---- 删除用不到的 Qt 模块 DLL ----
     _clean_unused_qt_dlls(app_dist_dir)
+    verify_independent_reader_distribution(app_dist_dir)
+
+    if validation_dir:
+        from tools.patch_builder import generate_manifest, save_manifest
+        manifest_path = os.path.join(validation_dir, "validation-manifest.json")
+        save_manifest(generate_manifest(app_dist_dir), manifest_path)
+        print("\n验收构建完成，保留可直接运行的程序：" + app_dist_dir)
+        print("正式版本、补丁基线及发布状态未改变。")
+        return app_dist_dir
 
     # ---- 生成文件清单 manifest.json（供增量补丁对比） ----
     print(f"\n[2/3] 生成文件清单 manifest.json...\n")
@@ -926,9 +1163,10 @@ if __name__ == "__main__":
     parser.add_argument("--clean", action="store_true", help="清理构建产物")
     parser.add_argument("--bump", choices=["patch", "minor", "major"],
                         help="打包前自动递增版本号 (patch/minor/major)")
+    parser.add_argument("--validation-dir", help="独立验收构建目录，不改版本或正式发布产物")
     args = parser.parse_args()
 
     if args.clean:
         clean()
     else:
-        build(bump=args.bump)
+        build(bump=args.bump, validation_dir=args.validation_dir)

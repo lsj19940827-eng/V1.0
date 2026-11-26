@@ -1,0 +1,15 @@
+{
+  "package": "Rhino3dm",
+  "version": "8.35.0",
+  "source_url": "https://api.nuget.org/v3-flatcontainer/rhino3dm/8.35.0/rhino3dm.8.35.0.nupkg",
+  "license": "MIT",
+  "requires_rhino_installation": false,
+  "source_sha256": "c6d5ccd48b5055397ac845d4482efa53b3ecc32e930a63ad936e2b9159bb454a",
+  "package_sha256": "068a4099c28874da85456b814bdfc919ca5813ea14ba485af02c538abc288213",
+  "files": {
+    "librhino3dm_native.dll": "bdfaddaa5cb2f084d08cbe7e9be77f136669ea8c3673919dc7827eeb4d704bcf",
+    "LICENSE-Rhino3dm.txt": "f57a154acc534312b7e7b2bff29748bcef5e1202713b891759a027f7c015f0bd",
+    "Rhino3dm.dll": "466dfb88b1bfc4e9736bb77b4ccfc6598b6e844e7ba57dbac353937c51118a98",
+    "TerrainMeshReader.exe": "e9bc7faea00658877f4e9cb34e9dda018309443870b1abd94fa2741087a467dd"
+  }
+}

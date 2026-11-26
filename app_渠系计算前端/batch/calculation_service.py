@@ -7,11 +7,26 @@ import math
 from dataclasses import dataclass
 from types import SimpleNamespace
 from .schema import *
+from .schema import infer_gate_section_type
 from . import engines
 from app_渠系计算前端.increase_input_helper import (
     calculate_increase_percent_from_q, calculate_q_increased, get_auto_increase_percent,
 )
 from 推求水面线.shared.shared_data_manager import normalize_section_type_name
+
+
+def _turn_radius_input_metadata(values):
+    raw = values[COL_TURN_RADIUS] if len(values) > COL_TURN_RADIUS else None
+    text = "" if raw is None else str(raw).strip()
+    try:
+        radius = float(text) if text else 0.0
+    except (TypeError, ValueError) as error:
+        raise ValueError("转弯半径须为有限的0或正数") from error
+    if not math.isfinite(radius) or radius < 0:
+        raise ValueError("转弯半径须为有限的0或正数")
+    explicit = radius > 0
+    return {"turn_radius": radius, "turn_radius_text": text,
+            "turn_radius_is_explicit": explicit, "turn_radius_source": "input" if explicit else ""}
 
 
 @dataclass(frozen=True)
@@ -70,7 +85,7 @@ class BatchCalculationService:
             if token is not None:
                 token.raise_if_cancelled()
             values = self._normalize_row(values, len(INPUT_HEADERS))
-            raw_section_type = str(values[COL_SECTION_TYPE]).strip()
+            raw_section_type = infer_gate_section_type(values[COL_SECTION_TYPE], values[COL_BUILDING_NAME])
             section_type = raw_section_type
             mapped_section_type = self._map_section_type(section_type) if section_type else None
             if mapped_section_type:
@@ -84,6 +99,7 @@ class BatchCalculationService:
             building_name = str(values[COL_BUILDING_NAME]).strip()
 
             try:
+                radius_metadata = _turn_radius_input_metadata(values)
                 # 倒虹吸占位行
                 if section_type == "倒虹吸":
                     row_out = ["-"] * len(RESULT_HEADERS)
@@ -97,7 +113,7 @@ class BatchCalculationService:
                         'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
                         'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.014), 'slope_inv': 0,
                         'D': self._sf(values[COL_D], 0.0),  # 倒虹吸直径D用于水面线窗口默认指定管径
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
+                        **radius_metadata,
                         'pipe_material': pipe_material,
                     }
                     batch_results.append({'input': values, 'result': siphon_result})
@@ -124,7 +140,7 @@ class BatchCalculationService:
                         'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
                         'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.0), 'slope_inv': 0,
                         'D': self._sf(values[COL_D], 0.0),  # 直径D用于有压管道同类结构
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
+                        **radius_metadata,
                         'pipe_material': pipe_material,
                         'local_loss_ratio': local_loss_ratio,
                         'in_out_raw': in_out_raw,
@@ -197,7 +213,7 @@ class BatchCalculationService:
                         'm': self._sf(values[COL_M], 0.0),
                         'b': self._sf(values[COL_B], 0.0),
                         'B': self._sf(values[COL_B], 0.0),
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
+                        **radius_metadata,
                         SPILLWAY_STEEP_CHUTE_PARAM_KEY: spillway_payload,
                     }
                     if manual_qmax is not None:
@@ -212,6 +228,7 @@ class BatchCalculationService:
 
                 # 闸·分水类占位行（分水闸/分水口/节制闸/泄水闸等）
                 if "闸" in section_type or "分水" in section_type:
+                    building_name = building_name or section_type
                     row_out = ["-"] * len(RESULT_HEADERS)
                     row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
                     row_out[3] = section_type; row_out[-1] = f"⏭ {section_type}(不参与断面计算)"
@@ -221,7 +238,7 @@ class BatchCalculationService:
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
                         'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.014), 'slope_inv': 0,
-                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
+                        **radius_metadata,
                     }
                     batch_results.append({'input': values, 'result': gate_result})
                     skip_count += 1
@@ -335,6 +352,7 @@ class BatchCalculationService:
                     preserve_imported_dimensions=preserve_imported_dimensions,
                 )
                 if result:
+                    result.update(radius_metadata)
                     result['_use_increase'] = use_inc
                     result['section_type'] = section_type
                     if is_fill_channel_section_type(section_type):
@@ -665,6 +683,8 @@ class BatchCalculationService:
     def _map_section_type(self, raw_type):
         """将粘贴的断面类型简写映射为有效类型（与原版一致）"""
         raw_type = normalize_section_type_name(raw_type)
+        if raw_type.endswith("闸"):
+            return raw_type
         mapping = {
             "梯形": "明渠-梯形", "复式梯形": "明渠-复式梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
             "明渠U形": "明渠-U形", "U形明渠": "明渠-U形",
@@ -679,7 +699,6 @@ class BatchCalculationService:
             "充水渠": "泄水渠与陡坡", "泄水渠": "泄水渠与陡坡", "泄水渠与陡坡": "泄水渠与陡坡",
             "陡坡": "泄水渠与陡坡", "泄槽": "泄水渠与陡坡", "陡槽": "泄水渠与陡坡",
             "泄水渠及陡坡": "泄水渠与陡坡",
-            "退水闸": "退水闸",
         }
         if raw_type in mapping:
             return mapping[raw_type]

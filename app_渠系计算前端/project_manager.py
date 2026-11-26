@@ -19,6 +19,7 @@ from atomic_json import atomic_write_json
 from app_渠系计算前端.project_codec import ProjectCodec
 from app_渠系计算前端.project_session import ProjectSession, ProjectSnapshot
 from app_渠系计算前端.task_runner import TaskRunner
+from app_渠系计算前端.earthwork.project_resources import prepare_project_resources
 
 if TYPE_CHECKING:
     from app_渠系计算前端.batch.panel import BatchPanel
@@ -58,6 +59,7 @@ class ProjectManager(QObject):
     project_changed = Signal(str)       # 项目路径变化时发射，参数为新路径（空串表示新项目）
     dirty_changed = Signal(bool)        # 脏状态变化时发射
     status_message = Signal(str)        # 状态栏消息
+    project_open_progress = Signal(str, bool)  # 阶段提示，是否可取消
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,6 +68,9 @@ class ProjectManager(QObject):
         self._current_path: str = ""     # 当前项目路径（空串表示新建未保存）
         self.session = ProjectSession()
         self._auto_save_runner = TaskRunner(self)
+        self._project_open_runner = TaskRunner(self)
+        self._project_open_runner.running_changed.connect(self._on_project_open_running_changed)
+        self._opening_path = ""
         self._is_dirty: bool = False     # 是否有未保存的修改
 
         # ---- 运行时引用（由 MainWindow 设置）----
@@ -161,9 +166,14 @@ class ProjectManager(QObject):
             self._restore_panel(descriptor.project_slot, panel, None)
             self._reset_on_first_visit.discard(descriptor.project_slot)
 
-    def _restore_panel(self, slot: str, panel: Any, payload: Any) -> None:
+    def _restore_panel(self, slot: str, panel: Any, payload: Any, *, take_ownership: bool = False) -> None:
         """先恢复干净默认值，再走原有版本迁移入口，避免默认字段遮蔽旧格式。"""
-        def restore(state):
+        def restore(state, *, owned=False):
+            if slot == 'earthwork_panel':
+                from app_渠系计算前端.earthwork.workbench_panel import SectionWorkbenchPanel
+                if isinstance(panel, SectionWorkbenchPanel):
+                    panel.from_project_dict(state, normalized=True, take_ownership=owned)
+                    return
             state = copy.deepcopy(state)
             if slot in ('water_profile_panel', 'batch_panel'):
                 panel.from_project_dict(state, skip_dirty_signal=True)
@@ -178,7 +188,7 @@ class ProjectManager(QObject):
             else:
                 restore(self._initial_panel_data.get(slot, {}))
             if isinstance(payload, dict) and payload:
-                restore(payload)
+                restore(payload, owned=take_ownership)
         finally:
             self._restoring_project = old_restoring
 
@@ -266,8 +276,9 @@ class ProjectManager(QObject):
 
             def write_snapshot(token):
                 token.raise_if_cancelled()
+                saved_data = prepare_project_resources(snapshot.data, auto_save_path, cancel_check=token.raise_if_cancelled)
                 token.raise_if_cancelled()
-                atomic_write_json(auto_save_path, snapshot.data)
+                atomic_write_json(auto_save_path, saved_data)
                 return auto_save_path
 
             def saved(path):
@@ -293,6 +304,11 @@ class ProjectManager(QObject):
     def finish_background_tasks(self, timeout_ms: int = 1000) -> bool:
         """关闭时取消计算回写，再收尾磁盘写入；使用总超时避免界面长时间等待。"""
         deadline = time.monotonic() + max(0, timeout_ms) / 1000
+        if self._project_open_runner.isRunning():
+            self.cancel_project_open()
+            remaining = max(0, int((deadline - time.monotonic()) * 1000))
+            if not self._project_open_runner.wait(remaining):
+                return False
         for _label, runner in self._iter_calculation_runners():
             if not runner.isRunning():
                 continue
@@ -364,6 +380,7 @@ class ProjectManager(QObject):
     # ----------------------------------------------------------------
     def new_project(self) -> bool:
         """新建项目，返回是否成功"""
+        self.cancel_project_open()
         # 检查是否需要保存当前项目
         if not self._check_save_before_close():
             return False
@@ -438,13 +455,16 @@ class ProjectManager(QObject):
     def _iter_calculation_runners(self):
         """只查询已存在面板和内嵌批量后端，不为状态检查创建页面。"""
         seen = set()
-        for _slot, panel, label in self._iter_project_panel_entries(create_missing=False):
+        for slot, panel, label in self._iter_project_panel_entries(create_missing=False):
             if panel is None:
                 continue
+            names = ('calculation_runner', '_batch_worker')
+            if slot == 'earthwork_panel':
+                names += ('runner',)
             for owner in (panel, getattr(panel, '_batch_backend', None)):
                 if owner is None:
                     continue
-                for name in ('calculation_runner', '_batch_worker'):
+                for name in names:
                     runner = getattr(owner, name, None)
                     if runner is not None and id(runner) not in seen:
                         seen.add(id(runner))
@@ -461,6 +481,7 @@ class ProjectManager(QObject):
     # ----------------------------------------------------------------
     def open_project(self, path: Optional[str] = None) -> bool:
         """打开项目，返回是否成功"""
+        self.cancel_project_open()
         # 检查是否需要保存当前项目
         if not self._check_save_before_close():
             return False
@@ -484,15 +505,105 @@ class ProjectManager(QObject):
         # 加载项目
         try:
             self._load_from_file(path)
-            self._current_path = path
-            self._clear_dirty()
-            self._add_recent_project(path)
-            self.project_changed.emit(path)
-            self.status_message.emit(f"已打开项目: {os.path.basename(path)}")
+            self._confirm_project_open(path)
             return True
         except Exception as e:
             QMessageBox.critical(None, "加载失败", f"无法加载项目文件：\n{e}")
             return False
+
+    def open_project_async(self, path: Optional[str] = None) -> bool:
+        """后台读取所选工程，成功后在界面线程完成未保存确认与恢复事务。"""
+        if self._opening_path:
+            self.status_message.emit("已有工程正在打开，可等待或取消当前打开操作。")
+            return False
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self.parent(), "打开项目", "", PROJECT_FILTER)
+            if not path:
+                return False
+        try:
+            self._require_panels_idle()
+        except RuntimeError as exc:
+            self.status_message.emit(str(exc))
+            return False
+
+        path = os.fspath(path)
+        name = os.path.basename(path)
+        generation = self.session.generation
+        start_path = self._current_path
+        start_saved_revision = self.session.saved_revision
+        target_path = os.path.normcase(os.path.abspath(path))
+
+        def read(token):
+            data = ProjectCodec.read(path)
+            token.raise_if_cancelled()
+            earthwork = data.get("earthwork_panel") or {}
+            # Decode owns the original session snapshot. Detach the live
+            # workbench state here, where copying a large result keeps Qt free.
+            detached = copy.deepcopy(earthwork) if earthwork.get("kind") == "section_workbench" else None
+            return data, detached
+
+        def apply(decoded):
+            if self.session.generation != generation:
+                return
+            if (self._current_path and os.path.normcase(os.path.abspath(self._current_path)) == target_path
+                    and (self._current_path != start_path or self.session.saved_revision != start_saved_revision)):
+                self.status_message.emit(f"项目 {name} 在读取期间已保存，继续使用当前内容。")
+                return
+            self._require_panels_idle()
+            self.project_open_progress.emit(f"正在恢复项目 {name}", False)
+            data, detached = decoded
+            if not self.open_loaded_project(path, data, detached_earthwork=detached):
+                cancelled()
+
+        def failed(error):
+            if self.session.generation == generation:
+                detail = "找不到项目文件，可重新选择。" if isinstance(error, FileNotFoundError) else str(error)
+                self.status_message.emit(f"打开项目 {name} 未完成。{detail}")
+
+        def cancelled():
+            if self.session.generation == generation:
+                self.status_message.emit(f"已取消打开项目 {name}")
+
+        self._opening_path = path
+        self.project_open_progress.emit(f"正在读取项目 {name}", True)
+        try:
+            self._project_open_runner.submit(read, on_success=apply, on_error=failed, on_cancelled=cancelled)
+        except RuntimeError as exc:
+            self._on_project_open_running_changed(False)
+            failed(exc)
+            return False
+        return True
+
+    def cancel_project_open(self) -> None:
+        if self._project_open_runner.isRunning():
+            self._project_open_runner.cancel()
+            self.project_open_progress.emit("正在取消打开项目，当前读取步骤结束后返回。", False)
+
+    def _on_project_open_running_changed(self, running: bool) -> None:
+        if not running:
+            self._opening_path = ""
+            self.project_open_progress.emit("", False)
+
+    def open_loaded_project(self, path: str, data: Dict[str, Any], *, detached_earthwork=None) -> bool:
+        """Commit a decoded project, optionally consuming two owned snapshots."""
+        self.cancel_project_open()
+        same_project = bool(self._current_path and os.path.normcase(os.path.abspath(self._current_path))
+                            == os.path.normcase(os.path.abspath(path)))
+        saved_revision = self.session.saved_revision
+        if not self._check_save_before_close():
+            return False
+        # Saving the same file in the prompt makes the earlier read obsolete.
+        if not same_project or saved_revision == self.session.saved_revision:
+            self._apply_project_transaction(data, path, normalized=True, detached_earthwork=detached_earthwork)
+        self._confirm_project_open(path)
+        return True
+
+    def _confirm_project_open(self, path: str) -> None:
+        self._current_path = path
+        self._clear_dirty()
+        self._add_recent_project(path)
+        self.project_changed.emit(path)
+        self.status_message.emit(f"已打开项目: {os.path.basename(path)}")
 
     # ----------------------------------------------------------------
     # 保存项目
@@ -624,16 +735,18 @@ class ProjectManager(QObject):
     def _save_to_file(self, path: str) -> ProjectSnapshot:
         """采集独立快照并原子写入，失败时保持旧工程与未保存状态。"""
         snapshot = self.session.capture(self._collect_project_data())
-        atomic_write_json(path, snapshot.data)
+        saved_data = prepare_project_resources(snapshot.data, path)
+        atomic_write_json(path, saved_data)
         return snapshot
 
     def _load_from_file(self, path: str) -> Dict[str, Any]:
         """先完成版本和关键数据块校验，再一次提交到运行时。"""
         data = ProjectCodec.read(path)
-        self._apply_project_transaction(data, path)
+        self._apply_project_transaction(data, path, normalized=True)
         return data
 
-    def _apply_project_transaction(self, data: Dict[str, Any], path: str) -> None:
+    def _apply_project_transaction(self, data: Dict[str, Any], path: str, *, normalized: bool = False,
+                                   detached_earthwork=None) -> None:
         """任一关键模块恢复失败即回滚，成功后才切换工程会话。"""
         self._require_panels_idle()
         previous = None if self._project_restore_error else self._collect_project_data()
@@ -641,7 +754,7 @@ class ProjectManager(QObject):
         old_restoring = self._restoring_project
         self._restoring_project = True
         try:
-            self._restore_project_data(data)
+            self._restore_project_data(data, normalized=normalized, detached_earthwork=detached_earthwork)
             self._bind_manager_paths(path)
         except Exception as exc:
             if previous is not None:
@@ -656,15 +769,14 @@ class ProjectManager(QObject):
             raise
         finally:
             self._restoring_project = old_restoring
-        self.session.commit(data, path)
+        self.session.commit(data, path, take_ownership=detached_earthwork is not None)
         self._project_restore_error = ''
 
-    def _collect_project_data(self) -> Dict[str, Any]:
+    def _collect_project_data(self, *, include_earthwork: bool = True) -> Dict[str, Any]:
         """收集所有面板数据"""
         if self._project_restore_error:
             raise RuntimeError('工程界面尚未完整恢复，请重新打开工程后再保存。')
-        data = self.session.data
-        data.update({
+        defaults = {
             "version": "2.0",
             "created_at": datetime.now().isoformat(),
             "merged_panel": None,
@@ -677,10 +789,13 @@ class ProjectManager(QObject):
             "siphon_panel": None,
             "pressure_pipe_panel": None,
             "spillway_steep_chute_panel": None,
+            "earthwork_panel": None,
             "siphon_manager_data": None,
             "pressure_pipe_manager_data": None,
             "report_meta": None,
-        })
+        }
+        data = self.session.copy_extra_fields(defaults)
+        data.update(defaults)
 
         # ---- 合并面板（双写：merged_panel + water_profile_panel）----
         water_profile_data = None
@@ -706,8 +821,11 @@ class ProjectManager(QObject):
                 data["batch_panel"] = compat_batch
 
         # ---- 其余面板数据 ----
+        excluded_slots = {"water_profile_panel"}
+        if not include_earthwork:
+            excluded_slots.add("earthwork_panel")
         for key, panel, label in self._iter_project_panel_entries(
-            create_missing=False, exclude_slots={"water_profile_panel"}
+            create_missing=False, exclude_slots=excluded_slots
         ):
             if panel:
                 try:
@@ -739,9 +857,51 @@ class ProjectManager(QObject):
 
         return data
 
-    def _restore_project_data(self, data: Dict[str, Any]):
+    def collect_earthwork_source(self) -> Dict[str, Any]:
+        """Recover an equivalent saved water calculation after an older batch sync."""
+        current = self._collect_project_data(include_earthwork=False)
+        live = current.get("merged_panel") or current.get("water_profile_panel") or {}
+        if (live.get("calculated_nodes") or not live.get("water_result_input_signature")
+                or not self.current_path or self.session.path != self.current_path):
+            return current
+
+        from app_渠系计算前端.water_profile.panel import EDITABLE_COLS
+        from app_渠系计算前端.water_profile.saved_results import matches_batch_resync
+
+        try:
+            saved = ProjectCodec.read(self.current_path)
+        except (OSError, ValueError):
+            return current
+        water = saved.get("merged_panel") or saved.get("water_profile_panel") or {}
+        manager_slots = ("pressure_pipe_manager_data", "siphon_manager_data")
+        if (any(saved.get(key) != current.get(key) for key in manager_slots)
+                or not matches_batch_resync(live, water, EDITABLE_COLS)):
+            return current
+        self._require_panels_idle()
+        panel = self._get_panel("water_profile_panel", create_missing=False)
+        if panel is None:
+            return current
+        try:
+            self._restore_panel("water_profile_panel", panel, water)
+            if not panel.is_water_result_current():
+                raise ValueError("项目文件中的水面线成果与恢复后的输入不一致。")
+        except Exception:
+            self._restore_panel("water_profile_panel", panel, live)
+            raise
+        snapshot = self._collect_project_data(include_earthwork=False)
+        snapshot["earthwork_recovered_saved_water"] = True
+        return snapshot
+
+    def _restore_project_data(self, data: Dict[str, Any], *, normalized: bool = False, detached_earthwork=None):
         """恢复所有面板数据"""
-        data = ProjectCodec.normalize(data)
+        if not normalized:
+            data = ProjectCodec.normalize(data)
+        if detached_earthwork is not None:
+            data = {**data, "earthwork_panel": detached_earthwork}
+        if (data.get("earthwork_panel") or {}).get("kind") == "section_workbench":
+            from 土石方计算.adapters.workbench_sources import with_saved_batch_bore_diameters
+            from 土石方计算.services.pipe_profile_sources import with_saved_water_axes
+            data = with_saved_batch_bore_diameters(with_saved_water_axes(data))
         existing_slots = {
             slot for slot, panel, _label in self._iter_project_panel_entries(create_missing=False)
             if panel is not None
@@ -755,6 +915,17 @@ class ProjectManager(QObject):
                 self._restore_panel('water_profile_panel', water_profile_panel, water_profile_data)
             except Exception as e:
                 raise RuntimeError(f"恢复水面线数据失败：{e}") from e
+            earthwork = data.get("earthwork_panel") or {}
+            if earthwork.get("kind") == "section_workbench" and earthwork.get("source_project_hash"):
+                from app_渠系计算前端.water_profile.saved_results import (
+                    has_legacy_earthwork_source, restored_legacy_earthwork_source_hash,
+                )
+
+                if has_legacy_earthwork_source(water_profile_data or {}):
+                    live_water = water_profile_panel.to_project_dict()
+                    restored_hash = restored_legacy_earthwork_source_hash(data, live_water)
+                    if restored_hash:
+                        data = {**data, "earthwork_panel": {**earthwork, "source_project_hash": restored_hash}}
 
         # ---- 兼容恢复 batch_panel（老界面/回滚版本需要）----
         if (not batch_panel_data) and isinstance(water_profile_data, dict):
@@ -776,7 +947,8 @@ class ProjectManager(QObject):
                 panel = self._get_panel(key)
             if panel and (data.get(key) or key in existing_slots):
                 try:
-                    self._restore_panel(key, panel, data.get(key))
+                    self._restore_panel(key, panel, data.get(key),
+                                        take_ownership=key == "earthwork_panel" and detached_earthwork is not None)
                 except Exception as e:
                     raise RuntimeError(f"恢复 {label} 数据失败：{e}") from e
 

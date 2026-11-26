@@ -8,12 +8,18 @@
 
 import os
 
+# Direct module launches must install the same import guards as bootstrap.run.
+from app_渠系计算前端.runtime_platform import ensure_safe_windows_platform_queries
+from app_渠系计算前端.qfluentwidgets_compat import ensure_qfluentwidgets_compat
+ensure_safe_windows_platform_queries()
+ensure_qfluentwidgets_compat()
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFrame, QStackedWidget, QSizePolicy, QMenu
+    QLabel, QFrame, QStackedWidget, QSizePolicy, QMenu, QProgressBar
 )
 from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QIcon, QShortcut, QKeySequence, QAction
+from PySide6.QtGui import QIcon, QAction
 
 from qfluentwidgets import (
     PushButton, InfoBar, InfoBarPosition
@@ -104,6 +110,15 @@ def _create_spillway_steep_chute_panel():
 
     return SpillwaySteepChutePanel()
 
+
+def _create_earthwork_panel(*, project_provider, session_provider, project_file_opener=None):
+    from app_渠系计算前端.earthwork.workbench_panel import SectionWorkbenchPanel
+
+    return SectionWorkbenchPanel(
+        project_provider=project_provider,
+        session_provider=session_provider,
+        project_file_opener=project_file_opener,
+    )
 
 
 class NavButton(PushButton):
@@ -303,6 +318,18 @@ class MainWindow(QMainWindow):
                 attr_name="spillway_steep_chute_panel",
                 factory=_create_spillway_steep_chute_panel,
                 project_slot="spillway_steep_chute_panel",
+            ),
+            PanelDescriptor(
+                key="earthwork",
+                title="挖填工程量",
+                nav_order=8,
+                attr_name="earthwork_panel",
+                factory=lambda: _create_earthwork_panel(
+                    project_provider=lambda: self.project_manager.collect_earthwork_source(),
+                    session_provider=lambda: self.project_manager.session,
+                    project_file_opener=self.project_manager.open_loaded_project,
+                ),
+                project_slot="earthwork_panel",
             ),
         ]
         return PanelRegistry(descriptors, self)
@@ -531,6 +558,8 @@ class MainWindow(QMainWindow):
                     current.deleteLater()
             self.stack.insertWidget(index, panel)
         setattr(self, descriptor.attr_name, panel)
+        if key == "water_profile" and hasattr(panel, "earthwork_requested"):
+            panel.earthwork_requested.connect(self._open_earthwork_from_water_profile)
 
     # ----------------------------------------------------------------
     # 项目管理
@@ -550,33 +579,48 @@ class MainWindow(QMainWindow):
         self.project_manager.project_changed.connect(self._on_project_changed)
         self.project_manager.dirty_changed.connect(self._on_dirty_changed)
         self.project_manager.status_message.connect(self._on_status_message)
+        self._init_project_open_feedback()
 
         # 连接菜单动作
         self.act_new.triggered.connect(self.project_manager.new_project)
-        self.act_open.triggered.connect(lambda: self.project_manager.open_project())
+        self.act_open.triggered.connect(lambda: self.project_manager.open_project_async())
         self.act_save.triggered.connect(self.project_manager.save_project)
         self.act_save_as.triggered.connect(self.project_manager.save_as_project)
 
         # 启动自动保存
         self.project_manager.start_auto_save()
 
+    def _init_project_open_feedback(self):
+        self._project_open_feedback = QWidget(self)
+        layout = QHBoxLayout(self._project_open_feedback)
+        layout.setContentsMargins(4, 0, 4, 0)
+        self._project_open_label = QLabel()
+        self._project_open_label.setTextFormat(Qt.PlainText)
+        layout.addWidget(self._project_open_label)
+        progress = QProgressBar()
+        progress.setRange(0, 0)
+        progress.setTextVisible(False)
+        progress.setFixedWidth(72)
+        layout.addWidget(progress)
+        self._project_open_cancel = PushButton("取消打开")
+        self._project_open_cancel.clicked.connect(self.project_manager.cancel_project_open)
+        layout.addWidget(self._project_open_cancel)
+        self.statusBar().addPermanentWidget(self._project_open_feedback, 1)
+        self._project_open_feedback.hide()
+        self.project_manager.project_open_progress.connect(self._update_project_open_feedback)
+
+    def _update_project_open_feedback(self, message, cancellable):
+        self._project_open_label.setText(message)
+        self._project_open_cancel.setEnabled(cancellable)
+        self._project_open_feedback.setVisible(bool(message))
+        if message and not cancellable:
+            self._project_open_feedback.repaint()
+
     def _init_shortcuts(self):
-        """初始化快捷键"""
-        # Ctrl+N: 新建项目
-        shortcut_new = QShortcut(QKeySequence("Ctrl+N"), self)
-        shortcut_new.activated.connect(self.project_manager.new_project)
-
-        # Ctrl+O: 打开项目
-        shortcut_open = QShortcut(QKeySequence("Ctrl+O"), self)
-        shortcut_open.activated.connect(lambda: self.project_manager.open_project())
-
-        # Ctrl+S: 保存项目
-        shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
-        shortcut_save.activated.connect(self.project_manager.save_project)
-
-        # Ctrl+Shift+S: 另存为
-        shortcut_save_as = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
-        shortcut_save_as.activated.connect(self.project_manager.save_as_project)
+        """菜单与快捷键共用动作，弹出菜单关闭时仍由主窗口接收。"""
+        self.addActions([
+            self.act_new, self.act_open, self.act_save, self.act_save_as,
+        ])
 
     def _on_project_changed(self, path: str):
         """项目路径变化时更新窗口标题"""
@@ -609,7 +653,7 @@ class MainWindow(QMainWindow):
                 name = os.path.basename(path)
                 act = self.recent_menu.addAction(name)
                 act.setToolTip(path)
-                act.triggered.connect(lambda checked, p=path: self.project_manager.open_project(p))
+                act.triggered.connect(lambda checked, p=path: self.project_manager.open_project_async(p))
 
             self.recent_menu.addSeparator()
             act_clear = self.recent_menu.addAction("清空最近项目")
@@ -696,6 +740,11 @@ class MainWindow(QMainWindow):
         self._silent_checker.update_available.connect(self._on_update_available)
         self._silent_checker.start()
 
+    def finish_silent_update_check(self):
+        """Wait for the one-shot check before Qt destroys its parent window."""
+        if self._silent_checker is not None:
+            self._silent_checker.wait()
+
     def _on_update_available(self, info):
         """静默检查发现新版本时，直接弹出更新对话框。"""
         self._cached_update_info = info
@@ -715,6 +764,7 @@ class MainWindow(QMainWindow):
         # 检查项目是否需要保存
         if hasattr(self, 'project_manager'):
             debug_print("[DEBUG] project_manager exists, calling check_save_on_close")
+            self.project_manager.cancel_project_open()
             if not self.project_manager.check_save_on_close():
                 debug_print("[DEBUG] User cancelled close, ignoring event")
                 event.ignore()
@@ -746,6 +796,17 @@ class MainWindow(QMainWindow):
             if app is not None:
                 app.quit()
 
+    def _open_earthwork_from_water_profile(self):
+        index = next(i for i, descriptor in enumerate(self._panel_registry.descriptors) if descriptor.key == "earthwork")
+        panel = self._panel_registry.get("earthwork")
+        if panel.runner.isRunning():
+            self.statusBar().showMessage("挖填任务正在运行，完成后可带入最新水面线成果。", 6000)
+            return
+        if not panel._guard(panel.import_current_project):
+            return
+        self._switch_to(index)
+        self.statusBar().showMessage("已带入当前水面线成果，可在挖填工程量中查看。", 8000)
+
     def _switch_to(self, index: int):
         """切换到指定模块"""
         if index >= self.stack.count():
@@ -754,6 +815,13 @@ class MainWindow(QMainWindow):
         if index < len(descriptors):
             panel = self._panel_registry.get(descriptors[index].key)
             self.stack.setCurrentWidget(panel)
+            if descriptors[index].key == "earthwork":
+                panel.show_project_and_terrain()
+                if not panel._all_assets():
+                    water = self._panel_registry.get_existing("water_profile")
+                    if (water is not None and getattr(water, "calculated_nodes", None)
+                            and getattr(water, "_section_sync_ready", False) and not water.is_calculation_running()):
+                        panel._guard(panel.import_current_project)
         else:
             self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):

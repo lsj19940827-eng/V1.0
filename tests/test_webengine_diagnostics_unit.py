@@ -421,6 +421,9 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
         def start_silent_update_check(self):
             call_log.append("window.start_silent_update_check")
 
+        def finish_silent_update_check(self):
+            call_log.append("window.finish_silent_update_check")
+
         def _open_update_dialog(self):
             opened_dialog.append(True)
 
@@ -473,6 +476,7 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
         "app.processEvents",
         "window.start_silent_update_check",
         "app.exec",
+        "window.finish_silent_update_check",
     ]
     assert opened_dialog == [True]
 

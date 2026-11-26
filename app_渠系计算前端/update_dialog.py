@@ -16,7 +16,7 @@ import threading
 import time
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QTextEdit, QMessageBox, QComboBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -783,7 +783,7 @@ class UpdateDialog(QDialog):
                 full_package_sha256=self._update_info.download_sha256 if self._update_info else "",
                 full_package_size_mb=self._update_info.file_size_mb if self._update_info else 0,
             )
-            launch_updater_and_exit(session_path)
+            launch_updater_and_exit(session_path, exit_application=QApplication.exit)
         except Exception as e:
             QMessageBox.critical(
                 self, "更新失败",

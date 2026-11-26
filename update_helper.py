@@ -11,13 +11,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -152,7 +156,9 @@ class InstallWorker(QObject):
         super().__init__()
         self.session_path = session_path
 
+    @Slot()
     def run(self):
+        self.run_thread_id = threading.get_ident()
         result = updater.run_update_session(
             self.session_path,
             stage_callback=lambda key, text: self.stage_changed.emit(key, text),
@@ -161,16 +167,20 @@ class InstallWorker(QObject):
 
 
 class UpdateHelperWindow(QWidget):
-    def __init__(self, session_path: str):
+    def __init__(self, session_path: str, *, acceptance_report: str = ""):
         super().__init__()
         self.session_path = session_path
         self.session = updater.UpdateSession.from_file(session_path)
         self.result: dict | None = None
         self._installing = True
         self._stage_labels: dict[str, QLabel] = {}
+        self._active_stage_key: str | None = None
         self._worker_thread: QThread | None = None
         self._worker: InstallWorker | None = None
+        self._acceptance_monitor = None
         self._setup_ui()
+        if acceptance_report:
+            self._acceptance_monitor = _AcceptanceMonitor(self, acceptance_report)
         self._start_worker()
 
     def _setup_ui(self):
@@ -252,6 +262,8 @@ class UpdateHelperWindow(QWidget):
 
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
+        # 长时间下载只保留最近的界面日志，完整记录仍写入安装日志文件。
+        self.detail_text.document().setMaximumBlockCount(300)
         self.detail_text.setPlaceholderText("安装日志会显示在这里。")
         self.detail_text.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.detail_text.setMinimumHeight(70)
@@ -302,8 +314,9 @@ class UpdateHelperWindow(QWidget):
         self._worker = InstallWorker(self.session_path)
         self._worker.moveToThread(self._worker_thread)
         self._worker_thread.started.connect(self._worker.run)
-        self._worker.stage_changed.connect(self._on_stage_changed)
-        self._worker.completed.connect(self._on_completed)
+        # 显式槽和队列连接保证后台下载、校验只通过主线程更新界面。
+        self._worker.stage_changed.connect(self._on_stage_changed, Qt.QueuedConnection)
+        self._worker.completed.connect(self._on_completed, Qt.QueuedConnection)
         self._worker.completed.connect(self._worker_thread.quit)
         self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.start()
@@ -404,33 +417,21 @@ class UpdateHelperWindow(QWidget):
         self.resize(target_width, target_height)
         self.layout().activate()
 
+    @Slot(str, str)
     def _on_stage_changed(self, stage_key: str, text: str):
-        if stage_key in self._stage_labels:
+        if self._acceptance_monitor:
+            self._acceptance_monitor.observe(stage_key, text)
+        if stage_key in self._stage_labels and stage_key != self._active_stage_key:
             self._set_stage_state(stage_key)
+            self._active_stage_key = stage_key
         self._set_status_text(text)
         self._append_detail(text)
 
+    @Slot(dict)
     def _on_completed(self, result: dict):
-        self.result = result
-        if result.get("success"):
-            self._stage_labels["done"].setText("✓ 安装完成")
-            self._stage_labels["done"].setStyleSheet("color: #2E7D32; font-size: 13px; font-weight: bold;")
-            self.status_label.setText("安装完成，可以启动新版本。")
-            self.footer_label.setText("旧版本备份和临时文件已经清理。")
-            self.btn_launch.setVisible(True)
-            self._append_detail(f"安装日志：{result.get('log_path', '')}")
-            return
-
-        rollback_ok = result.get("rollback_ok")
-        fail_text = "安装失败，已自动回滚到旧版本。" if rollback_ok else "安装失败，且自动回滚未完成。"
-        self.status_label.setText(fail_text)
-        self.footer_label.setText("可以查看日志或打开更新目录继续排查。")
-        self._append_detail(result.get("error", "安装失败"))
-        self._append_detail(f"安装日志：{result.get('log_path', '')}")
-        self.btn_open_log.setVisible(True)
-        self.btn_open_workdir.setVisible(True)
-        self.btn_retry.setVisible(True)
-        self.btn_close.setText("关闭")
+        if self._acceptance_monitor:
+            self._acceptance_monitor.observe("completed", "")
+        _update_helper_on_completed(self, result)
 
     def _open_work_dir(self):
         target = self.session.work_dir
@@ -555,16 +556,87 @@ def _update_helper_close_event(self, event):
     super(UpdateHelperWindow, self).closeEvent(event)
 
 
-UpdateHelperWindow._on_completed = _update_helper_on_completed
 UpdateHelperWindow._retry_download = _update_helper_retry_download
 UpdateHelperWindow.closeEvent = _update_helper_close_event
 
 
-def _run_session_ui(session_path: str) -> int:
+class _AcceptanceMonitor(QObject):
+    """验收模式仅测量真实窗口和工作线程，不替换安装逻辑或信号接收方法。"""
+
+    def __init__(self, window, report_path):
+        super().__init__(window)
+        self.window = window
+        self.report_path = os.path.abspath(report_path)
+        self.gui_thread_id = threading.get_ident()
+        self.ui_threads = set()
+        self.heartbeat = [time.monotonic()]
+        self.download_start = None
+        self.download_seconds = 0.0
+        self.fallback = False
+        self.speed_visible = False
+        self.max_blocks = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._tick)
+        self.timer.start(500)
+        self.watcher = QTimer(self)
+        self.watcher.timeout.connect(self._finish)
+        self.watcher.start(100)
+
+    def observe(self, stage, text):
+        self.ui_threads.add(threading.get_ident())
+        if stage == "fallback":
+            self.fallback = True
+        if stage == "download":
+            if self.download_start is None:
+                self.download_start = time.monotonic()
+            self.speed_visible |= "MB/s" in text
+        elif self.download_start is not None and self.download_seconds == 0:
+            self.download_seconds = time.monotonic() - self.download_start
+
+    @Slot()
+    def _tick(self):
+        self.heartbeat.append(time.monotonic())
+        self.max_blocks = max(self.max_blocks, self.window.detail_text.document().blockCount())
+
+    @Slot()
+    def _finish(self):
+        window = self.window
+        if window.result is None or window._worker_thread.isRunning() or time.monotonic() - self.heartbeat[0] < 1:
+            return
+        self._tick()
+        self.timer.stop()
+        self.watcher.stop()
+        executable = sys.executable if getattr(sys, "frozen", False) else __file__
+        with open(executable, "rb") as stream:
+            helper_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        report = {
+            # 安装结果中的 session 是数据类对象；测量报告只保留可审查的安装结果字段。
+            "result": {key: value for key, value in window.result.items() if key != "session"},
+            "helper_sha256": helper_sha,
+            "gui_thread_id": self.gui_thread_id,
+            "all_ui_callbacks_on_gui_thread": bool(self.ui_threads) and self.ui_threads == {self.gui_thread_id},
+            "worker_on_background_thread": getattr(window._worker, "run_thread_id", None) not in (None, self.gui_thread_id),
+            "heartbeat_count": len(self.heartbeat),
+            "max_heartbeat_gap_ms": max(b-a for a, b in zip(self.heartbeat, self.heartbeat[1:])) * 1000,
+            "download_seconds": self.download_seconds,
+            "fallback_exercised": self.fallback,
+            "speed_visible": self.speed_visible,
+            "max_log_blocks": self.max_blocks,
+        }
+        os.makedirs(os.path.dirname(self.report_path), exist_ok=True)
+        temporary = self.report_path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, ensure_ascii=False, indent=2)
+        os.replace(temporary, self.report_path)
+        window.close()
+        QApplication.instance().quit()
+
+
+def _run_session_ui(session_path: str, *, acceptance_report: str = "") -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(updater.UPDATE_HELPER_NAME)
     app.setFont(QFont("Microsoft YaHei", 10))
-    window = UpdateHelperWindow(session_path)
+    window = UpdateHelperWindow(session_path, acceptance_report=acceptance_report)
     window.show()
     return app.exec()
 
@@ -585,7 +657,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CanalHydraulicCalc update helper")
     parser.add_argument("--spawn-session")
     parser.add_argument("--run-session")
+    parser.add_argument("--acceptance-report", default="")
     args = parser.parse_args(argv)
+    if args.acceptance_report and not args.run_session:
+        parser.error("--acceptance-report 仅可与 --run-session 一起用于隔离验收")
 
     session_path = args.spawn_session or args.run_session
     if not session_path:
@@ -594,7 +669,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.spawn_session:
         _spawn_runner(session_path)
         return 0
-    return _run_session_ui(session_path)
+    return _run_session_ui(session_path, acceptance_report=args.acceptance_report)
 
 
 if __name__ == "__main__":

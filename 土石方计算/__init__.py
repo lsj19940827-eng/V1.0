@@ -2,7 +2,9 @@
 """
 土石方工程量计算模块
 
-Phase 1 — 核心算法层（无 UI 依赖）
+计算基础与历史原型入口（无 UI 依赖）。
+旧断面接口仅支持无衬砌全挖梯形；复杂施工使用显式区域算子。
+Rhino 联动与三类自动施工模板尚未实现，范围以联动 PRD 为准。
 
 顶层入口：EarthworkProject — 组织所有子模块协作的门面类（Facade）
 
@@ -10,7 +12,7 @@ Phase 1 — 核心算法层（无 UI 依赖）
     1. 导入地形数据（DXF / CSV / Excel）→ 构建 TIN
     2. 导入/配置中心线
     3. 导入/配置设计断面 + 纵坡
-    4. 配置开挖边坡 + 地质分层
+    4. 配置开挖边坡（地质分层为历史可选项）
     5. 切割断面（纵断面 + 横断面）
     6. 计算面积 + 工程量
     7. 导出 Excel 表格 + DXF 图纸
@@ -21,6 +23,7 @@ Phase 1 — 核心算法层（无 UI 依赖）
     proj.load_terrain_from_dxf("terrain.dxf", contour_layer="等高线")
     proj.build_tin()
     proj.load_centerline_from_dxf("centerline.dxf")
+    proj.set_design_section(DesignSection(bottom_width=3.0, depth=2.0))
     proj.set_design_profile_from_excel("design_profile.xlsx")
     proj.add_excavation_slope(ExcavationSlope(...))
     proj.run_all_sections(interval=20.0)
@@ -48,6 +51,9 @@ from 土石方计算.core.tin_builder import TINBuilder
 from 土石方计算.core.tin_interpolator import TINInterpolator
 from 土石方计算.core.profile_cutter import ProfileCutter
 from 土石方计算.core.cross_section import CrossSectionCalculator
+from 土石方计算.core.construction_geometry import (
+    ConstructionGeometryError, ConstructionStateResult, compute_construction_state,
+)
 from 土石方计算.core.volume_calculator import VolumeCalculator
 from 土石方计算.core.geology_layer import GeologyLayerManager
 from 土石方计算.io.dxf_terrain_reader import DXFTerrainReader
@@ -129,8 +135,13 @@ class EarthworkProject:
         pts, edges = reader.read_contours(
             layer=contour_layer, interval=contour_interval
         )
+        offset = len(self._terrain_points)
         self._terrain_points.extend(pts)
-        self._constraint_edges.extend(edges)
+        # 每份 DXF 返回局部点索引，合并来源时必须同步平移约束边。
+        self._constraint_edges.extend(
+            ConstraintEdge(i=edge.i + offset, j=edge.j + offset)
+            for edge in edges
+        )
 
         if elevation_point_layer is not None:
             elev_pts = reader.read_elevation_points(layer=elevation_point_layer)
@@ -245,7 +256,7 @@ class EarthworkProject:
         pts = reader.read_centerline(layer=layer)
         if len(pts) < 2:
             raise ValueError(f"DXF 中未找到足够的中心线折点（图层={layer!r}）")
-        self._alignment = Alignment.from_polyline_points(pts)
+        self.set_alignment(Alignment.from_polyline_points(pts))
 
     def load_centerline_from_csv(
         self,
@@ -258,15 +269,17 @@ class EarthworkProject:
     ) -> None:
         """从 CSV 桩号坐标表读取中心线"""
         reader = CSVTerrainReader()
-        self._alignment = reader.read_centerline(
+        alignment = reader.read_centerline(
             path, delimiter=delimiter,
             col_station=col_station, col_x=col_x, col_y=col_y,
             skip_rows=skip_rows,
         )
+        self.set_alignment(alignment)
 
     def set_alignment(self, alignment: Alignment) -> None:
         """直接设置中心线对象"""
         self._alignment = alignment
+        self._invalidate_calculations()
 
     @property
     def alignment(self) -> Optional[Alignment]:
@@ -279,10 +292,12 @@ class EarthworkProject:
     def set_design_section(self, design: DesignSection) -> None:
         """设置渠道设计断面参数"""
         self._design_section = design
+        self._invalidate_calculations()
 
     def set_design_profile(self, profile: DesignProfile) -> None:
         """设置纵断面设计（纵坡参数）"""
         self._design_profile = profile
+        self._invalidate_calculations()
 
     def set_design_profile_from_excel(
         self,
@@ -296,16 +311,18 @@ class EarthworkProject:
         table = reader.read_design_elevations(
             sheet=sheet, col_station=col_station, col_elevation=col_elevation
         )
-        self._design_profile = DesignProfile(
+        self.set_design_profile(DesignProfile(
             station_elevation_table=table, source="excel"
-        )
+        ))
 
     def add_excavation_slope(self, slope: ExcavationSlope) -> None:
         """添加一段开挖边坡配置（分桩号段指定）"""
         self._excavation_slopes.append(slope)
+        self._invalidate_calculations()
 
     def set_backfill_config(self, config: BackfillConfig) -> None:
         self._backfill_config = config
+        self._invalidate_calculations()
 
     # ==================================================================
     # 地质分层配置
@@ -356,6 +373,8 @@ class EarthworkProject:
         -------
         list[CrossSectionData]
         """
+        self._cross_sections = []
+        self._volume_result = None
         self._check_ready(need_tin=True, need_alignment=True)
         cutter = ProfileCutter(self._interpolator)
 
@@ -377,7 +396,12 @@ class EarthworkProject:
 
         # 若设计参数已配置，计算面积
         if self._design_section and self._design_profile and self._excavation_slopes:
-            self._compute_section_areas()
+            try:
+                self._compute_section_areas()
+            except Exception:
+                # 任一断面失败时不留下可被误导出的半套面积结果。
+                self._cross_sections = []
+                raise
 
         return self._cross_sections
 
@@ -403,17 +427,36 @@ class EarthworkProject:
     def compute_volumes(
         self,
         compute_tin_volume: bool = False,
+        *,
+        design_tin: Optional[TINModel] = None,
+        mid_sections: Optional[list[CrossSectionData]] = None,
     ) -> VolumeResult:
         """
-        计算全线土石方工程量（平均断面法 + 棱台法，可选 TIN 体积法）。
+        计算断面估算；显式提供中点断面后才形成独立的棱台法复核。
+
+        双曲面差量必须传入 design_tin，它不代表埋管的施工开挖回填量。
         """
+        self._volume_result = None
         if not self._cross_sections:
             raise RuntimeError("请先调用 run_cross_sections()")
+        if compute_tin_volume and (self._tin is None or design_tin is None):
+            raise ValueError("双曲面差量计算需要完整的原地形 TIN 和 design_tin")
         calc = VolumeCalculator()
-        self._volume_result = calc.compute_all(
-            self._cross_sections, self._alignment,
-            compute_tin_volume=compute_tin_volume,
-        )
+        if mid_sections is not None:
+            result = calc.compute_prismatoid_precise(
+                self._cross_sections, mid_sections, self._alignment
+            )
+            if compute_tin_volume:
+                result.tin_volume_excavation, result.tin_volume_fill = (
+                    calc._tin_volume_method(self._tin, design_tin, self._alignment)
+                )
+        else:
+            result = calc.compute_all(
+                self._cross_sections, self._alignment,
+                compute_tin_volume=compute_tin_volume,
+                ground_tin=self._tin, design_tin=design_tin,
+            )
+        self._volume_result = result
         return self._volume_result
 
     # ==================================================================
@@ -505,9 +548,9 @@ class EarthworkProject:
             from 土石方计算.models.section import BackfillConfig
             try:
                 proj._backfill_config = BackfillConfig(
-                    mode=BackfillMode(bf_data.get("mode", "fixed_thickness")),
-                    thickness=bf_data.get("thickness", 0.3),
-                    include_slope_backfill=bf_data.get("include_slope_backfill", True),
+                    mode=BackfillMode(bf_data.get("mode", "to_design")),
+                    thickness=bf_data.get("thickness", 0.0),
+                    include_slope_backfill=bf_data.get("include_slope_backfill", False),
                 )
             except (ValueError, KeyError):
                 pass
@@ -528,6 +571,10 @@ class EarthworkProject:
         """地形数据变更后使 TIN 和插值器失效"""
         self._tin = None
         self._interpolator = None
+        self._invalidate_calculations()
+
+    def _invalidate_calculations(self) -> None:
+        """输入通过配置接口变更后，旧断面与方量不能继续作为当前结果。"""
         self._longitudinal = None
         self._cross_sections = []
         self._volume_result = None
@@ -549,7 +596,7 @@ class EarthworkProject:
             )
             slope_cfg = self._get_slope_for_station(sec.station)
             if invert_elev is None or slope_cfg is None:
-                continue
+                raise ValueError(f"桩号 {sec.station} 缺少设计高程或开挖边坡，不能跳段计算")
             # 地质剖面（若地质分层管理器有数据）
             ground_center = next(
                 (p[1] for p in sec.ground_points if abs(p[0]) < 0.01),
@@ -687,6 +734,7 @@ class EarthworkProject:
 
 # 公共导出（方便 from 土石方计算 import ...）
 __all__ = [
+    "ConstructionGeometryError", "ConstructionStateResult", "compute_construction_state",
     "EarthworkProject",
     # models
     "TerrainPoint", "ConstraintEdge", "TINModel",

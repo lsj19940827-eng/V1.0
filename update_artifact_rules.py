@@ -17,8 +17,17 @@ RUNTIME_ARTIFACT_PATTERNS = [
     "_internal/data/siphon_autosave.json",
     "data/autosave/*",
     "_internal/data/autosave/*",
+    "data/siphon_cases/*",
+    "_internal/data/siphon_cases/*",
     "data/*_autosave.qxproj",
     "_internal/data/*_autosave.qxproj",
+    # 旧安装包曾附带的工程资料移出新包，保留已安装目录里的副本。
+    "data/*.dwg",
+    "_internal/data/*.dwg",
+    "data/*.xlsm",
+    "_internal/data/*.xlsm",
+    "data/default_project.siphon.json",
+    "_internal/data/default_project.siphon.json",
 ]
 
 # 成功安装后也要保住的用户数据。

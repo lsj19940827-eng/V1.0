@@ -13,6 +13,9 @@ matplotlib>=3.7.0       # 可视化（断面图、公式渲染）
 ezdxf>=1.0.0            # DXF文件解析
 Pillow>=9.0.0           # 图片处理
 shapely>=2.0.0          # 几何处理
+rhino3dm>=8.17,<9       # 独立成果读写；地形双精度读取使用随包 OpenNURBS 助手
+manifold3d>=3.5.4,<4    # 全线施工实体并集、交集、差集及重叠去重
+triangle>=20230923      # 旧二维地形的约束建网；Rhino 联动使用 Rhino 原生建网
 
 # 有压管道设计依赖
 scipy>=1.10.0           # 无压Manning方程数值求解

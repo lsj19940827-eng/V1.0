@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QMimeData, QSettings, QSize, QEvent, QTimer
 from PySide6.QtGui import QFont, QShortcut, QKeySequence, QDrag, QColor
 
+from 推求水面线.shared.section_lining import SECTION_SUMMARY_LINING_DEFAULTS, section_summary_lining
+
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, SearchLineEdit,
     ElevatedCardWidget, HeaderCardWidget, ListWidget, SegmentedWidget,
@@ -13642,6 +13644,12 @@ class SectionSummaryDialog(QDialog):
 
         struct_tabs = QTabWidget()
         struct_tabs.setStyleSheet("QTabWidget{font-size:11px;} QTabBar::tab{min-width:70px;}")
+        saved_lining = getattr(self._panel, "_custom_struct_thickness", None)
+
+        def _lining_edit(kind, key):
+            value = section_summary_lining(kind, saved_lining)[key]
+            default = SECTION_SUMMARY_LINING_DEFAULTS[kind][key]
+            return self._make_fixed_line_edit(self._ui_numeric_column_width, str(value), str(default))
 
         # ---- Tab 1: 明渠类 ----
         tab_channel = QWidget()
@@ -13689,13 +13697,13 @@ class SectionSummaryDialog(QDialog):
                 (2, QLabel("梯形明渠")),
             ],
         )
-        self._rect_ch_wall_t = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.3", "0.3")
+        self._rect_ch_wall_t = _lining_edit("rect_channel", "wall_t")
         tc_grid.addWidget(self._rect_ch_wall_t, 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         rc_tr_container, self._rect_ch_tie_w, self._rect_ch_tie_h = _tie_rod_pair()
         tc_grid.addWidget(rc_tr_container, 1, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
         # 梯形明渠
-        self._trap_ch_wall_t = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.3", "0.3")
+        self._trap_ch_wall_t = _lining_edit("trap_channel", "wall_t")
         tc_grid.addWidget(self._trap_ch_wall_t, 2, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         tp_tr_container, self._trap_ch_tie_w, self._trap_ch_tie_h = _tie_rod_pair()
         tc_grid.addWidget(tp_tr_container, 2, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
@@ -13747,13 +13755,17 @@ class SectionSummaryDialog(QDialog):
                 alignment=Qt.AlignLeft | Qt.AlignVCenter,
             )
 
-        self._set_grid_first_column_labels(tv_grid, [(1, QLabel("矩形暗涵"))])
-        self._culvert_t0 = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.4", "0.4")
+        self._set_grid_first_column_labels(tv_grid, [(1, QLabel("矩形暗涵")), (2, QLabel("圆拱直墙型暗涵"))])
+        self._culvert_t0 = _lining_edit("rect_culvert", "t0")
         tv_grid.addWidget(self._culvert_t0, 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        self._culvert_t1 = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.4", "0.4")
+        self._culvert_t1 = _lining_edit("rect_culvert", "t1")
         tv_grid.addWidget(self._culvert_t1, 1, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        self._culvert_t2 = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.4", "0.4")
+        self._culvert_t2 = _lining_edit("rect_culvert", "t2")
         tv_grid.addWidget(self._culvert_t2, 1, 3, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        self._arch_culvert_t0 = _lining_edit("rect_culvert_arch", "t0")
+        self._arch_culvert_t = _lining_edit("rect_culvert_arch", "t")
+        tv_grid.addWidget(self._arch_culvert_t0, 2, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        tv_grid.addWidget(self._arch_culvert_t, 2, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         tv_lay.addLayout(tv_grid)
         tv_lay.addStretch()
         struct_tabs.addTab(tab_culvert, "暗涵")
@@ -13783,7 +13795,8 @@ class SectionSummaryDialog(QDialog):
             name_lbl = QLabel(rc)
             name_lbl.setMinimumWidth(120)
             tt_grid.addWidget(name_lbl, ri + 1, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-            defaults = self._ROCK_LINING_DEFAULT[rc]
+            cached_lining = getattr(self._panel, "_custom_rock_lining", {}) or {}
+            defaults = {**self._ROCK_LINING_DEFAULT[rc], **(cached_lining.get(rc) or {})}
             t0_edit = self._make_fixed_line_edit(self._ui_numeric_column_width, str(defaults['t0']), str(defaults['t0']))
             tt_grid.addWidget(t0_edit, ri + 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
             t_edit = self._make_fixed_line_edit(self._ui_numeric_column_width, str(defaults['t']), str(defaults['t']))
@@ -14017,13 +14030,14 @@ class SectionSummaryDialog(QDialog):
 
     def _read_struct_thickness(self):
         """读取所有结构类型的用户自定义厚度参数，返回 dict。"""
+        defaults = SECTION_SUMMARY_LINING_DEFAULTS
         return {
             'rect_channel': {
-                'wall_t':  self._read_float(self._rect_ch_wall_t, 0.3),
+                'wall_t':  self._read_float(self._rect_ch_wall_t, defaults['rect_channel']['wall_t']),
                 'tie_rod': self._read_tie_rod(self._rect_ch_tie_w, self._rect_ch_tie_h),
             },
             'trap_channel': {
-                'wall_t':  self._read_float(self._trap_ch_wall_t, 0.3),
+                'wall_t':  self._read_float(self._trap_ch_wall_t, defaults['trap_channel']['wall_t']),
                 'tie_rod': self._read_tie_rod(self._trap_ch_tie_w, self._trap_ch_tie_h),
             },
             'aqueduct_u': {
@@ -14033,16 +14047,24 @@ class SectionSummaryDialog(QDialog):
                 'wall_t': self._read_float(self._aq_rect_wall_t, 0.35),
             },
             'rect_culvert': {
-                't0': self._read_float(self._culvert_t0, 0.4),
-                't1': self._read_float(self._culvert_t1, 0.4),
-                't2': self._read_float(self._culvert_t2, 0.4),
+                't0': self._read_float(self._culvert_t0, defaults['rect_culvert']['t0']),
+                't1': self._read_float(self._culvert_t1, defaults['rect_culvert']['t1']),
+                't2': self._read_float(self._culvert_t2, defaults['rect_culvert']['t2']),
             },
             'rect_culvert_arch': {
-                't0': self._read_float(self._culvert_t0, 0.4),
-                't': self._read_float(self._culvert_t1, 0.4),
+                't0': self._read_float(self._arch_culvert_t0, defaults['rect_culvert_arch']['t0']),
+                't': self._read_float(self._arch_culvert_t, defaults['rect_culvert_arch']['t']),
             },
             'rock_lining': self._read_rock_lining(),
         }
+
+    def _save_struct_thickness(self, thickness):
+        panel = self._panel
+        changed = thickness != getattr(panel, "_custom_struct_thickness", None)
+        panel._custom_struct_thickness = thickness
+        panel._custom_rock_lining = thickness['rock_lining']
+        if changed and (signal := getattr(panel, "data_changed", None)) is not None:
+            signal.emit()
 
     # ---- 生成 ----
     def _on_generate(self):
@@ -14095,15 +14117,13 @@ class SectionSummaryDialog(QDialog):
         # config_only 模式：只读取并缓存参数，不生成文件
         if self._config_only:
             struct_t = self._read_struct_thickness()
-            rock_lining = struct_t['rock_lining']
             if self._panel is not None:
-                self._panel._custom_rock_lining = rock_lining
-                self._panel._custom_struct_thickness = struct_t
                 self._panel._custom_tunnel_unified = {}
                 self._panel._custom_pressurized_pipe_params = {
                     "siphon": _serialize_pressurized_cache_rows(siphon_params, "siphon"),
                     "pressure_pipe": _serialize_pressurized_cache_rows(pressure_pipe_params, "pressure_pipe"),
                 }
+                self._save_struct_thickness(struct_t)
             self.accept()
             return
 
@@ -14255,13 +14275,12 @@ class SectionSummaryDialog(QDialog):
 
         # 存储到 panel，供"导出全部DXF"复用
         if self._panel is not None:
-            self._panel._custom_rock_lining = rock_lining
-            self._panel._custom_struct_thickness = struct_t
             self._panel._custom_tunnel_unified = {}
             self._panel._custom_pressurized_pipe_params = {
                 "siphon": _serialize_pressurized_cache_rows(siphon_params, "siphon"),
                 "pressure_pipe": _serialize_pressurized_cache_rows(pressure_pipe_params, "pressure_pipe"),
             }
+            self._save_struct_thickness(struct_t)
 
         # 构建有压管道 segments（与倒虹吸类似）
         pp_overrides = node_defaults.get("pressure_pipe", {})

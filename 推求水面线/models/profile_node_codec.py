@@ -1033,6 +1033,8 @@ class ProfileNodeCodec(ProfileNodeRules):
             if struct_str:
                 try:
                     node.structure_type = self._structure_type.from_string(struct_str)
+                    if struct_str.endswith("闸"):
+                        node.custom_gate_type = struct_str
                 except ValueError:
                     pass
                 if struct_str == "渐变段" or (node.structure_type and node.structure_type == self._structure_type.TRANSITION):
@@ -1273,31 +1275,21 @@ class ProfileNodeCodec(ProfileNodeRules):
             ip_text = _read_text(r, 4)
             node.ip_number = _parse_ip_number(r, ip_text)
             node.display_ip_number = _parse_display_ip_number(r, ip_text)
-            # 记录转弯半径是否来自用户/表格的显式输入；"0" 也算显式输入，不能再当成空白兜底。
+            # Preserve the entered text; the shared pipe rule resolves blank/0
+            # to 3D after actual diameters and structure types are available.
             _turn_radius_text = _read_text(r, 7)
             _turn_radius_is_explicit = bool(_turn_radius_text)
             node.turn_radius_is_explicit = _turn_radius_is_explicit
             node.turn_radius_text = _turn_radius_text if _turn_radius_is_explicit else ""
             _row_turn = self._sf(_turn_radius_text, 0.0) if _turn_radius_is_explicit else 0.0
-            # 新规则：转弯半径单元格留空也按 0 处理，不再回退到全局半径。
-            if _turn_radius_is_explicit:
-                node.turn_radius = _row_turn
-            else:
-                node.turn_radius = 0.0
-            # 有压管道仅保留表格中的显式值；留空统一按 0 处理。
-            try:
-                _struct_for_turn = str(data[2]).strip()
-                _is_pressure_turn = self._is_pressure_pipe_like_structure_text(_struct_for_turn)
-                _is_siphon_turn = "倒虹吸" in _struct_for_turn
-                if _is_pressure_turn:
-                    if _turn_radius_is_explicit:
-                        node.turn_radius = _row_turn
-                    else:
-                        node.turn_radius = 0.0
-                elif _is_siphon_turn and _turn_radius_is_explicit:
-                    node.turn_radius = _row_turn
-            except Exception:
-                pass
+            node.turn_radius = _row_turn
+            node.turn_radius_source = "manual" if _turn_radius_is_explicit else ""
+            radius_state = self._get_row_payload(r).get("_turn_radius_state")
+            if isinstance(radius_state, dict) and radius_state.get("display_text") == _turn_radius_text:
+                node.turn_radius = self._sf(radius_state.get("value"), _row_turn)
+                for field in ("turn_radius_source", "turn_radius_is_explicit", "turn_radius_text",
+                              "turn_radius_default_value", "turn_radius_default_diameter", "turn_radius_default_diameter_source", "turn_radius_default_multiplier"):
+                    if field in radius_state:setattr(node, field, radius_state[field])
 
             # ===== 几何结果列 (8-19) =====
             # 转角 (col 8)
@@ -1516,6 +1508,8 @@ class ProfileNodeCodec(ProfileNodeRules):
             node.profile_row_id = self._state.rows[r].row_id
             nodes.append(node)
         restore_gate_water_levels(nodes)
+        from 推求水面线.shared.turn_radius import apply_default_turn_radii
+        apply_default_turn_radii(nodes)
         self._pressure_turn_radius_fallback_groups = set()
         return nodes
 

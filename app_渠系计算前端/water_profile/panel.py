@@ -22,6 +22,8 @@ import math
 import re
 import copy
 import datetime
+import hashlib
+import json
 from contextlib import contextmanager
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1325,6 +1327,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
 
     # 数据变化信号（用于项目管理器追踪脏状态）
     data_changed = Signal()
+    earthwork_requested = Signal()
 
     def _get_profile_state(self):
         """兼容直接构造测试替身，工程数据只由独立会话对象持有。"""
@@ -1429,6 +1432,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         self.nodes = []
         self.calculated_nodes = []
         self._settings = None
+        self._water_result_settings = None
+        self._water_result_signature = None
         self.btn_pressure_pipe_calc = None
         self.btn_pressure_pipe_water_hammer = None
         self._node_toolbar_layout_preset = NODE_TOOLBAR_LAYOUT_PRESET
@@ -1555,6 +1560,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         self._section_input_table = None
         self._section_result_table = None
         self._init_ui()
+        for name in ("channel_name_edit","start_wl_edit","start_station_edit","roughness_edit","turn_radius_edit",
+                     "trans_inlet_zeta","trans_outlet_zeta","oc_trans_zeta","siphon_inlet_zeta","siphon_outlet_zeta"):
+            getattr(self,name).textChanged.connect(self._on_water_input_changed)
+        for name in ("channel_level_combo","trans_inlet_combo","trans_outlet_combo","oc_trans_combo",
+                     "siphon_inlet_combo","siphon_outlet_combo"):
+            getattr(self,name).currentTextChanged.connect(self._on_water_input_changed)
 
     # ================================================================
     # UI 构建
@@ -2275,6 +2286,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
 
         self.node_table = FrozenColumnTableWidget(0, len(NODE_ALL_HEADERS), frozen_count=4)
         self.node_table.setHorizontalHeaderLabels(NODE_ALL_HEADERS)
+        self.node_table.horizontalHeaderItem(7).setToolTip("管道转弯半径：空白或0按R=3D，正值按填写值采用；可在管道配置中修改。")
         self.node_table.horizontalHeader().setStretchLastSection(False)
         self.node_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.node_table.horizontalHeader().setMinimumSectionSize(50)
@@ -2326,6 +2338,10 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         btn_export_excel.clicked.connect(self._export_excel)
         btn_export_word = PushButton("导出Word")
         btn_export_word.clicked.connect(self._export_word)
+        self.btn_earthwork = PushButton("转入挖填算量")
+        self.btn_earthwork.setToolTip("直接带入当前计算的线路、渠底渠顶高程和断面尺寸，不需要导出中间文件")
+        self.btn_earthwork.clicked.connect(self._request_earthwork)
+        tb.addWidget(self.btn_earthwork)
         for w in [btn_export_excel, btn_export_word]:
             tb.addWidget(w)
         lay.addLayout(tb)
@@ -2726,8 +2742,9 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         self._btn_section_calc.setText("取消断面计算" if running else "开始批量计算")
         self.node_table.setEnabled(not running)
         for button in (self._btn_calc, self._btn_transition, self._btn_siphon,
-                       self.btn_pressure_pipe_calc, self.btn_pressure_pipe_water_hammer):
+                       self.btn_pressure_pipe_calc, self.btn_pressure_pipe_water_hammer,self.btn_earthwork):
             button.setEnabled(not running and bool(self._section_sync_ready))
+        self._refresh_earthwork_action()
 
     def _on_section_calculation_discarded(self):
         self._mark_section_results_stale("状态：断面计算已取消或输入已变化，请重新计算")
@@ -2766,7 +2783,10 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             )
             return
 
-        if not self._sync_to_water_profile_table():
+        # An asynchronous cache hit already owns these synchronized rows.
+        reuse_synced_results = (outcome is None and expected is not None
+                               and self._section_sync_ready and self.node_table.rowCount() > 0)
+        if not reuse_synced_results and not self._sync_to_water_profile_table():
             self._mark_section_results_stale("状态：同步到表3失败，请重试", status_kind="error")
             return
 
@@ -2868,10 +2888,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             getattr(self, "btn_pressure_pipe_calc", None),
             getattr(self, "_btn_calc", None),
             getattr(self, "btn_pressure_pipe_water_hammer", None),
+            getattr(self, "btn_earthwork", None),
         ]
         for btn in buttons:
             if btn is not None:
                 btn.setEnabled(bool(enabled))
+        self._refresh_earthwork_action()
         if state_text:
             final_kind = status_kind
             if not final_kind:
@@ -6576,7 +6598,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             "  - 建筑物名称：节点名称（如隧洞1、渡槽2）",
             "  - 结构形式：双击选择断面类型（含闸·分水等）",
             "  - X/Y：平面坐标（用于几何计算）",
-            "  - 转弯半径：行内留空或填 0 时按 0 处理",
+            "  - 有压管道、倒虹吸转弯半径空白或0按 R=3D；正值按填写值采用，可在管道配置中修改",
             "  - 顶部转弯半径栏位：仅在点击「应用」后才统一覆盖真实导入行",
             "  - 底宽B/直径D/半径R/边坡m：断面几何参数",
             "  - 糙率n/底坡1/i/流量Q：水力参数（留空使用全局设置）", "",
@@ -6850,6 +6872,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         # 仅对可编辑列触发
         if col not in EDITABLE_COLS:
             return
+        if col == 7:
+            self._set_row_payload_value(row, "_turn_radius_state", None)
         batch = getattr(self, '_loss_delete_batch', None)
         if batch is not None:
             batch['columns'].add(col)
@@ -7013,6 +7037,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             self._update_pressure_pipe_roughness_overview(
                 self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes_for_view)
             )
+        self._refresh_earthwork_action()
 
     def _append_loss_undo_snapshot(self, snapshot):
         """将单元格编辑快照压入撤销栈（统一入口）。"""
@@ -7558,6 +7583,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     node.top_elevation = _rf(r, 43)
         self._sync_gate_water_levels_from_table()
         self._refresh_gate_elevation_cells()
+        self._record_water_result_basis()
 
     # ================================================================
     def _add_node_row(self, data=None, _skip_undo=False, _from_table1_source=False, _defer_controls_refresh=False):
@@ -7819,7 +7845,10 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         edit.setText(format_input_number(uniform_positive, 1))
 
     def _node_has_explicit_turn_radius(self, node) -> bool:
-        """判断节点是否带有用户显式填写的转弯半径。"""
+        """Only a positive entered radius overrides the pipe default."""
+        try:
+            if float(getattr(node,"turn_radius",0.) or 0.)==0.:return False
+        except (TypeError,ValueError):pass
         text = str(getattr(node, "turn_radius_text", "") or "").strip()
         if text and text != "-":
             return True
@@ -7859,6 +7888,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             if abs(turn_radius) <= 1e-12:
                 return "0"
             return format_input_number(turn_radius, 1)
+        if turn_radius > 0 and getattr(node,"turn_radius_source","")=="default_3d":
+            return f"{turn_radius:.6f}".rstrip("0").rstrip(".")
         if turn_radius > 0:
             return format_input_number(turn_radius, 1)
         if self._node_is_source_row(node):
@@ -8129,7 +8160,10 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             row_data[2] = section_type
             row_data[5] = x_text
             row_data[6] = y_text
-            row_data[7] = tr_r_text if tr_r_text and tr_r_text != "-" else (fmt(tr_r) if tr_r > 0 else "0")
+            explicit_radius=bool(getattr(sr,"turn_radius_is_explicit",False) or _raw_result.get("turn_radius_is_explicit",False))
+            from 推求水面线.shared.turn_radius import is_pipe_radius_node
+            pipe_default_radius=is_pipe_radius_node({"structure_type":section_type})
+            row_data[7] = tr_r_text if tr_r_text and tr_r_text != "-" else (fmt(tr_r) if tr_r > 0 else "0" if explicit_radius or not pipe_default_radius else "")
             row_data[20] = fmt(B) if B else ""
             row_data[21] = fmt(D) if D else ""
             row_data[22] = fmt(R) if R else ""
@@ -8153,6 +8187,14 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     payload = {}
                 # use_increase 是自由水面导出链路的重要运行态字段，不能只在有压流参数存在时才落盘。
                 payload[USE_INCREASE_ROLE_KEY] = use_increase
+                radius_source=str(getattr(sr,"turn_radius_source","") or _raw_result.get("turn_radius_source","") or "")
+                if radius_source=="default_3d":
+                    radius_state={"display_text":row_data[7],"value":tr_r,"turn_radius_source":radius_source,
+                                  "turn_radius_is_explicit":False,"turn_radius_text":""}
+                    for field,default in (("turn_radius_default_value",tr_r),("turn_radius_default_diameter",D),
+                                          ("turn_radius_default_diameter_source","node"),("turn_radius_default_multiplier",3.)):
+                        radius_state[field]=_raw_result.get(field,getattr(sr,field,default))
+                    payload["_turn_radius_state"]=radius_state
                 spillway_payload = raw_result.get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {})
                 if is_spillway_steep_chute_value(section_type):
                     spillway_payload = copy.deepcopy(spillway_payload) if isinstance(spillway_payload, dict) else {}
@@ -8338,7 +8380,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         del table_signal_blocker
 
         InfoBar.success("导入成功",
-                       f"已导入 {imported} 个节点，已自动填充流量。转弯半径按各行导入值保留；如需统一，请在顶部填写后点击“应用”。{next_steps}",
+                       f"已导入 {imported} 个节点，已自动填充流量。管道转弯半径空白或0按R=3D；正值保留，可在管道配置中修改。{next_steps}",
                        parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
 
     def _recalculate_geometry(self):
@@ -8346,7 +8388,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         导入数据后触发几何计算（与原版Tkinter recalculate对齐）
 
         流程：
-        1. 保留表格中的行级转弯半径；留空或填 0 的行按 0 参与几何计算；
+        1. 保留正值行级转弯半径，管道空白或0采用持久化默认 R=3D；
            顶部栏位仅作为待应用统一值，不在这里自动介入
         2. 构建节点 → calculate_geometry → preprocess_nodes
         3. 回写几何结果列(8-19) + 进出口(3) + IP(4)；转弯半径列按行级原始语义保留
@@ -8362,7 +8404,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             return
 
         # ---- 1. 记录显式填写的转弯半径行 ----
-        # 新规则：留空统一按 0 处理，不再为任何结构自动填充全局/临时半径。
+        # 正值保留，管道空白或0由共享规则采用R=3D。
         siphon_rows_with_existing = set()
         pressure_rows_with_existing = set()
         for r in range(self.node_table.rowCount()):
@@ -8418,7 +8460,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             })
             self.node_table.setItem(r, 4, item)
 
-            # 转弯半径 (col 7) — 新规则：源行留空按 0 显示，不再自动套全局半径。
+            # 显示实际采用半径，并保留默认/显式来源供下一轮解码。
             turn_radius_text = self._format_node_turn_radius_display_text(node, r)
             item = QTableWidgetItem(turn_radius_text)
             item.setTextAlignment(Qt.AlignCenter)
@@ -8452,76 +8494,28 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 payload = first_item.data(Qt.UserRole)
                 payload = payload if isinstance(payload, dict) else {}
                 payload.setdefault('_numeric_display_values', {}).update(self._node_numeric_display_payload(node, geo_data))
+                payload['_turn_radius_state']=self._turn_radius_row_metadata(node,turn_radius_text)
                 first_item.setData(Qt.UserRole, payload)
 
         auto_resize_table(self.node_table)
         self._rebuild_calculation_summary_state(nodes)
 
     def fill_turn_radius_for_geometry(self, nodes, n):
-        """
-        为有压管道节点填充临时转弯半径 R = n × D
-        
-        在几何计算前调用，为有压管道节点临时填充转弯半径值供几何计算使用。
-        
-        Args:
-            nodes: ChannelNode 列表
-            n: 转弯半径倍数（R = n × D）
-            
-        Requirements: 8.1, 8.2, 8.3
-        """
-        if not nodes:
-            return
-        
-        for node in nodes:
-            # 只处理有压管道节点
-            if not node.is_pressure_pipe:
-                continue
-            
-            # 用户显式填写的值（包含0）一律保留，不参与临时半径填充
-            if self._node_has_explicit_turn_radius(node):
-                continue
-            
-            # 如果已有非零转弯半径值，保留不变（可能是用户导入或手动输入的值）
-            if node.turn_radius and node.turn_radius > 0:
-                continue
-            
-            # 从 section_params 中获取管径 D
-            diameter_D = node.section_params.get('D', 0.0)
-            if diameter_D <= 0:
-                continue
-            
-            # 计算临时转弯半径 R = n × D
-            node.turn_radius = n * diameter_D
+        """Adopt a persistent pipe radius; explicit row values keep priority."""
+        from 推求水面线.shared.turn_radius import apply_default_turn_radii
+        apply_default_turn_radii(nodes or [],multiplier=n)
     
     def clear_temporary_turn_radius(self, nodes):
-        """
-        清空有压管道节点的临时转弯半径
-        
-        在几何计算后调用，清空临时写入的转弯半径值。
-        但保留从水力计算回写的值（检查 head_loss_siphon/external_head_loss 字段）。
-        
-        Args:
-            nodes: ChannelNode 列表
-            
-        Requirements: 8.4, 8.5
-        """
-        if not nodes:
-            return
-        
-        for node in nodes:
-            # 只处理有压管道节点
-            if not node.is_pressure_pipe:
-                continue
-            
-            # 已写回损失值（新字段或旧兼容字段）时，保留转弯半径不清空
-            ext_loss = getattr(node, 'external_head_loss', None)
-            siphon_loss = getattr(node, 'head_loss_siphon', 0.0) or 0.0
-            named_group_result = self._get_pressure_pipe_named_group_result(node)
-            if (ext_loss is not None and ext_loss > 0) or siphon_loss > 0 or named_group_result:
-                continue
-            
-            # 清空临时转弯半径
-            node.turn_radius = 0.0
+        """Compatibility hook: adopted radii remain part of saved geometry."""
+        return
+
+    @staticmethod
+    def _turn_radius_row_metadata(node,display_text):
+        return {"display_text":str(display_text or ""),"value":float(getattr(node,"turn_radius",0.) or 0.),
+                **{field:getattr(node,field,default) for field,default in (
+                    ("turn_radius_source",""),("turn_radius_is_explicit",False),("turn_radius_text",""),
+                    ("turn_radius_default_value",0.),("turn_radius_default_diameter",0.),("turn_radius_default_diameter_source",""),
+                    ("turn_radius_default_multiplier",3.))}}
 
     def _sync_batch_settings(self):
         """从断面计算输入区同步渠道基础信息"""
@@ -8758,6 +8752,54 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
 
         return nodes, settings, calculator
 
+    def _water_input_signature(self, settings=None):
+        settings=self._build_settings().to_dict() if settings is None else settings
+        rows=[[self.node_table.item(row,col).text().strip() if self.node_table.item(row,col) else ""
+               for col in sorted(EDITABLE_COLS)] for row in range(self.node_table.rowCount())]
+        value={"settings":settings,"rows":rows,"structure_heights":self._node_structure_heights,
+               "chamfer_params":self._node_chamfer_params,"u_params":self._node_u_params}
+        return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,default=str).encode("utf8")).hexdigest()
+
+    def is_water_result_current(self):
+        return bool(self.calculated_nodes and self._water_result_signature
+                    and self._water_result_signature==self._water_input_signature())
+
+    def _refresh_earthwork_action(self):
+        button=getattr(self,"btn_earthwork",None)
+        if button is not None:
+            button.setEnabled(bool(getattr(self,"_section_sync_ready",False))
+                and not self.is_calculation_running() and not self._batch_backend.is_calculation_running()
+                and self.is_water_result_current())
+
+    def _on_water_input_changed(self,*_):
+        if getattr(self,"_loading_project",False) or self._updating_cells:return
+        self._refresh_earthwork_action()
+        self.data_changed.emit()
+
+    def _record_water_result_basis(self,settings=None):
+        # Partial loss writeback retains the settings of the last full water
+        # calculation; it cannot silently accept a changed roughness or flow.
+        if settings is not None:
+            self._water_result_settings=copy.deepcopy(settings.to_dict() if hasattr(settings,"to_dict") else settings)
+        if self.calculated_nodes and self._water_result_settings is not None:
+            self._water_result_signature=self._water_input_signature(self._water_result_settings)
+        self._refresh_earthwork_action()
+
+    def _request_earthwork(self):
+        if not self._ensure_downstream_ready("转入挖填算量"):
+            return
+        if self.is_calculation_running():
+            InfoBar.warning("水面线计算中", "计算完成后即可带入挖填工程量。", parent=self, duration=3500)
+            return
+        if not self.calculated_nodes:
+            InfoBar.warning("尚无水面线成果", "先完成本工程的水面线计算，再直接转入算量。", parent=self, duration=4000)
+            return
+        if not self.is_water_result_current():
+            InfoBar.info("水面线成果待更新", "计算输入已修改，请重新推求水面线后再转入挖填算量。",
+                         parent=self, duration=4000)
+            return
+        self.earthwork_requested.emit()
+
     def _apply_calculation_result(self, calculated, settings, calculator):
         """所有控件、报表与摘要更新统一回到界面线程。"""
         self.calculated_nodes = calculated
@@ -8776,6 +8818,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
 
         # 更新持久摘要面板
         self._update_summary_panel(calculated, total_len, wl_drop, summary)
+        self._record_water_result_basis(settings)
 
         # 检查缺少结构高度（渠顶高程无法计算）的节点。
         # 承压类节点已有独立导出与展示口径，这里只提示真正依赖结构总高的普通渠道/隧洞节点。
@@ -8840,8 +8883,9 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
         self._btn_calc.setText("取消计算" if running else "执行计算")
         # 修改输入仍可继续；会覆盖整表的其他计算流程在任务结束后再启用。
         self._btn_section_calc.setEnabled(not running)
-        for button in (self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc):
+        for button in (self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc,self.btn_earthwork):
             button.setEnabled(not running and bool(self._section_sync_ready))
+        self._refresh_earthwork_action()
 
     def _start_calculation(self):
         """后台只运行快照计算；迟到、取消或输入变更的结果不写回。"""
@@ -8909,6 +8953,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             wl_drop = summary.get('水位落差', 0.0)
             self._refresh_building_length_state(calculated, calculator)
             self._update_summary_panel(calculated, total_len, wl_drop, summary)
+            self._record_water_result_basis(settings)
         except Exception:
             import traceback
             traceback.print_exc()
@@ -9177,6 +9222,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 if not isinstance(payload, dict):
                     payload = {}
                 payload['_numeric_display_values'] = self._node_numeric_display_payload(node, vals)
+                payload['_turn_radius_state']=self._turn_radius_row_metadata(node,vals[7])
                 if _is_auto_ch:
                     payload.update({
                         "_auto_channel": True,
@@ -10570,6 +10616,7 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                 if not isinstance(payload, dict):
                     payload = {}
                 payload['_numeric_display_values'] = self._node_numeric_display_payload(node, vals)
+                payload['_turn_radius_state']=self._turn_radius_row_metadata(node,vals[7])
                 compound_trapezoid_params = {}
                 if getattr(node, 'connection_source_details', None):
                     payload['_connection_source_details'] = copy.deepcopy(node.connection_source_details)
@@ -14282,6 +14329,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             else:
                 result["fill_groups"] += 1
             radius_text = f"{turn_r:.2f}"
+            reset_default=bool(cfg.get("reset_default",False))
+            if reset_default:radius_text="0"
             if self._is_pressure_pipe_row_segment_group(group):
                 row_indices = [self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))]
             else:
@@ -14291,9 +14340,12 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
                     continue
                 cur_text = self._get_table_turn_radius_text(row_idx)
                 cur_val = self._parse_item_float(self.node_table.item(row_idx, 7))
-                if (not force_override) and cur_text:
+                radius_state=self._get_node_row_payload(row_idx).get("_turn_radius_state") or {}
+                automatic=(radius_state.get("turn_radius_source")=="default_3d" and radius_state.get("display_text")==cur_text) or self._try_parse_turn_radius_text(cur_text)==0.
+                if (not force_override) and cur_text and not automatic:
                     continue
-                if abs(cur_val - turn_r) <= 1e-9:
+                self._set_row_payload_value(row_idx,"_turn_radius_state",None)
+                if not reset_default and abs(cur_val - turn_r) <= 1e-9:
                     continue
                 self._set_table_cell_text_preserve_flags(row_idx, 7, radius_text)
                 result["changed_cells"] += 1
@@ -16127,6 +16179,9 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             "project_settings": project_settings,
             "nodes": nodes_data,
             "calculated_nodes": calculated_nodes_data,
+            "water_result_current": self.is_water_result_current(),
+            "water_result_settings": copy.deepcopy(self._water_result_settings),
+            "water_result_input_signature": self._water_result_signature,
             # 与计算结果一起保存详细过程，重开后可直接导出原计算书。
             "detail_report_text": self.detail_text.toPlainText() if calculated_nodes_data else "",
             "table_state": table_state.to_dict(),
@@ -16248,6 +16303,8 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             proj_settings = d.get("project_settings", {})
             if proj_settings:
                 self._settings = ProjectSettings.from_dict(proj_settings)
+                if "roughness" not in ui:
+                    self.roughness_edit.setText(str(self._settings.roughness))
                 self._load_transition_length_rules(
                     getattr(self._settings, "transition_length_rules", []) or []
                 )
@@ -16514,6 +16571,19 @@ class WaterProfilePanel(QWidget, ProfileNodeRules):
             self._pre_edit_cell_value = None
             self._undo_group = 0
             self._loss_delete_batch = None
+            from .saved_results import has_restorable_water_result, legacy_water_settings_match
+
+            self._water_result_settings = copy.deepcopy(d.get("water_result_settings") or proj_settings or {})
+            self._water_result_signature = d.get("water_result_input_signature")
+            if self.calculated_nodes and has_restorable_water_result(d):
+                current_settings = self._build_settings().to_dict()
+                if ((not self._water_result_signature or self._water_result_settings != current_settings)
+                        and legacy_water_settings_match(self._water_result_settings, ui, current_settings)
+                        and (not self._water_result_signature or self._water_result_signature
+                             == self._water_input_signature(self._water_result_settings))):
+                    self._water_result_settings = current_settings
+                    self._water_result_signature = self._water_input_signature(current_settings)
+            self._refresh_earthwork_action()
             QTimer.singleShot(0, self, self._adjust_splitter_for_settings)
             
         finally:

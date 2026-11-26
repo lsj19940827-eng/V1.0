@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if __package__ and __package__.startswith("推求水面线."):
     from ..models.data_models import ChannelNode, ProjectSettings
     from ..models.enums import StructureType, InOutType
+    from ..shared.turn_radius import resolve_turn_radius
     from ..config.constants import (
         GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION,
         ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
@@ -42,6 +43,7 @@ if __package__ and __package__.startswith("推求水面线."):
 else:
     from models.data_models import ChannelNode, ProjectSettings
     from models.enums import StructureType, InOutType
+    from shared.turn_radius import resolve_turn_radius
     from config.constants import (
         GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION,
         ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
@@ -129,13 +131,7 @@ class HydraulicCalculator:
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
-        # 新规则：表格留空也按 0 处理，不再回退到全局值。
-        if bool(getattr(node, "turn_radius_is_explicit", False)):
-            return float(getattr(node, "turn_radius", 0.0) or 0.0)
-        turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
-        if turn_radius > ZERO_TOLERANCE:
-            return turn_radius
-        return 0.0
+        return resolve_turn_radius(node, multiplier=getattr(self.settings, "pipe_turn_radius_n", 3.0))
 
     def _is_unnamed_regular_pressure_pipe(self, node: Optional[ChannelNode]) -> bool:
         """判断是否为空名称普通有压管道行。"""
@@ -192,13 +188,27 @@ class HydraulicCalculator:
         }
 
     def _gate_approach_reference(self, nodes, gate_index):
-        """闸本体没有断面参数，来流区间采用同流量段上游的有效断面。"""
+        """闸本体没有断面参数，来流区间采用闸前流量段的有效断面。"""
         gate = nodes[gate_index]
+        flow_section = str(gate.flow_section)
+        if gate.get_structure_type_str() in {"分水闸", "分水口"}:
+            # 断面表可将分水节点归入闸后流量段。只有两侧流量明确表明
+            # 此口径时，才沿用最近上游流量段，且保留原闸行数据。
+            upstream = next((n for n in reversed(nodes[:gate_index])
+                             if not n.is_transition and not self._is_gate_elevation_target(n)), None)
+            downstream = next((n for n in nodes[gate_index + 1:]
+                               if not n.is_transition and not self._is_gate_elevation_target(n)), None)
+            if upstream is not None and downstream is not None and str(downstream.flow_section) == flow_section:
+                incoming, outgoing, listed = (self._finite_float_or_none(n.flow)
+                                              for n in (upstream, downstream, gate))
+                if (incoming is not None and outgoing is not None and listed is not None
+                        and incoming > outgoing > 0 and math.isclose(listed, outgoing, rel_tol=1e-7)):
+                    flow_section = str(upstream.flow_section)
         for index in range(gate_index - 1, -1, -1):
             candidate = nodes[index]
             if candidate.is_transition or self._is_gate_elevation_target(candidate):
                 continue
-            if str(candidate.flow_section) != str(gate.flow_section):
+            if str(candidate.flow_section) != flow_section:
                 continue
             slope = self._finite_float_or_none(candidate.slope_i)
             if slope is not None and slope > 0:
@@ -220,7 +230,7 @@ class HydraulicCalculator:
         if context['effective_length'] > ZERO_TOLERANCE:
             reference_index, reference = self._gate_approach_reference(nodes, gate_index)
             if reference is None:
-                raise ValueError(f"{gate.name or '闸'}上游至闸存在有长来流区间，但同流量段缺少有效底坡或断面，无法完整计算沿程损失")
+                raise ValueError(f"{gate.name or '闸'}上游至闸存在有长来流区间，但闸前流量段缺少有效底坡或断面，无法完整计算沿程损失")
             # 临时借用水力断面，保留两个实际端点的桩号和弧段；不向闸写入虚构断面。
             target = copy.copy(reference)
             start = copy.copy(reference) if self._is_gate_elevation_target(previous) else copy.copy(previous)

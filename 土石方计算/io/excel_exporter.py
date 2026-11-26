@@ -248,10 +248,13 @@ class EarthworkExcelExporter:
         self._write_title(ws, project_name + " — 工程量汇总表", col_span=4)
 
         layer_totals = result.total_by_layer_avg()
+        prism_note = ("实际中点断面复核" if result.prismatoid_independent
+                      else "中点取端面积均值，仅为兼容估算，不是独立复核")
         rows_data = [
             ("开挖总量（平均断面法）", round(result.total_excavation_avg, 1), "m³", ""),
-            ("开挖总量（棱台法）", round(result.total_excavation_prismatoid, 1), "m³", ""),
+            ("开挖总量（棱台公式）", round(result.total_excavation_prismatoid, 1), "m³", prism_note),
             ("回填总量（平均断面法）", round(result.total_fill_avg, 1), "m³", ""),
+            ("回填总量（棱台公式）", round(result.total_fill_prismatoid, 1), "m³", prism_note),
         ]
         for ln, vol in layer_totals.items():
             rows_data.append((f"{ln}开挖量（平均断面法）", round(vol, 1), "m³", ""))
@@ -285,7 +288,7 @@ class EarthworkExcelExporter:
 
     def _write_comparison_sheet(self, wb, result: VolumeResult) -> None:
         ws = wb.create_sheet("方法对比")
-        self._write_title(ws, "三种土石方计算方法对比", col_span=5)
+        self._write_title(ws, "断面估算与双曲面差量对比", col_span=5)
 
         headers = ["计算方法", "开挖方量(m³)", "回填方量(m³)", "与平均断面法差异", "备注"]
         self._write_headers(ws, headers, row=2)
@@ -303,12 +306,14 @@ class EarthworkExcelExporter:
         data = [
             ("平均断面法", round(avg_exc, 1),
              round(result.total_fill_avg, 1), "基准", "水利行业常用"),
-            ("棱台法", round(pris_exc, 1),
-             round(result.total_fill_avg, 1), diff_pct(pris_exc), "面积变化大时精度更高"),
-            ("TIN体积法",
+            ("棱台公式", round(pris_exc, 1),
+             round(result.total_fill_prismatoid, 1),
+             diff_pct(pris_exc) if result.prismatoid_independent else "非独立复核",
+             "使用实际中点断面" if result.prismatoid_independent else "中点取端面积均值"),
+            ("TIN双曲面差量",
              round(tin_exc, 1) if tin_exc is not None else "-",
-             round(result.tin_volume_fill, 1) if result.tin_volume_fill else "-",
-             diff_pct(tin_exc), "三维精确法，计算量大"),
+             round(result.tin_volume_fill, 1) if result.tin_volume_fill is not None else "-",
+             diff_pct(tin_exc), "共同覆盖域内双曲面差量，不代表埋管施工量"),
         ]
 
         for i, row_data in enumerate(data):

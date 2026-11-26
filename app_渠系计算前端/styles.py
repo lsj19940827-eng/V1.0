@@ -123,6 +123,21 @@ T1 = "#212121"      # 主文字色
 T2 = "#424242"      # 次文字色
 
 
+# Fusion 的菜单式弹出层从 QComboBox 读取选中色，列表式弹出层从视图读取。
+_COMBO_SELECTION = "#225EA8"
+COMBO_BOX_POPUP_STYLE = f"""
+QComboBox, QComboBox QAbstractItemView {{
+    selection-background-color: {_COMBO_SELECTION};
+    selection-color: white;
+}}
+QComboBox QAbstractItemView {{
+    background: palette(base);
+    border: 1px solid #B9C9D8;
+}}
+QComboBox QAbstractItemView::item:selected {{ background: {_COMBO_SELECTION}; color: white; }}
+"""
+
+
 # ============================================================
 # 全局QSS样式（仅覆盖QFluentWidgets不接管的原生组件）
 # ============================================================
@@ -141,6 +156,7 @@ QTabWidget::pane {{ border: 1px solid {BD}; border-radius: 4px; background: {CAR
 QTabBar::tab {{ background: #E8EAF6; color: {T1}; padding: 8px 18px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: 12px; }}
 QTabBar::tab:selected {{ background: {P}; color: white; font-weight: bold; }}
 QStatusBar {{ background: {CARD}; border-top: 1px solid {BD}; font-size: 11px; color: {T2}; }}
+{COMBO_BOX_POPUP_STYLE}
 """
 
 

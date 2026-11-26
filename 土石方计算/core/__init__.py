@@ -5,10 +5,16 @@ from .tin_builder import TINBuilder
 from .tin_interpolator import TINInterpolator
 from .profile_cutter import ProfileCutter
 from .cross_section import CrossSectionCalculator
+from .construction_geometry import (
+    ConstructionGeometryError, ConstructionStateResult, compute_construction_state,
+)
 from .volume_calculator import VolumeCalculator
 from .geology_layer import GeologyLayerManager
 
 __all__ = [
+    "ConstructionGeometryError",
+    "ConstructionStateResult",
+    "compute_construction_state",
     "TINBuilder",
     "TINInterpolator",
     "ProfileCutter",

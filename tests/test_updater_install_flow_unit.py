@@ -2,12 +2,103 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 import zipfile
 from pathlib import Path
 
 import pytest
 
 import updater
+
+
+def test_proxy_probe_rejects_html_landing_page(monkeypatch):
+    url = "https://github.com/example/app/releases/download/v1/full.zip"
+    monkeypatch.setattr(updater, "_DOWNLOAD_PROXIES", ["https://proxy.example/", ""])
+
+    class Response:
+        status = 200
+
+        def __init__(self, content_type):
+            self.headers = {"Content-Type": content_type}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    def open_probe(request, *, timeout):
+        if request.full_url.startswith("https://proxy.example/"):
+            return Response("text/html; charset=utf-8")
+        time.sleep(0.02)
+        return Response("application/octet-stream")
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", open_probe)
+
+    assert updater._pick_fastest_url(url) == url
+
+
+def test_selected_proxy_failure_resumes_direct_without_probing_again(tmp_path, monkeypatch):
+    url = "https://github.com/example/app/releases/download/v1/full.zip"
+    proxy = "https://proxy.example/"
+    package = tmp_path / "full.zip"
+    package.write_bytes(b"partial")
+    chosen = []
+    downloads = []
+    resumed = []
+    monkeypatch.setattr(updater, "_DOWNLOAD_PROXIES", [proxy, ""])
+
+    def select(source):
+        chosen.append(source)
+        return proxy + source
+
+    def interrupted(source, *_args):
+        downloads.append(source)
+        raise updater.PartialDownloadError(str(package), [(0, 3), (4, 7)], {1}, 8)
+
+    def resume(source, *_args):
+        resumed.append(source)
+        package.write_bytes(b"complete")
+        return str(package)
+
+    monkeypatch.setattr(updater, "_pick_fastest_url", select)
+    monkeypatch.setattr(updater, "_download_from_url", interrupted)
+    monkeypatch.setattr(updater, "_resume_segments", resume)
+
+    result = updater._download_update_one_url(url, str(tmp_path))
+
+    assert result == str(package)
+    assert chosen == [url]
+    assert downloads == [proxy + url]
+    assert resumed == [url]
+
+
+def test_download_timeouts_exhaust_each_candidate_once_and_stop(tmp_path, monkeypatch):
+    urls = ["https://primary.example/full.zip", "https://mirror.example/full.zip"]
+    attempts = []
+    monkeypatch.setattr(updater, "_pick_fastest_url", lambda url: url)
+    def timeout(url, *_args):
+        attempts.append(url)
+        raise TimeoutError("故障注入：连接超时")
+    monkeypatch.setattr(updater, "_download_from_url", timeout)
+    with pytest.raises(TimeoutError):
+        updater.download_update([*urls, urls[0]], dest_dir=str(tmp_path))
+    assert attempts == urls
+
+
+def test_proxy_timeout_tries_direct_once_then_stops(tmp_path, monkeypatch):
+    url = "https://github.com/example/full.zip"
+    proxy = "https://proxy.example/"
+    attempts = []
+    monkeypatch.setattr(updater, "_DOWNLOAD_PROXIES", [proxy, ""])
+    monkeypatch.setattr(updater, "_pick_fastest_url", lambda _: proxy + url)
+    def timeout(source, *_args):
+        attempts.append(source)
+        raise TimeoutError("故障注入：代理和直连均超时")
+    monkeypatch.setattr(updater, "_download_from_url", timeout)
+    with pytest.raises(TimeoutError):
+        updater._download_update_one_url(url, str(tmp_path))
+    assert attempts == [proxy + url, url]
 
 
 def _make_full_zip(zip_path: Path, version: str, files: dict[str, str]) -> Path:
@@ -364,6 +455,45 @@ def test_run_update_session_preserves_runtime_autosave_files_on_full_install(tmp
     assert (app_dir / "data" / "autosave" / "draft.qxproj").read_text(encoding="utf-8") == "user-draft"
     assert "data/siphon_autosave.json" in result["preserved_files"]
     assert "data/autosave/draft.qxproj" in result["preserved_files"]
+
+
+@pytest.mark.parametrize("data_root", ["data", "_internal/data"])
+@pytest.mark.parametrize("is_patch", [False, True])
+def test_update_preserves_saved_siphon_cases(tmp_path, monkeypatch, data_root, is_patch):
+    app_dir = tmp_path / "app"
+    cases_dir = app_dir / data_root / "siphon_cases"
+    cases_dir.mkdir(parents=True)
+    saved_case = f"{data_root}/siphon_cases/工况1.siphon.json"
+    removed_case = f"{data_root}/siphon_cases/工况2.siphon.json"
+    (app_dir / saved_case).write_text("user-saved-case", encoding="utf-8")
+    (app_dir / removed_case).write_text("user-second-case", encoding="utf-8")
+    (app_dir / "program.txt").write_text("old-program", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    if is_patch:
+        zip_path = _make_patch_zip(
+            tmp_path / "update.zip",
+            included_files={"program.txt": "new-program", saved_case: "bundled-case"},
+            deleted=[removed_case],
+            allowed_source_hashes={
+                "program.txt": [updater._sha256_file(str(app_dir / "program.txt"))],
+                saved_case: ["original-case-hash"],
+                removed_case: ["original-second-case-hash"],
+            },
+        )
+    else:
+        zip_path = _make_full_zip(
+            tmp_path / "update.zip", "9.9.9",
+            {"program.txt": "new-program", saved_case: "bundled-case"},
+        )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=is_patch)
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    result = updater.run_update_session(session_path)
+
+    assert result["success"] is True
+    assert (app_dir / "program.txt").read_text(encoding="utf-8") == "new-program"
+    assert (app_dir / saved_case).read_text(encoding="utf-8") == "user-saved-case"
+    assert (app_dir / removed_case).read_text(encoding="utf-8") == "user-second-case"
 
 
 def test_run_update_session_rolls_back_patch_install_on_failure(tmp_path, monkeypatch):

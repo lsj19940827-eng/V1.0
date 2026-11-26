@@ -5,18 +5,19 @@ import json
 import os
 import tempfile
 from typing import Any
+from filesystem_paths import filesystem_path
 
 
 def atomic_write_json(path: str, payload: Any) -> None:
     """同目录完整写入后替换；异常向调用方传播，原文件保持完整。"""
-    path = os.fspath(path)
+    path = os.fspath(filesystem_path(path, extended=True))
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=directory,
-            prefix=f".{os.path.basename(path)}.", suffix=".tmp", delete=False,
+            prefix=".project-", suffix=".tmp", delete=False,
         ) as handle:
             temp_path = handle.name
             json.dump(payload, handle, ensure_ascii=False, indent=2)

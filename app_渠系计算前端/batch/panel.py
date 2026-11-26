@@ -299,6 +299,7 @@ from app_渠系计算前端.batch.schema import (
     resolve_spillway_steep_chute_display_type,
     is_fill_channel_section_type,
     is_gate_like_section_type,
+    infer_gate_section_type,
     is_tunnel_section_type,
     is_rect_culvert_section_type,
     is_arch_culvert_section_type,
@@ -3328,7 +3329,7 @@ class BatchPanel(QWidget):
                 prev_key = None
                 continue
             building_name = str(values[2]).strip()
-            section_type = normalize_section_type_name(str(values[3]).strip())
+            section_type = normalize_section_type_name(infer_gate_section_type(values[3], building_name))
             seq = str(values[0]).strip() or "?"
             segment = str(values[1]).strip() or "?"
             if not building_name or building_name == "-":
@@ -3955,7 +3956,7 @@ class BatchPanel(QWidget):
                     for source_col, target_col in legacy_no_xy_columns:
                         if source_col < len(raw_rd):
                             mapped[target_col] = raw_rd[source_col]
-                section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
+                section_type = infer_gate_section_type(mapped[COL_SECTION_TYPE], mapped[COL_BUILDING_NAME])
                 mapped_type = self._map_section_type(section_type) if section_type else None
                 if mapped_type:
                     mapped[COL_SECTION_TYPE] = mapped_type

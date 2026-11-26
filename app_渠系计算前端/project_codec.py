@@ -6,6 +6,7 @@ import json
 import os
 import re
 from dataclasses import asdict, fields
+from pathlib import Path
 from typing import Any, Dict
 
 from app_渠系计算前端.report_meta_model import ReportMeta
@@ -15,7 +16,7 @@ PROJECT_VERSION = "2.0"
 PANEL_SLOTS = (
     "merged_panel", "batch_panel", "water_profile_panel", "open_channel_panel",
     "aqueduct_panel", "tunnel_panel", "culvert_panel", "siphon_panel",
-    "pressure_pipe_panel", "spillway_steep_chute_panel",
+    "pressure_pipe_panel", "spillway_steep_chute_panel", "earthwork_panel",
 )
 MANAGER_SECTIONS = {
     "siphon_manager_data": ("siphons",),
@@ -44,15 +45,21 @@ class ProjectCodec:
             raise ProjectFormatError(f"{label}版本 {value} 高于当前支持的 {current}，请使用新版程序打开。")
 
     @classmethod
-    def normalize(cls, source: Any) -> Dict[str, Any]:
+    def normalize(cls, source: Any, *, copy_input: bool = True) -> Dict[str, Any]:
         """保留未知字段，仅迁移已知旧字段；未来版本禁止写回。"""
         if not isinstance(source, dict):
             raise ProjectFormatError("工程文件根节点必须是 JSON 对象。")
         cls._check_version(source.get("version"), PROJECT_VERSION, "工程")
-        data = copy.deepcopy(source)
+        data = copy.deepcopy(source) if copy_input else source
         for slot in PANEL_SLOTS:
             if data.get(slot) is not None and not isinstance(data[slot], dict):
                 raise ProjectFormatError(f"工程模块 {slot} 的数据必须是 JSON 对象或 null。")
+        if data.get("earthwork_panel"):
+            from app_渠系计算前端.earthwork.project_state import normalize_earthwork_payload
+            try:
+                data["earthwork_panel"] = normalize_earthwork_payload(data["earthwork_panel"], copy_input=False)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ProjectFormatError(f"挖填工程量数据无效：{exc}") from exc
         for slot, sections in MANAGER_SECTIONS.items():
             payload = data.get(slot)
             if payload is None:
@@ -117,12 +124,30 @@ class ProjectCodec:
             data["water_profile_panel"] = copy.deepcopy(water)
             if not batch and isinstance(water.get("batch_panel_compat"), dict):
                 data["batch_panel"] = copy.deepcopy(water["batch_panel_compat"])
+
+            earthwork = data.get("earthwork_panel") or {}
+            ui_state = earthwork.get("ui_state") or {}
+            source_hash = earthwork.get("source_project_hash")
+            if earthwork.get("kind") == "section_workbench" and source_hash:
+                from app_渠系计算前端.earthwork.project_state import (
+                    remove_duplicate_pressure_profile_drafts, source_channel_name,
+                )
+
+                remove_duplicate_pressure_profile_drafts(data, water)
+                if not ui_state.get("source_channel_name"):
+                    from 土石方计算.services.workbench_identity import source_project_hash
+
+                    channel_name = source_channel_name(water)
+                    if channel_name and source_hash == source_project_hash(data):
+                        earthwork["ui_state"] = {**ui_state, "source_channel_name": channel_name}
         data["version"] = PROJECT_VERSION
         return data
 
     @classmethod
     def read(cls, path: str) -> Dict[str, Any]:
         """仅在工程未内嵌管理数据时，显式导入同名历史旁文件。"""
+        from filesystem_paths import filesystem_path, resolved_path
+        path = filesystem_path(path, extended=True)
         with open(path, "r", encoding="utf-8") as handle:
             source = json.load(handle)
         if not isinstance(source, dict):
@@ -137,5 +162,25 @@ class ProjectCodec:
                 if os.path.isfile(sidecar):
                     with open(sidecar, "r", encoding="utf-8") as handle:
                         source[slot] = json.load(handle)
-        data = cls.normalize(source)
+        # JSON decoding owns this complete tree. Keep one copy through validation
+        # and resource restoration, including large retained earthwork results.
+        data = cls.normalize(source, copy_input=False)
+        if data.get("earthwork_panel"):
+            from app_渠系计算前端.earthwork.project_resources import restore_project_resources
+            try:
+                data = restore_project_resources(data, path, copy_input=False)
+            except (OSError, TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"挖填工程资源无法恢复：{exc}") from exc
+            workbench = data["earthwork_panel"]
+            project = resolved_path(path)
+            if workbench.get("kind") == "section_workbench" and project.name == "算量工程.qxproj":
+                from 土石方计算.services.workbench_delivery import delivery_matches_result
+
+                result = workbench.get("last_result") or {}
+                old_delivery = workbench.get("last_delivery_path")
+                if old_delivery and delivery_matches_result(project.parent, result.get("input_hash"),
+                                                             workbench.get("project_id"), require_project_id=True):
+                    if workbench.get("output_directory") == str(Path(old_delivery).parent):
+                        workbench["output_directory"] = str(project.parent.parent)
+                    workbench["last_delivery_path"] = str(project.parent)
         return data

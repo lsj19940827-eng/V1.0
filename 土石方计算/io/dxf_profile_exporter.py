@@ -40,8 +40,8 @@ class CrossSectionDXFConfig:
     sections_per_page: int = 4           # 每页断面数
     paper_width: float = 594.0           # 图幅宽（mm），A1 = 841×594
     paper_height: float = 420.0
-    scale_h: float = 1.0 / 200.0        # 水平比例尺（1:200 → 0.005 mm/mm）
-    scale_v: float = 1.0 / 200.0        # 竖向比例尺
+    scale_h: float = 1.0 / 1000.0       # 水平比例尺（默认1:1000）
+    scale_v: float = 1.0 / 1000.0       # 竖向比例尺（默认1:1000）
     table_height: float = 60.0          # 下方表格栏高度（mm）
     margin: float = 20.0                # 页边距（mm）
     text_height: float = 2.5            # 标注文字高度（mm）
@@ -54,8 +54,8 @@ class LongitudinalDXFConfig:
     """
     纵断面 DXF 导出配置（复用水面线模块格式，新增地面高程/挖深行）
     """
-    scale_h: float = 1.0 / 2000.0       # 水平比例尺
-    scale_v: float = 1.0 / 200.0        # 竖向比例尺（夸大 10 倍）
+    scale_h: float = 1.0 / 1000.0       # 水平比例尺（默认1:1000）
+    scale_v: float = 1.0 / 1000.0       # 竖向比例尺（默认1:1000）
     paper_width: float = 1189.0          # A0 横向
     paper_height: float = 841.0
     text_height: float = 3.0

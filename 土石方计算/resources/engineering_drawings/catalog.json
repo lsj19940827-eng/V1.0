@@ -1,0 +1,110 @@
+{
+  "schema": "engineering_drawing_catalog_1.0",
+  "status": "reference_library_only",
+  "revision": "2026-10-16.1",
+  "title": "典型工程断面参考库",
+  "notice": "典型断面构造参数和示意图可供当前工程选用。",
+  "drawings": [
+    {
+      "drawing_id": "tzk",
+      "summary": "标准横断面、隧洞、渡槽、暗涵、管道及边坡支护",
+      "structure_types": [
+        "明渠",
+        "隧洞",
+        "暗涵",
+        "渡槽",
+        "倒虹管",
+        "压力管道",
+        "边坡支护"
+      ],
+      "sha256": "6ed245d8e5261051cbe34d50e0520cbcfda28c336274d24a971cf4914b35d6a9",
+      "units": "优先本图显式说明；局部表头与标注特注优先；CAD单位和绘图比例不决定工程单位",
+      "title": "通用水工标准断面",
+      "file_name": "典型参考断面-01.dxf",
+      "review_status": "典型断面构造参考",
+      "facts": [],
+      "issues": [],
+      "source_refs": [],
+      "evidence_files": [],
+      "preview_files": []
+    },
+    {
+      "drawing_id": "left",
+      "summary": "梯形明渠、防渗衬砌、地质工况及桩号适用表",
+      "structure_types": [
+        "梯形明渠",
+        "挡墙",
+        "边坡支护",
+        "排水"
+      ],
+      "sha256": "7b314e637173b720f7aa80e56f7821711227f9d226e211edf135d42e2f12b91f",
+      "units": "优先本图显式说明；局部表头与标注特注优先；CAD单位和绘图比例不决定工程单位",
+      "title": "梯形渠道参考断面",
+      "file_name": "典型参考断面-02.dxf",
+      "review_status": "典型断面构造参考",
+      "facts": [],
+      "issues": [],
+      "source_refs": [],
+      "evidence_files": [],
+      "preview_files": []
+    },
+    {
+      "drawing_id": "mp",
+      "summary": "152°底弧、14°侧段U形渠，衬砌、防渗、接缝及填挖区段",
+      "structure_types": [
+        "U形明渠",
+        "边坡支护",
+        "排水"
+      ],
+      "sha256": "446ea2833b75d66c8f67548bca868e0803f160862c05709d93bcae88dadca5c1",
+      "units": "优先本图显式说明；局部表头与标注特注优先；CAD单位和绘图比例不决定工程单位",
+      "title": "U形渠道参考断面",
+      "file_name": "典型参考断面-03.dxf",
+      "review_status": "典型断面构造参考",
+      "facts": [],
+      "issues": [],
+      "source_refs": [],
+      "evidence_files": [],
+      "preview_files": []
+    },
+    {
+      "drawing_id": "culvert",
+      "summary": "带四内角倒角的箱形暗涵，混凝土、找平、钢筋和接缝数量表",
+      "structure_types": [
+        "矩形暗涵",
+        "钢筋",
+        "止水",
+        "找平"
+      ],
+      "sha256": "068cb450190e5d7978499c8ea474212f9dacd37c71431df441857e32be35d024",
+      "title": "箱涵参考断面",
+      "file_name": "典型参考断面-04.dxf",
+      "review_status": "典型断面构造参考",
+      "facts": [],
+      "issues": [],
+      "source_refs": [],
+      "evidence_files": [],
+      "preview_files": []
+    },
+    {
+      "drawing_id": "pipe",
+      "summary": "DN1400 PCCPDE与钢弯管，典型管沟、分区回填、镇墩及原设计数量",
+      "structure_types": [
+        "倒虹管",
+        "PCCP",
+        "钢管",
+        "管床",
+        "镇墩"
+      ],
+      "sha256": "d1a69035bf37d014ad51de2a63f2d1d539f1aa022b5d80a00480a84be1605fc0",
+      "title": "历史埋管参考断面",
+      "file_name": "典型参考断面-05.dxf",
+      "review_status": "典型断面构造参考",
+      "facts": [],
+      "issues": [],
+      "source_refs": [],
+      "evidence_files": [],
+      "preview_files": []
+    }
+  ]
+}

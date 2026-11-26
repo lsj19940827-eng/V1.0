@@ -46,6 +46,7 @@ class StructureType(Enum):
     DISCHARGE_GATE = "泄水闸"
     RETURN_WATER_GATE = "退水闸"
     CHECK_GATE = "节制闸"
+    GATE = "闸"
     
     # 倒虹吸（保留用于水面线计算中的特殊处理）
     INVERTED_SIPHON = "倒虹吸"
@@ -229,6 +230,8 @@ class StructureType(Enum):
         for item in cls:
             if item.value == text:
                 return item
+        if text.endswith("闸"):
+            return cls.GATE
         raise ValueError(f"未知的结构形式: {value}")
 
 

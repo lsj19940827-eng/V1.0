@@ -100,6 +100,8 @@ class ProfileCutter:
         right_width: float,
         sample_step: float = 0.5,
         geology_profile: Optional[GeologySectionProfile] = None,
+        *,
+        method: str = "exact",
     ) -> CrossSectionData:
         """
         在指定桩号处切割横断面地面线。
@@ -112,33 +114,39 @@ class ProfileCutter:
         station : 桩号（m）
         left_width : 左半宽（m，正值）
         right_width : 右半宽（m，正值）
-        sample_step : 采样间距（m），默认 0.5m
+        sample_step : 显示采样间距（m），默认 0.5m；精确模式额外保留全部地形折点
         geology_profile : 该桩号处的地质分层数据（可选）
+        method : 默认 exact 按已有三角片剖切；sampled 显式使用旧固定采样
 
         Returns
         -------
         CrossSectionData — ground_points 为 [(offset, elevation), ...]
         """
+        if (not math.isfinite(left_width) or not math.isfinite(right_width)
+                or left_width < 0 or right_width < 0 or left_width+right_width <= 0):
+            raise ValueError("横断面左右半宽必须有限、非负，且总宽度大于零")
+        if not math.isfinite(sample_step) or sample_step <= 0:
+            raise ValueError("横断面显示采样间距必须为正有限值")
+        if method not in {"exact", "sampled"}:
+            raise ValueError("横断面方法必须为 exact 或 sampled")
         cx, cy = alignment.get_xy_at_station(station)
         normal_angle = alignment.get_normal_direction(station)
         cos_n = math.cos(normal_angle)
         sin_n = math.sin(normal_angle)
+        # 正交方向的三角函数舍入残差不能将边界采样点推到地形外。
+        cos_n = 0.0 if abs(cos_n) < 1e-15 else cos_n
+        sin_n = 0.0 if abs(sin_n) < 1e-15 else sin_n
 
-        # 生成采样点（以偏距 offset 为主坐标）
-        offsets = np.arange(-left_width, right_width + 1e-9, sample_step)
-        # 确保中心点在内
-        if 0.0 not in offsets:
-            offsets = np.sort(np.append(offsets, 0.0))
-
-        xs = cx + offsets * cos_n
-        ys = cy + offsets * sin_n
-        pts_xy = np.column_stack([xs, ys])
-        elevs = self._interp.query_batch(pts_xy)
-
-        ground_points = [
-            (float(off), float(z))
-            for off, z in zip(offsets, elevs)
-        ]
+        # 法向指向左侧，偏距向右增大。
+        if method == "exact":
+            ground_points = self._interp.section_line(
+                (cx, cy), (-cos_n, -sin_n), -left_width, right_width, sample_step)
+        else:
+            offsets = np.unique(np.r_[np.arange(-left_width, right_width, sample_step),
+                                      0.0, right_width])
+            pts_xy = np.column_stack([cx-offsets*cos_n, cy-offsets*sin_n])
+            elevs = self._interp.query_batch(pts_xy)
+            ground_points = [(float(off), float(z)) for off, z in zip(offsets, elevs)]
 
         return CrossSectionData(
             station=station,
@@ -164,6 +172,8 @@ class ProfileCutter:
         right_widths: Optional[dict[float, float]] = None,
         sample_step: float = 0.5,
         geology_profiles: Optional[dict[float, GeologySectionProfile]] = None,
+        *,
+        method: str = "exact",
     ) -> list[CrossSectionData]:
         """
         批量生成全线横断面地面线。
@@ -195,7 +205,7 @@ class ProfileCutter:
             rw = _rw.get(s, _hw)
             geo = _geo.get(s)
             cs = self.cut_cross_section(
-                alignment, s, lw, rw, sample_step, geo
+                alignment, s, lw, rw, sample_step, geo, method=method
             )
             results.append(cs)
 
